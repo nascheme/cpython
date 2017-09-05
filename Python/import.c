@@ -11,6 +11,7 @@
 #include "frameobject.h"
 #include "osdefs.h"
 #include "importdl.h"
+#include "pydtrace.h"
 
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>
@@ -1476,6 +1477,15 @@ resolve_name(PyObject *name, PyObject *globals, int level)
     return NULL;
 }
 
+/* call dtrace probe if it is enabled */
+#define DTRACE_MODULE_IMPORT(name, probe) \
+    if (PyDTrace_MODULE_IMPORT_##probe##_ENABLED()) { \
+        do { \
+            const char *s = PyUnicode_AsUTF8(name); \
+            PyDTrace_MODULE_IMPORT_##probe(s); \
+        } while (0); \
+    }
+
 PyObject *
 PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
                                  PyObject *locals, PyObject *fromlist,
@@ -1562,9 +1572,11 @@ PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
         }
     }
     else {
+        DTRACE_MODULE_IMPORT(abs_name, START);
         mod = _PyObject_CallMethodIdObjArgs(interp->importlib,
                                             &PyId__find_and_load, abs_name,
                                             interp->import_func, NULL);
+        DTRACE_MODULE_IMPORT(abs_name, DONE);
         if (mod == NULL) {
             goto error;
         }

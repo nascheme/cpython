@@ -59,15 +59,14 @@ Python provider::
    $ python3.6 -q &
    $ sudo dtrace -l -P python$!  # or: dtrace -l -m python3.6
 
-      ID   PROVIDER            MODULE                          FUNCTION NAME
-   29564 python18035        python3.6          _PyEval_EvalFrameDefault function-entry
-   29565 python18035        python3.6             dtrace_function_entry function-entry
-   29566 python18035        python3.6          _PyEval_EvalFrameDefault function-return
-   29567 python18035        python3.6            dtrace_function_return function-return
-   29568 python18035        python3.6                           collect gc-done
-   29569 python18035        python3.6                           collect gc-start
-   29570 python18035        python3.6          _PyEval_EvalFrameDefault line
-   29571 python18035        python3.6                 maybe_dtrace_line line
+     ID    PROVIDER           MODULE                          FUNCTION NAME
+   2616 python15853        python3.6          _PyEval_EvalFrameDefault function-entry
+   2617 python15853        python3.6          _PyEval_EvalFrameDefault function-return
+   2618 python15853        python3.6                           collect gc-done
+   2619 python15853        python3.6                           collect gc-start
+   2620 python15853        python3.6          _PyEval_EvalFrameDefault line
+   2621 python15853        python3.6  PyImport_ImportModuleLevelObject module-import-done
+   2622 python15853        python3.6  PyImport_ImportModuleLevelObject module-import-start
 
 On Linux, you can verify if the SystemTap static markers are present in
 the built binary by seeing if it contains a ".note.stapsdt" section.
