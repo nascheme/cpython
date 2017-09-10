@@ -902,13 +902,24 @@ error:
 }
 
 static PyObject *
-module_dict_for_exec(PyObject *name)
+module_dict_for_exec(PyInterpreterState *interp, PyObject *name, int is_lazy)
 {
     PyObject *m, *d = NULL;
 
     m = PyImport_AddModuleObject(name);
     if (m == NULL)
         return NULL;
+    if (is_lazy) {
+        _Py_IDENTIFIER(_lazy_init);
+        /* set __class__ of module, add _lazy_def */
+        PyObject *r = _PyObject_CallMethodIdObjArgs(interp->importlib,
+						    &PyId__lazy_init, m,
+						    NULL);
+        if (r == NULL)
+            return NULL;
+        Py_DECREF(r);
+    }
+
     /* If the module is being reloaded, we get the old module back
        and re-use its dict to exec the new code. */
     d = PyModule_GetDict(m);
@@ -948,6 +959,32 @@ exec_code_in_module(PyObject *name, PyObject *module_dict, PyObject *code_object
     return m;
 }
 
+/* return true if code object has lazy exec */
+static int
+is_lazy_code(PyObject *co)
+{
+    PyObject *names;
+#if 0
+    if (!PyCode_Check(co)) {
+	    return 0;
+    }
+#endif
+    names = ((PyCodeObject *)co)->co_names;
+    int n = PyTuple_GET_SIZE(names);
+    int i;
+    fprintf(stderr, "check for lazy code\n");
+    for (i = 0; i < n; i++) {
+        PyObject *n = PyTuple_GET_ITEM(names, i);
+        /* FIXME: intern, no type check? */
+        if (PyUnicode_Check(n) &&
+                PyUnicode_CompareWithASCIIString(n, "_lazy_def") == 0) {
+            fprintf(stderr, "is lazy\n");
+            return 1;
+        }
+    }
+    return 0;
+}
+
 PyObject*
 PyImport_ExecCodeModuleObject(PyObject *name, PyObject *co, PyObject *pathname,
                               PyObject *cpathname)
@@ -956,7 +993,8 @@ PyImport_ExecCodeModuleObject(PyObject *name, PyObject *co, PyObject *pathname,
     PyInterpreterState *interp = PyThreadState_GET()->interp;
     _Py_IDENTIFIER(_fix_up_module);
 
-    d = module_dict_for_exec(name);
+
+    d = module_dict_for_exec(interp, name, is_lazy_code(co));
     if (d == NULL) {
         return NULL;
     }
@@ -1290,6 +1328,7 @@ PyImport_ImportFrozenModuleObject(PyObject *name)
     PyObject *co, *m, *d;
     int ispackage;
     int size;
+    PyInterpreterState *interp = PyThreadState_GET()->interp;
 
     p = find_frozen(name);
 
@@ -1331,7 +1370,7 @@ PyImport_ImportFrozenModuleObject(PyObject *name)
         if (err != 0)
             goto err_return;
     }
-    d = module_dict_for_exec(name);
+    d = module_dict_for_exec(interp, name, is_lazy_code(co));
     if (d == NULL) {
         goto err_return;
     }
@@ -2026,6 +2065,7 @@ static int
 exec_builtin_or_dynamic(PyObject *mod) {
     PyModuleDef *def;
     void *state;
+    fprintf(stderr, "exec_builtin_or_dynamic\n");
 
     if (!PyModule_Check(mod)) {
         return 0;

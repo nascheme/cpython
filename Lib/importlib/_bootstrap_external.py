@@ -676,6 +676,8 @@ class _LoaderBasics:
         if code is None:
             raise ImportError('cannot load module {!r} when get_code() '
                               'returns None'.format(module.__name__))
+        if '_lazy_def' in code.co_names:
+            _bootstrap._lazy_init(module)
         _bootstrap._call_with_frames_removed(exec, code, module.__dict__)
 
     def load_module(self, fullname):

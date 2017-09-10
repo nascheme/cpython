@@ -2174,9 +2174,11 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                 }
             }
             if (v == NULL) {
-                v = PyDict_GetItem(f->f_globals, name);
-                Py_XINCREF(v);
+                v = PyObject_GetItem(f->f_globals, name);
                 if (v == NULL) {
+                    if (!PyErr_ExceptionMatches(PyExc_KeyError))
+                        goto error;
+                    PyErr_Clear();
                     if (PyDict_CheckExact(f->f_builtins)) {
                         v = PyDict_GetItem(f->f_builtins, name);
                         if (v == NULL) {

@@ -804,6 +804,8 @@ class FrozenImporter:
             raise ImportError('{!r} is not a frozen module'.format(name),
                               name=name)
         code = _call_with_frames_removed(_imp.get_frozen_object, name)
+        if '_lazy_def' in code.co_names:
+            _lazy_init(module)
         exec(code, module.__dict__)
 
     @classmethod
@@ -1155,3 +1157,33 @@ def _install_external_importers():
     import _frozen_importlib_external
     _bootstrap_external = _frozen_importlib_external
     _frozen_importlib_external._install(sys.modules[__name__])
+
+
+class lazy_dict(dict):
+    #__slots__ = ['_lazy_code']
+    def __init__(self, other, lazy_def):
+        dict.__init__(other)
+        self['_lazy_def'] = lazy_def
+        self._lazy_code = {}
+
+    def __getitem__(self, name):
+        if name not in self and name in self._lazy_code:
+            exec(self._lazy_code[name], self)
+        return dict.__getitem__(self, name)
+
+def _lazy_init(mod):
+    # set __class__ of module 'name'
+    class Lazy(type(sys)):
+        pass
+    def _lazy_def(name, code):
+        # store code for defn of 'name'
+        #print('define', name, code)
+        mod.__dict__._lazy_code[name] = code
+        def get(self):
+            # wake up defn
+            exec(code, self.__dict__)
+            return self.__dict__[name]
+        setattr(Lazy, name, property(get))
+    mod.__class__ = Lazy
+    mod.__dict__ = lazy_dict(mod.__dict__, _lazy_def)
+    return mod._lazy_def
