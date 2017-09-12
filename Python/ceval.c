@@ -500,6 +500,32 @@ _Py_CheckRecursiveCall(const char *where)
     return 0;
 }
 
+#ifdef Py_DEBUG
+/* dump backtrace to stdout */
+static void
+dump_traceback(void)
+{
+    PyThreadState *tstate = PyThreadState_GET();
+    if (NULL != tstate && NULL != tstate->frame) {
+	PyFrameObject *frame = tstate->frame;
+
+	fprintf(stderr, "Python stack trace:\n");
+	while (NULL != frame) {
+	    // int line = frame->f_lineno;
+	    /*
+	       frame->f_lineno will not always return the correct line number
+	       you need to call PyCode_Addr2Line().
+	       */
+	    int line = PyCode_Addr2Line(frame->f_code, frame->f_lasti);
+	    const char *filename = PyUnicode_AsUTF8(frame->f_code->co_filename);
+	    const char *funcname = PyUnicode_AsUTF8(frame->f_code->co_name);
+	    fprintf(stderr, "    %s(%d): %s\n", filename, line, funcname);
+	    frame = frame->f_back;
+	}
+    }
+}
+#endif
+
 /* Status code for main loop (reason for stack unwind) */
 enum why_code {
         WHY_NOT =       0x0001, /* No error */
@@ -934,7 +960,10 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
     /* PyEval_EvalFrameEx() must not be called with an exception set,
        because it can clear it (directly or indirectly) and so the
        caller loses its exception */
-    assert(!PyErr_Occurred());
+    if (PyErr_Occurred()) {
+	dump_traceback();
+	Py_FatalError("ceval: eval called with exeception set");
+    }
 #endif
 
     for (;;) {
