@@ -371,10 +371,11 @@ def namedtuple(typename, field_names, *, rename=False, module=None):
     # Create all the named tuple methods to be added to the class namespace
 
     s = f'def __new__(_cls, {arg_list}): return _tuple_new(_cls, ({arg_list}))'
-    namespace = {'_tuple_new': tuple_new, '__name__': f'namedtuple_{typename}'}
+    mod = type(_sys)(f'namedtuple_{typename}')
+    mod.__dict__.update({'_tuple_new': tuple_new})
     # Note: exec() has the side-effect of interning the typename and field names
-    exec(s, namespace)
-    __new__ = namespace['__new__']
+    exec(s, mod.__dict__)
+    __new__ = mod.__dict__['__new__']
     __new__.__doc__ = f'Create new instance of {typename}({arg_list})'
 
     @classmethod
