@@ -575,6 +575,51 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
     return tstate->interp->eval_frame(f, throwflag);
 }
 
+
+static PyObject *
+globals_getattr(PyFrameObject *f, PyObject *name)
+{
+    PyObject *v;
+    //const char *s = PyUnicode_AsUTF8(name);
+    //fprintf(stderr, "globals load %s\n", s);
+#if 1
+    v = PyObject_GetAttr(f->f_namespace, name);
+    if (v == NULL) {
+        /* either attrib lookup failed or other error */
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+            return NULL;
+        PyErr_Clear(); /* check in __builtins__ */
+        /* namespace 2: builtins */
+        v = PyObject_GetItem(f->f_builtins, name);
+        if (v == NULL) {
+            if (PyErr_ExceptionMatches(PyExc_KeyError))
+                format_exc_check_arg(
+                                     PyExc_NameError,
+                                     NAME_ERROR_MSG, name);
+            return NULL;
+        }
+    }
+    return v;
+#else
+    v = PyObject_GetItem(f->f_globals, name);
+    if (v == NULL) {
+        if (!PyErr_ExceptionMatches(PyExc_KeyError))
+            return NULL;
+        PyErr_Clear();
+        /* namespace 2: builtins */
+        v = PyObject_GetItem(f->f_builtins, name);
+        if (v == NULL) {
+            if (PyErr_ExceptionMatches(PyExc_KeyError))
+                format_exc_check_arg(
+                                     PyExc_NameError,
+                                     NAME_ERROR_MSG, name);
+            return NULL;
+        }
+    }
+    return v;
+#endif
+}
+
 PyObject* _Py_HOT_FUNCTION
 _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
 {
@@ -2198,6 +2243,11 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                     PyErr_Clear();
                 }
             }
+            if (v == NULL && f->f_namespace != NULL) {
+                v = globals_getattr(f, name);
+                if (v == NULL && PyErr_Occurred())
+                    goto error;
+            }
             if (v == NULL) {
                 v = PyDict_GetItem(f->f_globals, name);
                 Py_XINCREF(v);
@@ -2231,7 +2281,12 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
         TARGET(LOAD_GLOBAL) {
             PyObject *name = GETITEM(names, oparg);
             PyObject *v;
-            if (PyDict_CheckExact(f->f_globals)
+            if (f->f_namespace != NULL) {
+                v = globals_getattr(f, name);
+                if (v == NULL && PyErr_Occurred())
+                    goto error;
+            }
+            else if (PyDict_CheckExact(f->f_globals)
                 && PyDict_CheckExact(f->f_builtins))
             {
                 v = _PyDict_LoadGlobal((PyDictObject *)f->f_globals,
