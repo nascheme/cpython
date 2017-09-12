@@ -15,6 +15,7 @@ static PyMemberDef frame_memberlist[] = {
     {"f_code",          T_OBJECT,       OFF(f_code),      READONLY},
     {"f_builtins",      T_OBJECT,       OFF(f_builtins),  READONLY},
     {"f_globals",       T_OBJECT,       OFF(f_globals),   READONLY},
+    {"f_namespace",     T_OBJECT,       OFF(f_namespace), READONLY},
     {"f_lasti",         T_INT,          OFF(f_lasti),     READONLY},
     {"f_trace_lines",   T_BOOL,         OFF(f_trace_lines), 0},
     {"f_trace_opcodes", T_BOOL,         OFF(f_trace_opcodes), 0},
@@ -436,6 +437,7 @@ frame_dealloc(PyFrameObject *f)
     Py_XDECREF(f->f_back);
     Py_DECREF(f->f_builtins);
     Py_DECREF(f->f_globals);
+    Py_XDECREF(f->f_namespace);
     Py_CLEAR(f->f_locals);
     Py_CLEAR(f->f_trace);
     Py_CLEAR(f->f_exc_type);
@@ -467,6 +469,7 @@ frame_traverse(PyFrameObject *f, visitproc visit, void *arg)
     Py_VISIT(f->f_code);
     Py_VISIT(f->f_builtins);
     Py_VISIT(f->f_globals);
+    Py_VISIT(f->f_namespace);
     Py_VISIT(f->f_locals);
     Py_VISIT(f->f_trace);
     Py_VISIT(f->f_exc_type);
@@ -610,6 +613,47 @@ int _PyFrame_Init()
     return 1;
 }
 
+/* create module object from 'globals' dict */
+static PyObject *
+namespace_from_globals(PyObject *globals)
+{
+    _Py_IDENTIFIER(__namespace__);
+    _Py_IDENTIFIER(__name__);
+    PyObject *ns = _PyDict_GetItemId(globals, &PyId___namespace__);
+    if (ns != NULL) {
+        Py_INCREF(ns);
+        return ns;
+    }
+    PyObject *name = _PyDict_GetItemId(globals, &PyId___name__);
+#if 0
+    /* create a new dummy module */
+    fprintf(stderr, "creating anon namespace %s\n",
+            name == NULL ? "NULL" : PyUnicode_AsUTF8(name));
+    return PyModule_New("<anonymous namespace>");
+#else
+    //fprintf(stderr, "no __namespace__ for %s\n",
+    //        name == NULL ? "NULL" : PyUnicode_AsUTF8(name));
+    return NULL;
+#endif
+}
+
+static PyObject *
+make_mini_builtins(void)
+{
+    PyObject *b;
+    /* No builtins! Make up a minimal one
+       Give them 'None', at least. */
+    fprintf(stderr, "creating fake builtins module\n");
+    b = PyModule_New("<mini builtins>");
+    if (b == NULL)
+        return NULL;
+    if (PyDict_SetItemString(PyModule_GetDict(b), "None", Py_None) < 0) {
+        Py_DECREF(b);
+        return NULL;
+    }
+    return b;
+}
+
 PyFrameObject* _Py_HOT_FUNCTION
 _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
                      PyObject *globals, PyObject *locals)
@@ -707,6 +751,11 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
     Py_INCREF(code);
     Py_INCREF(globals);
     f->f_globals = globals;
+    f->f_namespace = namespace_from_globals(globals);
+    if (f->f_namespace == NULL) {
+        if (PyErr_Occurred())
+            Py_FatalError("namespace_from_globals() failed"); /* FIXME */
+    }
     /* Most functions have CO_NEWLOCALS and CO_OPTIMIZED set. */
     if ((code->co_flags & (CO_NEWLOCALS | CO_OPTIMIZED)) ==
         (CO_NEWLOCALS | CO_OPTIMIZED))

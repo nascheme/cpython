@@ -52,6 +52,7 @@ module_init_dict(PyModuleObject *mod, PyObject *md_dict,
     _Py_IDENTIFIER(__package__);
     _Py_IDENTIFIER(__loader__);
     _Py_IDENTIFIER(__spec__);
+    _Py_IDENTIFIER(__namespace__);
 
     if (md_dict == NULL)
         return -1;
@@ -68,6 +69,9 @@ module_init_dict(PyModuleObject *mod, PyObject *md_dict,
         return -1;
     if (_PyDict_SetItemId(md_dict, &PyId___spec__, Py_None) != 0)
         return -1;
+    /* TODO: makes circular ref, use weakref and property? */
+    if (_PyDict_SetItemId(md_dict, &PyId___namespace__, (PyObject *)mod) != 0)
+        return -1;
     if (PyUnicode_CheckExact(name)) {
         Py_INCREF(name);
         Py_XSETREF(mod->md_name, name);
@@ -78,7 +82,7 @@ module_init_dict(PyModuleObject *mod, PyObject *md_dict,
 
 
 PyObject *
-PyModule_NewObject(PyObject *name)
+_PyModule_NewWithDict(PyObject *name, PyObject *dict)
 {
     PyModuleObject *m;
     m = PyObject_GC_New(PyModuleObject, &PyModule_Type);
@@ -88,7 +92,7 @@ PyModule_NewObject(PyObject *name)
     m->md_state = NULL;
     m->md_weaklist = NULL;
     m->md_name = NULL;
-    m->md_dict = PyDict_New();
+    m->md_dict = dict;
     if (module_init_dict(m, m->md_dict, name, NULL) != 0)
         goto fail;
     PyObject_GC_Track(m);
@@ -97,6 +101,15 @@ PyModule_NewObject(PyObject *name)
  fail:
     Py_DECREF(m);
     return NULL;
+}
+
+PyObject *
+PyModule_NewObject(PyObject *name)
+{
+    PyObject *dict = PyDict_New();
+    if (dict == NULL)
+        return NULL;
+    return _PyModule_NewWithDict(name, dict);
 }
 
 PyObject *
