@@ -497,6 +497,36 @@ PyObject_Repr(PyObject *v)
     return res;
 }
 
+/* For debugging convenience.  See Misc/gdbinit for some useful gdb hooks */
+void
+_PyObject_DumpRepr(PyObject* op)
+{
+    if (op == NULL)
+        fprintf(stderr, "NULL\n");
+    else {
+        PyGILState_STATE gil;
+        PyObject *error_type, *error_value, *error_traceback;
+
+        fprintf(stderr, "object  : ");
+        gil = PyGILState_Ensure();
+
+        PyErr_Fetch(&error_type, &error_value, &error_traceback);
+        (void)PyObject_Print(op, stderr, 0);
+        PyErr_Restore(error_type, error_value, error_traceback);
+
+        PyGILState_Release(gil);
+        PyObject *s = PyObject_Repr(op);
+        fprintf(stderr, "\n"
+            "address : %p\n"
+            "type    : %s\n"
+            "repr:  %s\n",
+            op,
+            Py_TYPE(op)==NULL ? "NULL" : Py_TYPE(op)->tp_name,
+            s == NULL ? "NULL" : PyUnicode_AsUTF8(s));
+        Py_XDECREF(s);
+    }
+}
+
 PyObject *
 PyObject_Str(PyObject *v)
 {
