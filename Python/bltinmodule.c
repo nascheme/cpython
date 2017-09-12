@@ -936,7 +936,10 @@ builtin_exec_impl(PyObject *module, PyObject *source, PyObject *globals,
             return NULL;
         }
     }
-    else if (locals == Py_None)
+    if (PyModule_Check(globals)) {
+        globals = PyModule_GetDict(globals);
+    }
+    if (locals == Py_None)
         locals = globals;
 
     if (!PyDict_Check(globals)) {
