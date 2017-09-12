@@ -731,6 +731,7 @@ def _removeHandlerRef(wr):
     # set to None. It can also be called from another thread. So we need to
     # pre-emptively grab the necessary globals and check if they're None,
     # to prevent race conditions and failures during interpreter shutdown.
+    return # FIXME: broken due to shutdown ordering?
     acquire, release, handlers = _acquireLock, _releaseLock, _handlerList
     if acquire and release and handlers:
         acquire()
