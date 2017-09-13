@@ -618,14 +618,14 @@ static PyObject *
 namespace_from_globals(PyObject *globals)
 {
     _Py_IDENTIFIER(__namespace__);
-    _Py_IDENTIFIER(__name__);
     PyObject *ns = _PyDict_GetItemId(globals, &PyId___namespace__);
-    if (ns != NULL) {
+    if (ns != NULL && PyModule_Check(ns) && PyModule_GetDict(ns) == globals) {
         Py_INCREF(ns);
         return ns;
     }
-    PyObject *name = _PyDict_GetItemId(globals, &PyId___name__);
 #if 0
+    _Py_IDENTIFIER(__name__);
+    PyObject *name = _PyDict_GetItemId(globals, &PyId___name__);
     /* create a new dummy module */
     fprintf(stderr, "creating anon namespace %s\n",
             name == NULL ? "NULL" : PyUnicode_AsUTF8(name));
@@ -637,6 +637,7 @@ namespace_from_globals(PyObject *globals)
 #endif
 }
 
+#if 0
 static PyObject *
 make_mini_builtins(void)
 {
@@ -653,6 +654,7 @@ make_mini_builtins(void)
     }
     return b;
 }
+#endif
 
 PyFrameObject* _Py_HOT_FUNCTION
 _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
