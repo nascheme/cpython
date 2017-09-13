@@ -425,6 +425,7 @@ static const char * const sys_files[] = {
 void
 PyImport_Cleanup(void)
 {
+    int err;
     Py_ssize_t pos;
     PyObject *key, *value, *dict;
     PyInterpreterState *interp = PyThreadState_GET()->interp;
@@ -484,12 +485,17 @@ PyImport_Cleanup(void)
 
     /* Remove all modules from sys.modules, hoping that garbage collection
        can reclaim most of them. */
+    _Py_IDENTIFIER(__namespace__);
     pos = 0;
     while (PyDict_Next(modules, &pos, &key, &value)) {
         if (PyModule_Check(value)) {
             if (Py_VerboseFlag && PyUnicode_Check(key))
                 PySys_FormatStderr("# cleanup[2] removing %U\n", key);
             STORE_MODULE_WEAKREF(key, value);
+            err = _PyDict_DelItemId(PyModule_GetDict(value),
+                                    &PyId___namespace__);
+            if (err)
+                PyErr_Clear();
             PyObject_SetItem(modules, key, Py_None);
         }
     }
