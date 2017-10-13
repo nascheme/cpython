@@ -76,12 +76,7 @@ _PyGC_Initialize(struct _gc_runtime_state *state)
 /*--------------------------------------------------------------------------
 gc_refs values.
 
-Between collections, every gc'ed object has one of two gc_refs values:
-
-GC_UNTRACKED
-    The initial state; objects returned by PyObject_GC_Malloc are in this
-    state.  The object doesn't live in any generation list, and its
-    tp_traverse slot must not be called.
+Between collections, all tracked gc'ed object have a gc_refs value:
 
 GC_REACHABLE
     The object lives in some generation list, and its tp_traverse is safe to
@@ -112,11 +107,10 @@ GC_TENTATIVELY_UNREACHABLE
     it has a __del__ method), its gc_refs is restored to GC_REACHABLE again.
 ----------------------------------------------------------------------------
 */
-#define GC_UNTRACKED                    _PyGC_REFS_UNTRACKED
 #define GC_REACHABLE                    _PyGC_REFS_REACHABLE
 #define GC_TENTATIVELY_UNREACHABLE      _PyGC_REFS_TENTATIVELY_UNREACHABLE
 
-#define IS_TRACKED(o) (_PyGC_REFS(o) != GC_UNTRACKED)
+#define IS_TRACKED(o) _PyObject_GC_IS_TRACKED(o)
 #define IS_REACHABLE(o) (_PyGC_REFS(o) == GC_REACHABLE)
 #define IS_TENTATIVELY_UNREACHABLE(o) ( \
     _PyGC_REFS(o) == GC_TENTATIVELY_UNREACHABLE)
@@ -263,7 +257,7 @@ static int
 visit_decref(PyObject *op, void *data)
 {
     assert(op != NULL);
-    if (PyObject_IS_GC(op)) {
+    if (PyObject_IS_GC(op) && IS_TRACKED(op)) {
         PyGC_Head *gc = AS_GC(op);
         /* We're only interested in gc_refs for objects in the
          * generation being collected, which can be recognized
@@ -298,7 +292,7 @@ subtract_refs(PyGC_Head *containers)
 static int
 visit_reachable(PyObject *op, PyGC_Head *reachable)
 {
-    if (PyObject_IS_GC(op)) {
+    if (PyObject_IS_GC(op) && IS_TRACKED(op)) {
         PyGC_Head *gc = AS_GC(op);
         const Py_ssize_t gc_refs = _PyGCHead_REFS(gc);
 
@@ -326,12 +320,9 @@ visit_reachable(PyObject *op, PyGC_Head *reachable)
          * If gc_refs == GC_REACHABLE, it's either in some other
          * generation so we don't care about it, or move_unreachable
          * already dealt with it.
-         * If gc_refs == GC_UNTRACKED, it must be ignored.
          */
          else {
-            assert(gc_refs > 0
-                   || gc_refs == GC_REACHABLE
-                   || gc_refs == GC_UNTRACKED);
+            assert(gc_refs > 0 || gc_refs == GC_REACHABLE);
          }
     }
     return 0;
@@ -1630,7 +1621,7 @@ _PyObject_GC_Alloc(int use_calloc, size_t basicsize)
     if (g == NULL)
         return PyErr_NoMemory();
     g->gc.gc_refs = 0;
-    _PyGCHead_SET_REFS(g, GC_UNTRACKED);
+    g->gc.gc_next = NULL;
     _PyRuntime.gc.generations[0].count++; /* number of allocated GC objects */
     if (_PyRuntime.gc.generations[0].count > _PyRuntime.gc.generations[0].threshold &&
         _PyRuntime.gc.enabled &&

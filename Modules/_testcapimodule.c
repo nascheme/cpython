@@ -3110,7 +3110,7 @@ slot_tp_del(PyObject *self)
         self->ob_refcnt = refcnt;
     }
     assert(!PyType_IS_GC(Py_TYPE(self)) ||
-           _Py_AS_GC(self)->gc.gc_refs != _PyGC_REFS_UNTRACKED);
+           _PyObject_GC_IS_TRACKED(self));
     /* If Py_REF_DEBUG, _Py_NewReference bumped _Py_RefTotal, so
      * we need to undo that. */
     _Py_DEC_REFTOTAL;
