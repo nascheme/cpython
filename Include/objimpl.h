@@ -286,8 +286,9 @@ extern PyGC_Head *_PyGC_generation0;
 
 #define _PyGC_REFS(o) _PyGCHead_REFS(_Py_AS_GC(o))
 
-#define _PyGC_REFS_REACHABLE                    (-2)
-#define _PyGC_REFS_TENTATIVELY_UNREACHABLE      (-3)
+#define _PyGC_REFS_BLACK                        (-2)
+#define _PyGC_REFS_GREY                         (-3)
+#define _PyGC_REFS_WHITE                        (-4)
 
 /* Tell the GC to track this object.  NB: While the object is tracked the
  * collector it must be safe to call the ob_traverse method. */
@@ -295,7 +296,6 @@ extern PyGC_Head *_PyGC_generation0;
     PyGC_Head *g = _Py_AS_GC(o); \
     if (g->gc.gc_next != NULL ) \
         Py_FatalError("GC object already tracked"); \
-    _PyGCHead_SET_REFS(g, _PyGC_REFS_REACHABLE); \
     g->gc.gc_next = _PyGC_generation0; \
     g->gc.gc_prev = _PyGC_generation0->gc.gc_prev; \
     g->gc.gc_prev->gc.gc_next = g; \
