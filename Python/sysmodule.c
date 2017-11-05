@@ -19,6 +19,7 @@ Data members:
 #include "code.h"
 #include "frameobject.h"
 #include "pythread.h"
+#include "ndictobject.h"
 
 #include "osdefs.h"
 #include <locale.h>
@@ -1218,6 +1219,22 @@ sys_getframe(PyObject *self, PyObject *args)
     return (PyObject*)f;
 }
 
+/* Return the namespace object (module) given a NamespaceDict object */
+static PyObject *
+sys_getnamespace(PyObject *self, PyObject *dict)
+{
+    PyObject *rv;
+    if (!PyNDict_Check(dict)) {
+        PyErr_Format(PyExc_TypeError,
+                     "NamespaceDict expected, got %.50s",
+                     Py_TYPE(dict)->tp_name);
+        return NULL;
+    }
+    rv = _PyNDict_GetNamespace(dict);
+    Py_XINCREF(rv);
+    return rv;
+}
+
 PyDoc_STRVAR(current_frames_doc,
 "_current_frames() -> dictionary\n\
 \n\
@@ -1405,6 +1422,7 @@ static PyMethodDef sys_methods[] = {
     {"getsizeof",   (PyCFunction)sys_getsizeof,
      METH_VARARGS | METH_KEYWORDS, getsizeof_doc},
     {"_getframe", sys_getframe, METH_VARARGS, getframe_doc},
+    {"getnamespace", sys_getnamespace, METH_O},
 #ifdef MS_WINDOWS
     {"getwindowsversion", (PyCFunction)sys_getwindowsversion, METH_NOARGS,
      getwindowsversion_doc},
