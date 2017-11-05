@@ -69,6 +69,15 @@ module_init_dict(PyModuleObject *mod, PyObject *md_dict,
         return -1;
     if (_PyDict_SetItemId(md_dict, &PyId___spec__, Py_None) != 0)
         return -1;
+    if (!_PyNDict_SetNamespace(md_dict, mod)) {
+#if 0
+        _Py_IDENTIFIER(__namespace__);
+        /* can't set nd_namespace member, use dict entry */
+        /* TODO: makes circular ref, use weakref and property? */
+        if (_PyDict_SetItemId(md_dict, &PyId___namespace__, (PyObject *)mod) != 0)
+            return -1;
+#endif
+    }
     if (PyUnicode_CheckExact(name)) {
         Py_INCREF(name);
         Py_XSETREF(mod->md_name, name);

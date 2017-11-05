@@ -159,6 +159,7 @@ _PyNDict_New(PyObject *namespace) {
     PyObject *nd = PyDict_Type.tp_new(&PyNDict_Type, NULL, NULL);
     if (nd != NULL) {
         ((PyNDictObject *)nd)->nd_namespace = namespace;
+        Py_XINCREF(namespace);
     }
     return nd;
 }
