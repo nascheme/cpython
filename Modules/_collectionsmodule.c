@@ -1,5 +1,6 @@
 #include "Python.h"
 #include "structmember.h"
+#include "ndictobject.h"
 
 #ifdef STDC_HEADERS
 #include <stddef.h>
@@ -2401,6 +2402,9 @@ PyInit__collections(void)
 
     Py_INCREF(&PyODict_Type);
     PyModule_AddObject(m, "OrderedDict", (PyObject *)&PyODict_Type);
+
+    Py_INCREF(&PyNDict_Type);
+    PyModule_AddObject(m, "NamespaceDict", (PyObject *)&PyNDict_Type);
 
     if (PyType_Ready(&dequeiter_type) < 0)
         return NULL;

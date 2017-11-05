@@ -395,6 +395,7 @@ OBJECT_OBJS=	\
 		Objects/longobject.o \
 		Objects/dictobject.o \
 		Objects/odictobject.o \
+		Objects/ndictobject.o \
 		Objects/memoryobject.o \
 		Objects/methodobject.o \
 		Objects/moduleobject.o \
@@ -939,6 +940,7 @@ PYTHON_HEADERS= \
 		$(srcdir)/Include/modsupport.h \
 		$(srcdir)/Include/moduleobject.h \
 		$(srcdir)/Include/namespaceobject.h \
+		$(srcdir)/Include/ndictobject.h \
 		$(srcdir)/Include/node.h \
 		$(srcdir)/Include/object.h \
 		$(srcdir)/Include/objimpl.h \

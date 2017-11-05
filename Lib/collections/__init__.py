@@ -15,7 +15,8 @@ list, set, and tuple.
 '''
 
 __all__ = ['deque', 'defaultdict', 'namedtuple', 'UserDict', 'UserList',
-            'UserString', 'Counter', 'OrderedDict', 'ChainMap']
+            'UserString', 'Counter', 'OrderedDict', 'ChainMap',
+            'NamespaceDict']
 
 # For backwards compatibility, continue to make the collections ABCs
 # available through the collections module.
@@ -295,6 +296,11 @@ try:
 except ImportError:
     # Leave the pure Python version in place.
     pass
+
+try:
+    from _collections import NamespaceDict
+except ImportError:
+    NamespaceDict = dict
 
 
 ################################################################################

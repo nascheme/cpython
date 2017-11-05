@@ -4,6 +4,7 @@
 #include "Python.h"
 #include "internal/pystate.h"
 #include "frameobject.h"
+#include "ndictobject.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -1725,6 +1726,9 @@ _Py_ReadyTypes(void)
 
     if (PyType_Ready(&PyODict_Type) < 0)
         Py_FatalError("Can't initialize OrderedDict type");
+
+    if (PyType_Ready(&PyNDict_Type) < 0)
+        Py_FatalError("Can't initialize NamespaceDict type");
 
     if (PyType_Ready(&PyODictKeys_Type) < 0)
         Py_FatalError("Can't initialize odict_keys type");
