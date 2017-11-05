@@ -18,6 +18,7 @@
 #include "opcode.h"
 #include "pydtrace.h"
 #include "setobject.h"
+#include "ndictobject.h"
 #include "structmember.h"
 
 #include <ctype.h>
@@ -498,6 +499,62 @@ _Py_CheckRecursiveCall(const char *where)
         return -1;
     }
     return 0;
+}
+
+static PyObject *
+globals_getattr(PyFrameObject *f, PyObject *name)
+{
+    PyObject *v, *ns;
+    ns = _PyNDict_GetNamespace(f->f_globals);
+    assert(ns != NULL); /* should not be here otherwise */
+    v = PyObject_GetAttr(ns, name);
+    if (v == NULL) {
+        /* either attrib lookup failed or other error */
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+            return NULL;
+        PyErr_Clear(); /* check in __builtins__ */
+        /* namespace 2: builtins */
+        v = PyObject_GetItem(f->f_builtins, name);
+        if (v == NULL) {
+            if (PyErr_ExceptionMatches(PyExc_KeyError))
+                format_exc_check_arg(
+                                     PyExc_NameError,
+                                     NAME_ERROR_MSG, name);
+            return NULL;
+        }
+    }
+    return v;
+}
+
+static PyObject *
+globals_getitem(PyFrameObject *f, PyObject *name)
+{
+    PyObject *v;
+    v = PyDict_GetItem(f->f_globals, name);
+    Py_XINCREF(v);
+    if (v == NULL) {
+        if (PyDict_CheckExact(f->f_builtins)) {
+            v = PyDict_GetItem(f->f_builtins, name);
+            if (v == NULL) {
+                format_exc_check_arg(
+                                     PyExc_NameError,
+                                     NAME_ERROR_MSG, name);
+                return NULL;
+            }
+            Py_INCREF(v);
+        }
+        else {
+            v = PyObject_GetItem(f->f_builtins, name);
+            if (v == NULL) {
+                if (PyErr_ExceptionMatches(PyExc_KeyError))
+                    format_exc_check_arg(
+                                         PyExc_NameError,
+                                         NAME_ERROR_MSG, name);
+                return NULL;
+            }
+        }
+    }
+    return v;
 }
 
 #ifdef Py_DEBUG
@@ -2199,30 +2256,9 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                 }
             }
             if (v == NULL) {
-                v = PyDict_GetItem(f->f_globals, name);
-                Py_XINCREF(v);
-                if (v == NULL) {
-                    if (PyDict_CheckExact(f->f_builtins)) {
-                        v = PyDict_GetItem(f->f_builtins, name);
-                        if (v == NULL) {
-                            format_exc_check_arg(
-                                        PyExc_NameError,
-                                        NAME_ERROR_MSG, name);
-                            goto error;
-                        }
-                        Py_INCREF(v);
-                    }
-                    else {
-                        v = PyObject_GetItem(f->f_builtins, name);
-                        if (v == NULL) {
-                            if (PyErr_ExceptionMatches(PyExc_KeyError))
-                                format_exc_check_arg(
-                                            PyExc_NameError,
-                                            NAME_ERROR_MSG, name);
-                            goto error;
-                        }
-                    }
-                }
+                v = globals_getitem(f, name);
+                if (v == NULL)
+                    goto error;
             }
             PUSH(v);
             DISPATCH();
@@ -2248,6 +2284,11 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                 }
                 Py_INCREF(v);
             }
+#if 0
+            else if (PyNDict_CheckExact(f->f_globals)) {
+                v = globals_getattr(f, name);
+            }
+#endif
             else {
                 /* Slow-path if globals or builtins is not a dict */
 
