@@ -4,6 +4,7 @@
 #include "Python.h"
 #include "internal/pystate.h"
 #include "structmember.h"
+#include "ndictobject.h"
 
 static Py_ssize_t max_module_number;
 
@@ -88,7 +89,7 @@ PyModule_NewObject(PyObject *name)
     m->md_state = NULL;
     m->md_weaklist = NULL;
     m->md_name = NULL;
-    m->md_dict = PyDict_New();
+    m->md_dict = _PyNDict_New(NULL);
     if (module_init_dict(m, m->md_dict, name, NULL) != 0)
         goto fail;
     PyObject_GC_Track(m);
