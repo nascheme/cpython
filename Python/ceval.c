@@ -3701,8 +3701,8 @@ too_many_positional(PyCodeObject *co, Py_ssize_t given, Py_ssize_t defcount,
    PyEval_EvalFrame() and PyEval_EvalCodeEx() you will need to adjust
    the test in the if statements in Misc/gdbinit (pystack and pystackv). */
 
-PyObject *
-_PyEval_EvalCodeWithName(PyObject *_co, PyObject *globals, PyObject *locals,
+static PyObject *
+eval_with_name(PyObject *_co, PyObject *globals, PyObject *locals,
            PyObject **args, Py_ssize_t argcount,
            PyObject **kwnames, PyObject **kwargs,
            Py_ssize_t kwcount, int kwstep,
@@ -3988,6 +3988,30 @@ fail: /* Jump here from prelude on failure */
         --tstate->recursion_depth;
     }
     return retval;
+}
+
+_PyTime_t _Py_exec_time; /* accumulated time spent in EvalCode */
+
+PyObject *
+_PyEval_EvalCodeWithName(PyObject *_co, PyObject *globals, PyObject *locals,
+           PyObject **args, Py_ssize_t argcount,
+           PyObject **kwnames, PyObject **kwargs,
+           Py_ssize_t kwcount, int kwstep,
+           PyObject **defs, Py_ssize_t defcount,
+           PyObject *kwdefs, PyObject *closure,
+           PyObject *name, PyObject *qualname)
+{
+    PyObject *rv;
+    _PyTime_t t1;
+    t1 = _PyTime_GetPerfCounter();
+    rv = eval_with_name(_co, globals, locals, args, argcount,
+                        kwnames, kwargs,
+                        kwcount, kwstep,
+                        defs, defcount,
+                        kwdefs, closure,
+                        name, qualname);
+    _Py_exec_time += _PyTime_GetPerfCounter() - t1;
+    return rv;
 }
 
 PyObject *

@@ -919,6 +919,8 @@ module_dict_for_exec(PyObject *name)
     return d;  /* Return a borrowed reference. */
 }
 
+extern _PyTime_t _Py_exec_time;
+
 static PyObject *
 exec_code_in_module(PyObject *name, PyObject *module_dict, PyObject *code_object)
 {
@@ -1688,7 +1690,7 @@ PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
         if (import_time) {
             static int header = 1;
             if (header) {
-                fputs("import time: self [us] | cumulative | imported package\n",
+                fputs("import time: self [us] | cumulative | eval code  | imported package\n",
                       stderr);
                 header = 0;
             }
@@ -1715,9 +1717,10 @@ PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
             _PyTime_t cum = _PyTime_GetPerfCounter() - t1;
 
             import_level--;
-            fprintf(stderr, "import time: %9ld | %10ld | %*s%s\n",
+            fprintf(stderr, "import time: %9ld | %10ld | %10ld | %*s%s\n",
                     (long)_PyTime_AsMicroseconds(cum - accumulated, _PyTime_ROUND_CEILING),
                     (long)_PyTime_AsMicroseconds(cum, _PyTime_ROUND_CEILING),
+                    (long)_PyTime_AsMicroseconds(_Py_exec_time, _PyTime_ROUND_CEILING),
                     import_level*2, "", PyUnicode_AsUTF8(abs_name));
 
             accumulated = accumulated_copy + cum;
