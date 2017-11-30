@@ -1589,6 +1589,8 @@ resolve_name(PyObject *name, PyObject *globals, int level)
     return NULL;
 }
 
+static PyObject *find_load_archive(PyObject *, int *);
+
 PyObject *
 PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
                                  PyObject *locals, PyObject *fromlist,
@@ -1602,6 +1604,7 @@ PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
     PyObject *package = NULL;
     PyInterpreterState *interp = PyThreadState_GET()->interp;
     int has_from;
+    int try_slow;
 
     if (name == NULL) {
         PyErr_SetString(PyExc_ValueError, "Empty module name");
@@ -1703,9 +1706,12 @@ PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
         if (PyDTrace_IMPORT_FIND_LOAD_START_ENABLED())
             PyDTrace_IMPORT_FIND_LOAD_START(PyUnicode_AsUTF8(abs_name));
 
-        mod = _PyObject_CallMethodIdObjArgs(interp->importlib,
-                                            &PyId__find_and_load, abs_name,
-                                            interp->import_func, NULL);
+        mod = find_load_archive(abs_name, &try_slow);
+        if (try_slow) {
+            mod = _PyObject_CallMethodIdObjArgs(interp->importlib,
+                                                &PyId__find_and_load, abs_name,
+                                                interp->import_func, NULL);
+        }
 
         if (PyDTrace_IMPORT_FIND_LOAD_DONE_ENABLED())
             PyDTrace_IMPORT_FIND_LOAD_DONE(PyUnicode_AsUTF8(abs_name),
@@ -2274,6 +2280,184 @@ PyImport_AppendInittab(const char *name, PyObject* (*initfunc)(void))
     newtab[0].initfunc = initfunc;
 
     return PyImport_ExtendInittab(newtab);
+}
+
+#ifdef Py_DEBUG
+#define DEBUG(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define DEBUG(...)
+#endif
+
+/* archive format:
+      <offset to index at end, as marshalled int>
+      <marshalled dict for module 1>
+      <marshalled code for module 1>
+      <marshalled dict for module 2>
+      <marshalled code for module 2>
+      ...
+      <index of modules as marshalled dict, index is offset to module data>
+*/
+
+/* PyDict containing table of abs module name to file offset */
+PyObject *archive_index;
+FILE *archive_fp;
+
+static int
+archive_seek(PyObject *pos)
+{
+    int rv;
+    Py_ssize_t p = PyLong_AsLong(pos);
+    if (PyErr_Occurred())
+        return 0;
+    rv = fseek(archive_fp, p, SEEK_SET);
+    if (rv < 0) {
+        PyErr_SetFromErrno(PyExc_OSError);
+        return 0;
+    }
+    return 1;
+}
+
+static int
+archive_read_index(void)
+{
+    char *filename;
+    PyObject *index_offset;
+    filename = Py_GETENV("PYTHONARCHIVE");
+    if (filename == NULL || *filename == '\0') {
+        archive_index = PyDict_New();
+        return (archive_index != NULL);
+    }
+    DEBUG("read archive index from %s\n", filename);
+    archive_fp = fopen(filename, "rb");
+    if (archive_fp == NULL) {
+        PyErr_SetFromErrno(PyExc_OSError);
+        return 0;
+    }
+    index_offset = PyMarshal_ReadObjectFromFile(archive_fp);
+    if (index_offset == NULL)
+        return 0;
+    if (!archive_seek(index_offset)) {
+        Py_DECREF(index_offset);
+        return 0;
+    }
+    Py_DECREF(index_offset);
+    archive_index = PyMarshal_ReadObjectFromFile(archive_fp);
+    DEBUG("read archive index done\n");
+    return (archive_index != NULL);
+}
+
+static PyObject *
+module_get_parent_name(PyObject *abs_name)
+{
+    const char *s = PyUnicode_AsUTF8(abs_name);
+    const char *dotpos = NULL;
+    for (const char *p = s; *p != '\0'; p++) {
+        if (*p == '.')
+            dotpos = p;
+    }
+    if (dotpos) {
+        return PyUnicode_FromStringAndSize(s, dotpos - s);
+    }
+    return NULL;
+}
+
+static PyObject *
+find_load_parent(PyObject *abs_name)
+{
+    int try_slow = 0;
+    PyObject *parent = PyImport_GetModule(abs_name);
+    if (parent != NULL) {
+        /* already imported */
+        DEBUG("already loaded parent %s\n",
+                PyUnicode_AsUTF8(abs_name));
+        return parent;
+    }
+    parent = find_load_archive(abs_name, &try_slow);
+    if (parent == NULL && try_slow) {
+        DEBUG("using slow import to get parent %s\n",
+                PyUnicode_AsUTF8(abs_name));
+        parent = PyImport_Import(abs_name);
+    }
+    else {
+        DEBUG("using fast import to get parent %s\n",
+                PyUnicode_AsUTF8(abs_name));
+    }
+    return parent;
+}
+
+static PyObject *
+find_load_archive(PyObject *abs_name, int *try_slow)
+{
+    PyObject *offset = NULL;
+    PyObject *code = NULL;
+    PyObject *mod = NULL;
+    PyObject *dict_props = NULL;
+    PyObject *parent_name = NULL;
+    PyObject *parent = NULL;
+    PyObject *relname = NULL;
+
+    *try_slow = 0;
+    if (archive_index == NULL) {
+        if (!archive_read_index())
+            goto error;
+    }
+    offset = PyDict_GetItem(archive_index, abs_name);
+    if (offset == NULL) {
+        *try_slow = 1;
+        goto error;
+    }
+    parent_name = module_get_parent_name(abs_name);
+    if (parent_name == NULL) {
+        if (PyErr_Occurred())
+            goto error;
+    }
+    else {
+        parent = find_load_parent(parent_name);
+        if (parent == NULL)
+            goto error;
+    }
+    if (!archive_seek(offset))
+        goto error;
+    dict_props = PyMarshal_ReadObjectFromFile(archive_fp);
+    if (dict_props == NULL)
+        goto error;
+    code = PyMarshal_ReadObjectFromFile(archive_fp);
+    if (code == NULL)
+        goto error;
+    mod = PyImport_ExecCodeModule(PyUnicode_AsUTF8(abs_name), code);
+    if (mod == NULL)
+        goto error;
+    if (PyDict_Update(PyModule_GetDict(mod), dict_props) == -1)
+        goto error;
+    if (parent != NULL) {
+        Py_ssize_t len = PyUnicode_GET_LENGTH(abs_name);
+        Py_ssize_t dot;
+        dot = PyUnicode_FindChar(abs_name, '.', 0, len, -1);
+        if (dot < -2)
+            goto error;
+        assert(dot != -1); /* should not happen if parent != NULL */
+        relname = PyUnicode_Substring(abs_name, dot+1, len);
+        if (relname == NULL)
+            goto error;
+        /* sub-module in package, need to set attribute on parent */
+        if (PyObject_SetAttr(parent, relname, mod) != 0) {
+            goto error;
+        }
+    }
+    DEBUG("fast load for %s worked!\n", PyUnicode_AsUTF8(abs_name));
+    goto done;
+
+error:
+    Py_XDECREF(mod);
+    mod = NULL;
+done:
+    Py_XDECREF(offset);
+    Py_XDECREF(code);
+    Py_XDECREF(dict_props);
+    Py_XDECREF(parent_name);
+    Py_XDECREF(parent);
+    Py_XDECREF(relname);
+    return mod;
 }
 
 #ifdef __cplusplus
