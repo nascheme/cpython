@@ -804,6 +804,7 @@ class FrozenImporter:
             raise ImportError('{!r} is not a frozen module'.format(name),
                               name=name)
         code = _call_with_frames_removed(_imp.get_frozen_object, name)
+        #module.__spec__.module_code = code
         exec(code, module.__dict__)
 
     @classmethod

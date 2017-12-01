@@ -677,7 +677,10 @@ class _LoaderBasics:
         if code is None:
             raise ImportError('cannot load module {!r} when get_code() '
                               'returns None'.format(module.__name__))
-        _bootstrap._call_with_frames_removed(exec, code, module.__dict__)
+        #_bootstrap._call_with_frames_removed(exec, code, module.__dict__)
+        # don't actually exec the module code here
+        module.__spec__.module_code = code
+        module.__spec__.need_exec = True
 
     def load_module(self, fullname):
         """This module is deprecated."""

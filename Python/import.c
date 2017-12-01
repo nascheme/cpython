@@ -1645,6 +1645,59 @@ import_find_and_load(PyObject *abs_name)
     return mod;
 }
 
+static int
+import_module_exec(PyObject *mod, PyObject *name)
+{
+    _Py_IDENTIFIER(__spec__);
+    _Py_IDENTIFIER(module_code);
+    _Py_IDENTIFIER(need_exec);
+    PyObject *rv;
+    PyObject *spec;
+    PyObject *co;
+    PyObject *d;
+    PyObject *need_exec; /* True if exec of mod body hasn't run get */
+    spec = _PyObject_GetAttrId(mod, &PyId___spec__);
+    if (spec == NULL) {
+        PyErr_Clear();
+        return 1;
+    }
+    need_exec = _PyObject_GetAttrId(spec, &PyId_need_exec);
+    if (need_exec == NULL || need_exec == Py_False) {
+        PyErr_Clear();
+        return 1;
+    }
+    co = _PyObject_GetAttrId(spec, &PyId_module_code);
+    if (co == NULL) {
+        PyErr_Clear();
+        return 1;
+    }
+    if (_PyObject_SetAttrId(spec, &PyId_need_exec, Py_False) < 0) {
+        return 0;
+    }
+#if 0
+    /* drop the __code__ attribute */
+    if (_PyDict_DelItemId(d, &PyId___code__)) {
+        Py_DECREF(co);
+        return NULL; /* del failed */
+    }
+#endif
+    fprintf(stderr, "exec __code__ module %s\n", PyUnicode_AsUTF8(name));
+    d = PyModule_GetDict(mod);
+    if (PyDict_GetItemString(d, "__builtins__") == NULL) {
+        /* add __builtins__ */
+        if (PyDict_SetItemString(d, "__builtins__",
+                                 PyEval_GetBuiltins()) != 0) {
+            remove_module(name);
+            return 0;
+        }
+    }
+    rv = PyEval_EvalCode(co, d, d);
+    if (rv == NULL)
+        return 0;
+    Py_DECREF(rv);
+    return 1;
+}
+
 PyObject *
 PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
                                  PyObject *locals, PyObject *fromlist,
@@ -1732,6 +1785,12 @@ PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
         mod = import_find_and_load(abs_name);
         if (mod == NULL)
             goto error;
+        assert(!PyErr_Occurred());
+	if (!import_module_exec(mod, abs_name)) {
+	    //remove_module(abs_name);
+	    goto error;
+        }
+        assert(!PyErr_Occurred());
     }
 
     has_from = 0;
@@ -1791,6 +1850,12 @@ PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
         }
     }
     else {
+        PyObject *fl = PyObject_Repr(fromlist);
+        assert(fl != NULL);
+        fprintf(stderr, "handle fromlist %s %s\n",
+                PyUnicode_AsUTF8(abs_name),
+                PyUnicode_AsUTF8(fl));
+        Py_DECREF(fl);
         final_mod = _PyObject_CallMethodIdObjArgs(interp->importlib,
                                                   &PyId__handle_fromlist, mod,
                                                   fromlist, interp->import_func,
