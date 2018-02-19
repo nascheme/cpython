@@ -515,17 +515,40 @@ static int do_raise(PyObject *, PyObject *);
 static int unpack_iterable(PyObject *, int, int, PyObject **);
 
 static PyObject *
+module_call_getattr(PyObject *globals, PyObject *name)
+{
+    PyObject *getattr;
+    _Py_IDENTIFIER(__getattr__);
+    getattr = _PyDict_GetItemId(globals, &PyId___getattr__);
+    if (getattr) {
+        PyObject* stack[1] = {name};
+        return _PyObject_FastCall(getattr, stack, 1);
+    }
+    format_exc_check_arg(PyExc_NameError,
+                         NAME_ERROR_MSG, name);
+    return NULL;
+}
+
+
+static PyObject *
 globals_getitem(PyFrameObject *f, PyObject *name)
 {
     PyObject *v;
     if (PyDict_CheckExact(f->f_globals)
         && PyDict_CheckExact(f->f_builtins))
     {
-        v = _PyDict_LoadGlobal((PyDictObject *)f->f_globals,
+        PyDictObject *globals = (PyDictObject *)f->f_globals;
+        v = _PyDict_LoadGlobal(globals,
                                (PyDictObject *)f->f_builtins,
                                name);
         if (v == NULL) {
             if (!_PyErr_OCCURRED()) {
+                _Py_IDENTIFIER(__spec__);
+                PyObject *spec = _PyDict_GetItemId(f->f_globals,
+                                                   &PyId___spec__);
+                if (spec != NULL) {
+                    return module_call_getattr(f->f_globals, name);
+                }
                 /* _PyDict_LoadGlobal() returns NULL without raising
                  * an exception if the key doesn't exist */
                 format_exc_check_arg(PyExc_NameError,
