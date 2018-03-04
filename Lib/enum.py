@@ -1,3 +1,6 @@
+
+#__lazy_module__ = True
+
 import sys
 from types import MappingProxyType, DynamicClassAttribute
 

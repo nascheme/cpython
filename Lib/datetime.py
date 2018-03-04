@@ -4,6 +4,8 @@ See http://www.iana.org/time-zones/repository/tz-link.html for
 time zone and DST data sources.
 """
 
+__lazy_module__ = True
+
 import time as _time
 import math as _math
 

@@ -47,4 +47,8 @@ def _main():
 
 
 if __name__ == '__main__':
-    _main()
+    try:
+        _main()
+    finally:
+        import resource
+        print('RSS', resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1000)

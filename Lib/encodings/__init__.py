@@ -28,6 +28,7 @@ Written by Marc-Andre Lemburg (mal@lemburg.com).
 
 """#"
 
+__lazy_module__ = True
 import codecs
 import sys
 from . import aliases
