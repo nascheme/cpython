@@ -137,7 +137,6 @@ class Transformer(ast.NodeTransformer):
         return self._store_code(node.name, mcode)
 
     def visit_Assign(self, node):
-        return self.generic_visit(node)
         if node not in self.lazy_defs:
             return self.generic_visit(node)
         else:
