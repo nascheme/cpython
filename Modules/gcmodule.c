@@ -41,49 +41,6 @@ module gc
 /* Get the object given the GC head */
 #define FROM_GC(g) ((PyObject *)(((PyGC_Head *)g)+1))
 
-/*
- * GET_REFS() values used by GC:
- *
- *  BLACK: proven reachable (alive) or not in current collection generation
- *  GREY: reachable but tp_traverse not yet called (children not visited)
- *  WHITE: tentatively unreachable, may become grey and then finally black
- *
- *  GET_REFS() value while collector is not running is BLACK.  Objects not
- *  in the generation being collected are also BLACK.
- *
- *  During subtract_refs() GET_REFS() >= 0.
- *
- *  During mark_reachable(), values in collected generation go from WHITE to
- *  GREY to BLACK.
- *
- *  After mark_reachable(), values are either WHITE or BLACK.
- *
- */
-
-#define IS_TRACKED(o) _PyObject_GC_IS_TRACKED(o)
-#define GET_REFS(g) _PyGCHead_REFS(g)
-#define SET_REFS(g, v) _PyGCHead_SET_REFS(g, v)
-
-#define COLOR_BLACK _PyGC_REFS_BLACK
-#define COLOR_GREY _PyGC_REFS_GREY
-#define COLOR_WHITE _PyGC_REFS_WHITE
-
-#define IS_BLACK(g) (GET_REFS(g) == COLOR_BLACK)
-#define IS_GREY(g) (GET_REFS(g) == COLOR_GREY)
-#define IS_WHITE(g) (GET_REFS(g) == COLOR_WHITE)
-
-#define SET_BLACK(g) SET_REFS(g, COLOR_BLACK)
-#define SET_GREY(g) SET_REFS(g, COLOR_GREY)
-#define SET_WHITE(g) SET_REFS(g, COLOR_WHITE)
-
-#define MARK_QUEUE_SIZE 100
-
-struct mark_state {
-    //PyObject *queue[MARK_QUEUE_SIZE];
-    int queue_depth;
-    int aborted; /* true if queue depth would have been exceeded, restart */
-};
-
 /* Python string to use if unhandled exception occurs */
 static PyObject *gc_str = NULL;
 
@@ -102,7 +59,6 @@ void
 _PyGC_Initialize(struct _gc_runtime_state *state)
 {
     state->enabled = 1; /* automatic collection enabled? */
-    //_PyRuntime.gc.debug = DEBUG_STATS | DEBUG_LEAK;
 
 #define _GEN_HEAD(n) (&state->generations[n].head)
     struct gc_generation generations[NUM_GENERATIONS] = {
@@ -151,6 +107,57 @@ GC_TENTATIVELY_UNREACHABLE
     it has a __del__ method), its gc_refs is restored to GC_REACHABLE again.
 ----------------------------------------------------------------------------
 */
+#define GC_REACHABLE                    _PyGC_REFS_REACHABLE
+#define GC_TENTATIVELY_UNREACHABLE      _PyGC_REFS_TENTATIVELY_UNREACHABLE
+
+#define IS_TRACKED(o) _PyObject_GC_IS_TRACKED(o)
+#define IS_REACHABLE(o) (_PyGC_REFS(o) == GC_REACHABLE)
+#define IS_TENTATIVELY_UNREACHABLE(o) ( \
+    _PyGC_REFS(o) == GC_TENTATIVELY_UNREACHABLE)
+
+
+/*
+ * color values used by GC:
+ *
+ *  BLACK: proven reachable (alive) or not in current collection generation
+ *  GREY: reachable but tp_traverse not yet called (children not visited)
+ *  WHITE: tentatively unreachable, may become grey and then finally black
+ *
+ *  COlor value while collector is not running is BLACK.  Objects not
+ *  in the generation being collected are also BLACK.
+ *
+ *  During mark_reachable(), colors in collected generation go from WHITE to
+ *  GREY to BLACK.
+ *
+ *  After mark_reachable(), colors are either WHITE or BLACK.
+ *
+ */
+
+#define GET_COLOR(g) ((g)->gc.gc_color)
+#define SET_COLOR(g, v) ((g)->gc.gc_color = v)
+
+#define COLOR_BLACK _PyGC_COLOR_BLACK
+#define COLOR_GREY _PyGC_COLOR_GREY
+#define COLOR_WHITE _PyGC_COLOR_WHITE
+
+#define IS_BLACK(g) (GET_COLOR(g) == COLOR_BLACK)
+#define IS_GREY(g) (GET_COLOR(g) == COLOR_GREY)
+#define IS_WHITE(g) (GET_COLOR(g) == COLOR_WHITE)
+
+#define SET_BLACK(g) SET_COLOR(g, COLOR_BLACK)
+#define SET_GREY(g) SET_COLOR(g, COLOR_GREY)
+#define SET_WHITE(g) SET_COLOR(g, COLOR_WHITE)
+
+#define MARK_QUEUE_SIZE 100
+
+/* state used while "marking" */
+struct mark_state {
+    PyGC_Head *reachable;
+    //PyObject *queue[MARK_QUEUE_SIZE];
+    int queue_depth;
+    int aborted; /* true if queue depth would have been exceeded, restart */
+};
+
 
 /*** list functions ***/
 
@@ -272,14 +279,35 @@ check_valid_refs(void)
 static void
 verify_all_color(PyGC_Head *head, Py_ssize_t color)
 {
-    for (PyGC_Head *gc = head->gc.gc_next; gc != head; gc = gc->gc.gc_next) {
-        assert(GET_REFS(gc) == color);
+    PyGC_Head *gc = head;
+    while (gc != head) {
+        PyGC_Head *next = gc->gc.gc_next;
+        assert(GET_COLOR(gc) == color);
+        gc = next;
     }
+
+#if 0
+    for (PyGC_Head *gc = head->gc.gc_next; gc != head; gc = gc->gc.gc_next) {
+        assert(GET_COLOR(gc) == color);
+    }
+#endif
 }
 #else
 #define check_valid_refs() (1==1)
-#define verify_all_color(head, (1==1)
+#define verify_all_color(head, color) (1==1)
 #endif
+
+#if 1
+static void
+mark_all_color(PyGC_Head *head, Py_ssize_t color)
+{
+    PyGC_Head *gc;
+    for (gc = head->gc.gc_next; gc != head; gc = gc->gc.gc_next) {
+        SET_COLOR(gc, color);
+    }
+}
+#endif
+
 
 /* Set all gc_refs = ob_refcnt.  After this, gc_refs is > 0 for all objects
  * in containers, and is GC_REACHABLE for all tracked gc objects not in
@@ -290,9 +318,9 @@ update_refs(PyGC_Head *containers)
 {
     PyGC_Head *gc = containers->gc.gc_next;
     for (; gc != containers; gc = gc->gc.gc_next) {
+        assert(_PyGCHead_REFS(gc) == GC_REACHABLE);
         assert(IS_BLACK(gc));
-        assert(IS_TRACKED(FROM_GC(gc)));
-        SET_REFS(gc, Py_REFCNT(FROM_GC(gc)));
+        _PyGCHead_SET_REFS(gc, Py_REFCNT(FROM_GC(gc)));
         /* Python's cyclic gc should never see an incoming refcount
          * of 0:  if something decref'ed to 0, it should have been
          * deallocated immediately at that time.
@@ -311,7 +339,7 @@ update_refs(PyGC_Head *containers)
          * so serious that maybe this should be a release-build
          * check instead of an assert?
          */
-        assert(GET_REFS(gc) != 0);
+        assert(_PyGCHead_REFS(gc) != 0);
     }
 }
 
@@ -320,17 +348,15 @@ static int
 visit_decref(PyObject *op, void *data)
 {
     assert(op != NULL);
-    if (PyObject_IS_GC(op)) {
+    if (PyObject_IS_GC(op) && IS_TRACKED(op)) {
         PyGC_Head *gc = AS_GC(op);
         /* We're only interested in gc_refs for objects in the
          * generation being collected, which can be recognized
-         * because they have positive gc_refs.
+         * because only they have positive gc_refs.
          */
-        assert(GET_REFS(gc) != 0); /* else refcount was too small */
-        if (GET_REFS(gc) > 0) {
-            assert(IS_TRACKED(op)); /* must be or GET_REFS() < 0 */
+        assert(_PyGCHead_REFS(gc) != 0); /* else refcount was too small */
+        if (_PyGCHead_REFS(gc) > 0)
             _PyGCHead_DECREF(gc);
-        }
     }
     return 0;
 }
@@ -353,56 +379,80 @@ subtract_refs(PyGC_Head *containers)
     }
 }
 
-/* A traversal callback for move_unreachable. Blacken object and all objects
- * reachable from it. */
+/* A traversal callback for move_unreachable. */
 static int
 visit_reachable(PyObject *op, struct mark_state *state)
 {
-    if (PyObject_IS_GC(op)) {
+    if (PyObject_IS_GC(op) && IS_TRACKED(op)) {
         PyGC_Head *gc = AS_GC(op);
-        switch GET_REFS(gc) {
-            case COLOR_WHITE:
-                SET_GREY(gc);
-                /* no break, continue to grey case */
-            case COLOR_GREY:
-                if (state->queue_depth >= MARK_QUEUE_SIZE) {
-                    /* we can't recurse further, leave it grey, next loop will
-                     * get it */
-                    state->aborted = 1;
-                }
-                else {
-                    /* mark it black as it is proven reachable and we don't have
-                     * to look at it anymore.  Note that every loop in
-                     * mark_reachable() must at least turn some GREY to BLACK in
-                     * order for us to make progress. */
-                    SET_BLACK(gc);
-                    state->queue_depth += 1;
-                    traverseproc traverse = Py_TYPE(op)->tp_traverse;
-                    traverse(op, (visitproc)visit_reachable, state);
-                    state->queue_depth -= 1;
-                    assert(state->queue_depth >= 0);
-                }
-                break;
-            case COLOR_BLACK:
-                /* not in collected generation or already marked */
-                break;
-            default:
-                assert(0); /* invalid GET_REFS() value */
+        const Py_ssize_t gc_refs = _PyGCHead_REFS(gc);
+
+        if (gc_refs == 0) {
+            /* This is in move_unreachable's 'young' list, but
+             * the traversal hasn't yet gotten to it.  All
+             * we need to do is tell move_unreachable that it's
+             * reachable.
+             */
+            _PyGCHead_SET_REFS(gc, 1);
+            SET_GREY(gc);
         }
-    }
-    return 0;
-}
+        else if (gc_refs == GC_TENTATIVELY_UNREACHABLE) {
+            /* This had gc_refs = 0 when move_unreachable got
+             * to it, but turns out it's reachable after all.
+             * Move it back to move_unreachable's 'young' list,
+             * and move_unreachable will eventually get to it
+             * again.
+             */
+            gc_list_move(gc, state->reachable);
+            _PyGCHead_SET_REFS(gc, 1);
+            SET_GREY(gc);
+        }
+        /* Else there's nothing to do.
+         * If gc_refs > 0, it must be in move_unreachable's 'young'
+         * list, and move_unreachable will eventually get to it.
+         * If gc_refs == GC_REACHABLE, it's either in some other
+         * generation so we don't care about it, or move_unreachable
+         * already dealt with it.
+         */
+         else {
+            assert(gc_refs > 0 || gc_refs == GC_REACHABLE);
+         }
 
 #if 0
-static void
-mark_all_color(PyGC_Head *head, Py_ssize_t color)
-{
-    PyGC_Head *gc;
-    for (gc = head->gc.gc_next; gc != head; gc = gc->gc.gc_next) {
-        SET_REFS(gc, color);
-    }
-}
+         switch GET_COLOR(gc) {
+             case COLOR_WHITE:
+                 SET_GREY(gc);
+                 /* no break, continue to grey case */
+             case COLOR_GREY:
+                 if (state->queue_depth >= MARK_QUEUE_SIZE) {
+                     /* we can't recurse further, leave it grey, next loop will
+                      * get it */
+                     state->aborted = 1;
+                 }
+                 else {
+                     /* mark it black as it is proven reachable and we don't have
+                      * to look at it anymore.  Note that every loop in
+                      * mark_reachable() must at least turn some GREY to BLACK in
+                      * order for us to make progress. */
+                     SET_BLACK(gc);
+                     state->queue_depth += 1;
+                     traverseproc traverse = Py_TYPE(op)->tp_traverse;
+                     traverse(op, (visitproc)visit_reachable, state);
+                     state->queue_depth -= 1;
+                     assert(state->queue_depth >= 0);
+                 }
+                 break;
+             case COLOR_BLACK:
+                 /* not in collected generation or already marked */
+                 break;
+             default:
+                 assert(0); /* invalid GET_COLOR() value */
+         }
 #endif
+    }
+
+    return 0;
+}
 
 static void
 mark_reachable(PyGC_Head *head)
@@ -411,6 +461,7 @@ mark_reachable(PyGC_Head *head)
     struct mark_state state;
     int done = 0;
     int mark_loops = 0;
+    state.reachable = head;
 
     while (!done) {
         mark_loops += 1;
@@ -442,49 +493,63 @@ mark_reachable(PyGC_Head *head)
 
 }
 
-
 /* Move the unreachable objects from young to unreachable.  After this,
- * all objects in young are color black, and all objects in unreachable are
- * color white.  All tracked gc objects not in young or unreachable still are
- * color black.  All objects in young after this are directly or indirectly
- * reachable from outside the original young; and all objects in unreachable
- * are not.
+ * all objects in young have gc_refs = GC_REACHABLE, and all objects in
+ * unreachable have gc_refs = GC_TENTATIVELY_UNREACHABLE.  All tracked
+ * gc objects not in young or unreachable still have gc_refs = GC_REACHABLE.
+ * All objects in young after this are directly or indirectly reachable
+ * from outside the original young; and all objects in unreachable are
+ * not.
  */
 static void
 move_unreachable(PyGC_Head *young, PyGC_Head *unreachable)
 {
-    PyGC_Head *gc;
+    PyGC_Head *gc = young->gc.gc_next;
 
-    for (gc = young->gc.gc_next; gc != young; gc = gc->gc.gc_next) {
-        if (GET_REFS(gc) > 0) {
-            /* reachable due to refcount, mark as grey */
-            SET_GREY(gc);
-        }
-        else {
-            assert(GET_REFS(gc) == 0);
-            /* tentatively unreachable */
-            SET_WHITE(gc);
-        }
-    }
-
-    /* follow references, turning reachable white to grey, grey to black */
-    mark_reachable(young);
-
-    /* everthing still marked white is now proven unreachable */
-    gc = young->gc.gc_next;
+    /* Invariants:  all objects "to the left" of us in young have gc_refs
+     * = GC_REACHABLE, and are indeed reachable (directly or indirectly)
+     * from outside the young list as it was at entry.  All other objects
+     * from the original young "to the left" of us are in unreachable now,
+     * and have gc_refs = GC_TENTATIVELY_UNREACHABLE.  All objects to the
+     * left of us in 'young' now have been scanned, and no objects here
+     * or to the right have been scanned yet.
+     */
     while (gc != young) {
-        PyGC_Head *next = gc->gc.gc_next;
-        /* must be true or mark_reachable() did not finish the job */
-        assert(IS_WHITE(gc) || IS_BLACK(gc));
-        if (IS_WHITE(gc)) {
-            gc_list_move(gc, unreachable);
-        }
-        else {
+        PyGC_Head *next;
+
+        if (_PyGCHead_REFS(gc)) {
+            /* gc is definitely reachable from outside the
+             * original 'young'.  Mark it as such, and traverse
+             * its pointers to find any other objects that may
+             * be directly reachable from it.  Note that the
+             * call to tp_traverse may append objects to young,
+             * so we have to wait until it returns to determine
+             * the next object to visit.
+             */
             PyObject *op = FROM_GC(gc);
-            assert(IS_BLACK(gc));
-            if (gc->gc.gc_next != NULL && PyTuple_CheckExact(op)) {
+            traverseproc traverse = Py_TYPE(op)->tp_traverse;
+            assert(_PyGCHead_REFS(gc) > 0);
+            _PyGCHead_SET_REFS(gc, GC_REACHABLE);
+            SET_BLACK(gc);
+            (void) traverse(op,
+                            (visitproc)visit_reachable,
+                            (void *)young);
+            next = gc->gc.gc_next;
+            if (PyTuple_CheckExact(op)) {
                 _PyTuple_MaybeUntrack(op);
             }
+        }
+        else {
+            /* This *may* be unreachable.  To make progress,
+             * assume it is.  gc isn't directly reachable from
+             * any object we've already traversed, but may be
+             * reachable from an object we haven't gotten to yet.
+             * visit_reachable will eventually move gc back into
+             * young if that's so, and we'll see it again.
+             */
+            next = gc->gc.gc_next;
+            gc_list_move(gc, unreachable);
+            _PyGCHead_SET_REFS(gc, GC_TENTATIVELY_UNREACHABLE);
         }
         gc = next;
     }
@@ -512,42 +577,60 @@ has_legacy_finalizer(PyObject *op)
 }
 
 /* Move the objects in unreachable with tp_del slots into `finalizers`.
- * Objects moved into `finalizers` have color BLACK; the objects remaining in
- * unreachable are left WHITE.
+ * Objects moved into `finalizers` have gc_refs set to GC_REACHABLE; the
+ * objects remaining in unreachable are left at GC_TENTATIVELY_UNREACHABLE.
  */
 static void
 move_legacy_finalizers(PyGC_Head *unreachable, PyGC_Head *finalizers)
 {
     PyGC_Head *gc;
     PyGC_Head *next;
-    int found = 0;
 
-    /* mark finalizers as grey */
-    for (gc = unreachable->gc.gc_next; gc != unreachable;
-         gc = gc->gc.gc_next) {
+    /* March over unreachable.  Move objects with finalizers into
+     * `finalizers`.
+     */
+    for (gc = unreachable->gc.gc_next; gc != unreachable; gc = next) {
         PyObject *op = FROM_GC(gc);
+
+        assert(IS_TENTATIVELY_UNREACHABLE(op));
+        next = gc->gc.gc_next;
+
         if (has_legacy_finalizer(op)) {
-            fprintf(stderr, "found legacy finalizer %p\n", op);
+            gc_list_move(gc, finalizers);
+            _PyGCHead_SET_REFS(gc, GC_REACHABLE);
             SET_GREY(gc);
-            found = 1;
         }
     }
-    if (found) {
-        int n = 0;
-        /* make everything reachable from them as BLACK */
-        mark_reachable(unreachable);
-        /* move everything BLACK to finalizers */
-        for (gc = unreachable->gc.gc_next; gc != unreachable; gc = next) {
-            next = gc->gc.gc_next;
-            if (IS_BLACK(gc)) {
-                gc_list_move(gc, finalizers);
-                n += 1;
-            }
-            else {
-                assert(IS_WHITE(gc));
-            }
+}
+
+/* A traversal callback for move_legacy_finalizer_reachable. */
+static int
+visit_move(PyObject *op, PyGC_Head *tolist)
+{
+    if (PyObject_IS_GC(op)) {
+        if (IS_TENTATIVELY_UNREACHABLE(op)) {
+            PyGC_Head *gc = AS_GC(op);
+            gc_list_move(gc, tolist);
+            _PyGCHead_SET_REFS(gc, GC_REACHABLE);
         }
-        fprintf(stderr, "found legacy finalizers %d\n", n);
+    }
+    return 0;
+}
+
+/* Move objects that are reachable from finalizers, from the unreachable set
+ * into finalizers set.
+ */
+static void
+move_legacy_finalizer_reachable(PyGC_Head *finalizers)
+{
+    traverseproc traverse;
+    PyGC_Head *gc = finalizers->gc.gc_next;
+    for (; gc != finalizers; gc = gc->gc.gc_next) {
+        /* Note that the finalizers list may grow during this. */
+        traverse = Py_TYPE(FROM_GC(gc))->tp_traverse;
+        (void) traverse(FROM_GC(gc),
+                        (visitproc)visit_move,
+                        (void *)finalizers);
     }
 }
 
@@ -586,7 +669,7 @@ handle_weakrefs(PyGC_Head *unreachable, PyGC_Head *old)
         PyWeakReference **wrlist;
 
         op = FROM_GC(gc);
-        assert(IS_WHITE(gc));
+        assert(IS_TENTATIVELY_UNREACHABLE(op));
         next = gc->gc.gc_next;
 
         if (! PyType_SUPPORTS_WEAKREFS(Py_TYPE(op)))
@@ -641,10 +724,9 @@ handle_weakrefs(PyGC_Head *unreachable, PyGC_Head *old)
      * to imagine how calling it later could create a problem for us.  wr
      * is moved to wrcb_to_call in this case.
      */
-            wrasgc = AS_GC(wr);
-            if (IS_WHITE(wrasgc))
+            if (IS_TENTATIVELY_UNREACHABLE(wr))
                 continue;
-            assert(IS_BLACK(wrasgc));
+            assert(IS_REACHABLE(wr));
 
             /* Create a new reference so that wr can't go away
              * before we can process it again.
@@ -652,6 +734,7 @@ handle_weakrefs(PyGC_Head *unreachable, PyGC_Head *old)
             Py_INCREF(wr);
 
             /* Move wr to wrcb_to_call, for the next pass. */
+            wrasgc = AS_GC(wr);
             assert(wrasgc != next); /* wrasgc is reachable, but
                                        next isn't, so they can't
                                        be the same */
@@ -668,7 +751,7 @@ handle_weakrefs(PyGC_Head *unreachable, PyGC_Head *old)
 
         gc = wrcb_to_call.gc.gc_next;
         op = FROM_GC(gc);
-        assert(IS_BLACK(gc));
+        assert(IS_REACHABLE(op));
         assert(PyWeakref_Check(op));
         wr = (PyWeakReference *)op;
         callback = wr->wr_callback;
@@ -786,22 +869,29 @@ static int
 check_garbage(PyGC_Head *collectable)
 {
     PyGC_Head *gc;
-    int rv = 0;
     for (gc = collectable->gc.gc_next; gc != collectable;
          gc = gc->gc.gc_next) {
-        assert(IS_WHITE(gc));
-        SET_REFS(gc, Py_REFCNT(FROM_GC(gc)));
-        assert(GET_REFS(gc) != 0);
+        _PyGCHead_SET_REFS(gc, Py_REFCNT(FROM_GC(gc)));
+        assert(_PyGCHead_REFS(gc) != 0);
     }
     subtract_refs(collectable);
     for (gc = collectable->gc.gc_next; gc != collectable;
          gc = gc->gc.gc_next) {
-        assert(GET_REFS(gc) >= 0);
-        if (GET_REFS(gc) != 0)
-            rv = -1;
-        SET_BLACK(gc);
+        assert(_PyGCHead_REFS(gc) >= 0);
+        if (_PyGCHead_REFS(gc) != 0)
+            return -1;
     }
-    return rv;
+    return 0;
+}
+
+static void
+revive_garbage(PyGC_Head *collectable)
+{
+    PyGC_Head *gc;
+    for (gc = collectable->gc.gc_next; gc != collectable;
+         gc = gc->gc.gc_next) {
+        _PyGCHead_SET_REFS(gc, GC_REACHABLE);
+    }
 }
 
 /* Break reference cycles by clearing the containers involved.  This is
@@ -830,6 +920,7 @@ delete_garbage(PyGC_Head *collectable, PyGC_Head *old)
         if (collectable->gc.gc_next == gc) {
             /* object is still alive, move it, it may die later */
             gc_list_move(gc, old);
+            _PyGCHead_SET_REFS(gc, GC_REACHABLE);
         }
     }
 }
@@ -910,7 +1001,6 @@ collect(int generation, Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
      * refcount greater than 0 when all the references within the
      * set are taken into account).
      */
-    check_valid_refs();
     update_refs(young);
     subtract_refs(young);
 
@@ -922,8 +1012,6 @@ collect(int generation, Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
      */
     gc_list_init(&unreachable);
     move_unreachable(young, &unreachable);
-
-    verify_all_color(&unreachable, COLOR_WHITE);
 
     /* Move reachable objects to next generation. */
     if (young != old) {
@@ -940,16 +1028,16 @@ collect(int generation, Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
         _PyRuntime.gc.long_lived_total = gc_list_size(young);
     }
 
-    verify_all_color(&unreachable, COLOR_WHITE);
-
     /* All objects in unreachable are trash, but objects reachable from
      * legacy finalizers (e.g. tp_del) can't safely be deleted.
      */
     gc_list_init(&finalizers);
     move_legacy_finalizers(&unreachable, &finalizers);
-
-    verify_all_color(&unreachable, COLOR_WHITE);
-    verify_all_color(&finalizers, COLOR_BLACK);
+    /* finalizers contains the unreachable objects with a legacy finalizer;
+     * unreachable objects reachable *from* those are also uncollectable,
+     * and we move those into the finalizers list too.
+     */
+    move_legacy_finalizer_reachable(&finalizers);
 
     /* Collect statistics on collectable objects found and print
      * debugging information.
@@ -969,7 +1057,7 @@ collect(int generation, Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
     finalize_garbage(&unreachable);
 
     if (check_garbage(&unreachable)) {
-        /* finalizers made things reachable again, revive all */
+        revive_garbage(&unreachable);
         gc_list_merge(&unreachable, old);
     }
     else {
@@ -1013,8 +1101,6 @@ collect(int generation, Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
     if (generation == NUM_GENERATIONS-1) {
         clear_freelists();
     }
-
-    check_valid_refs();
 
     if (PyErr_Occurred()) {
         if (nofail) {
@@ -1701,7 +1787,6 @@ _PyObject_GC_Alloc(int use_calloc, size_t basicsize)
     if (g == NULL)
         return PyErr_NoMemory();
     g->gc.gc_refs = 0;
-    SET_BLACK(g);
     g->gc.gc_next = NULL;
     _PyRuntime.gc.generations[0].count++; /* number of allocated GC objects */
     if (_PyRuntime.gc.generations[0].count > _PyRuntime.gc.generations[0].threshold &&
