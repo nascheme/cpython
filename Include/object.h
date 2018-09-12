@@ -601,6 +601,24 @@ _PyObject_GetBuiltin(const char *name);
 */
 PyAPI_FUNC(PyObject *) PyObject_Dir(PyObject *);
 
+inline PyTypeObject *
+_Py_TYPE(PyObject *ob)
+{
+    return ob->ob_type;
+}
+
+inline Py_ssize_t
+_Py_REFCNT(PyObject *ob)
+{
+    return ob->ob_refcnt;
+}
+
+#define Py_REFCNT(ob) _Py_REFCNT((PyObject *)ob)
+#define Py_TP(ob) _Py_TYPE(ob)
+#define Py_TYPE(ob) _Py_TYPE((PyObject *)ob)
+#define Py_SIZE(ob) (((PyVarObject*)(ob))->ob_size)
+#define Py_SET_TYPE(ob, tp) (((PyObject*)(ob))->ob_type = (tp))
+#define Py_SET_REFCNT(ob, n) (((PyObject*)(ob))->ob_refcnt = (n))
 
 /* Helpers for printing recursive container types */
 PyAPI_FUNC(int) Py_ReprEnter(PyObject *);
@@ -794,19 +812,25 @@ PyAPI_FUNC(void) _Py_Dealloc(PyObject *);
 #endif
 #endif /* !Py_TRACE_REFS */
 
-#define Py_INCREF(op) (                         \
-    _Py_INC_REFTOTAL  _Py_REF_DEBUG_COMMA       \
-    ((PyObject *)(op))->ob_refcnt++)
+inline void
+_Py_INCREF(PyObject *op)
+{
+    (_Py_INC_REFTOTAL  _Py_REF_DEBUG_COMMA
+     ((PyObject *)(op))->ob_refcnt++);
+}
 
-#define Py_DECREF(op)                                   \
-    do {                                                \
-        PyObject *_py_decref_tmp = (PyObject *)(op);    \
-        if (_Py_DEC_REFTOTAL  _Py_REF_DEBUG_COMMA       \
-        --(_py_decref_tmp)->ob_refcnt != 0)             \
-            _Py_CHECK_REFCNT(_py_decref_tmp)            \
-        else                                            \
-            _Py_Dealloc(_py_decref_tmp);                \
-    } while (0)
+inline void
+_Py_DECREF(PyObject *op)
+{
+    if (_Py_DEC_REFTOTAL  _Py_REF_DEBUG_COMMA
+        --(op)->ob_refcnt != 0)
+        _Py_CHECK_REFCNT(op)
+    else
+        _Py_Dealloc(op);
+}
+
+#define Py_INCREF(op) _Py_INCREF((PyObject *)(op))
+#define Py_DECREF(op) _Py_DECREF((PyObject *)(op))
 
 /* Safely decref `op` and set `op` to NULL, especially useful in tp_clear
  * and tp_dealloc implementations.
