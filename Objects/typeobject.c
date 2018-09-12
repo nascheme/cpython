@@ -5161,7 +5161,7 @@ PyType_Ready(PyTypeObject *type)
        not NULL (it's initialized to &PyType_Type).      But coverity doesn't
        know that. */
     if (Py_TYPE(type) == NULL && base != NULL)
-        Py_TYPE(type) = Py_TYPE(base);
+        Py_SET_TYPE(type, Py_TYPE(base));
 
     /* Initialize tp_bases */
     bases = type->tp_bases;

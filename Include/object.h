@@ -598,10 +598,25 @@ PyAPI_DATA(PyTypeObject) PyFixedInt_Type;
 /* return true if object is unboxed int */
 #define PyFixedInt_CHECK(ob) ((uint64_t)ob & 1)
 
-Py_ssize_t _Py_REFCNT(PyObject *);
-PyTypeObject *_Py_TYPE(PyObject *);
-void _Py_INCREF(PyObject *);
-void _Py_DECREF(PyObject *);
+inline PyTypeObject *
+_Py_TYPE(PyObject *ob)
+{
+    if (PyFixedInt_CHECK(ob)) {
+        return &PyFixedInt_Type;
+    }
+    return ob->ob_type;
+}
+
+inline Py_ssize_t
+_Py_REFCNT(PyObject *ob)
+{
+    if (PyFixedInt_CHECK(ob)) {
+        return 1;
+    }
+    else {
+        return ob->ob_refcnt;
+    }
+}
 
 #define Py_REFCNT(ob) _Py_REFCNT((PyObject *)ob)
 #define Py_TP(ob) _Py_TYPE(ob)
@@ -801,6 +816,33 @@ PyAPI_FUNC(void) _Py_Dealloc(PyObject *);
     (*Py_TYPE(op)->tp_dealloc)((PyObject *)(op)))
 #endif
 #endif /* !Py_TRACE_REFS */
+
+inline void
+_Py_INCREF(PyObject *op)
+{
+    if (PyFixedInt_CHECK(op)) {
+        // noop
+    }
+    else {
+        (_Py_INC_REFTOTAL  _Py_REF_DEBUG_COMMA
+         ((PyObject *)(op))->ob_refcnt++);
+    }
+}
+
+inline void
+_Py_DECREF(PyObject *op)
+{
+    if (PyFixedInt_CHECK(op)) {
+        // noop
+    }
+    else {
+        if (_Py_DEC_REFTOTAL  _Py_REF_DEBUG_COMMA
+            --(op)->ob_refcnt != 0)
+            _Py_CHECK_REFCNT(op)
+        else
+            _Py_Dealloc(op);
+    }
+}
 
 #define Py_INCREF(op) _Py_INCREF((PyObject *)(op))
 #define Py_DECREF(op) _Py_DECREF((PyObject *)(op))

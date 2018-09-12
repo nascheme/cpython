@@ -52,7 +52,11 @@ fixedint_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
     if (!PyArg_ParseTuple(args, "|l", &x))
         return NULL;
     assert(type == &PyFixedInt_Type);
-    assert (can_tag(x));
+    if (!can_tag(x)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "value will not fit into fixed integer");
+        return NULL;
+    }
     return TAG_IT(x);
 }
 
