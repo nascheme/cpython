@@ -5381,6 +5381,19 @@ if test "$have_builtin_atomic" = yes; then
     AC_DEFINE(HAVE_BUILTIN_ATOMIC, 1, [Has builtin atomics])
 fi
 
+# Check for --with-fixedint
+AC_MSG_CHECKING(for --with-fixedint)
+AC_ARG_WITH(fixedint,
+	    AS_HELP_STRING([--with(out)-fixedint],
+	    [Enable storage of fixed integers using tagged pointers)]),
+[
+withbool=`test "$withval" == yes && echo 1 || echo 0`
+AC_DEFINE_UNQUOTED(WITH_FIXEDINT, $withbool,
+	  [Define if you want to enable tagged pointers for fixed integers.])
+AC_MSG_RESULT($withval)
+],
+[AC_MSG_RESULT(no value specified)])
+
 # ensurepip option
 AC_MSG_CHECKING(for ensurepip)
 AC_ARG_WITH(ensurepip,

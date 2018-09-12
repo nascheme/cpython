@@ -1,6 +1,9 @@
 /* Fixed integer object, stored tagged pointer */
 
 #include "Python.h"
+
+#ifdef WITH_FIXEDINT
+
 #include <stdbool.h>
 
 /* cribbed from pyjion */
@@ -51,7 +54,7 @@ fixedint_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
 
     if (!PyArg_ParseTuple(args, "|l", &x))
         return NULL;
-    assert(type == &PyFixedInt_Type);
+    assert(type == &_PyFixedInt_Type);
     if (!can_tag(x)) {
         PyErr_SetString(PyExc_ValueError,
                         "value will not fit into fixed integer");
@@ -154,7 +157,7 @@ static PyNumberMethods fixedint_as_number = {
 };
 
 
-PyTypeObject PyFixedInt_Type = {
+PyTypeObject _PyFixedInt_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "fixedint",
     sizeof(tagged_ptr),
@@ -194,3 +197,5 @@ PyTypeObject PyFixedInt_Type = {
     0,                                          /* tp_alloc */
     fixedint_new,                                  /* tp_new */
 };
+
+#endif /* WITH_FIXEDINT */

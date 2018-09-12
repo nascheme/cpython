@@ -131,6 +131,9 @@
 /* Define if the C compiler supports computed gotos. */
 #undef HAVE_COMPUTED_GOTOS
 
+/* Enable storage of fixed integers using tagged pointers */
+#undef WITH_FIXEDINT
+
 /* Define to 1 if you have the `confstr' function. */
 #undef HAVE_CONFSTR
 

@@ -593,17 +593,18 @@ _PyObject_GetBuiltin(const char *name);
 */
 PyAPI_FUNC(PyObject *) PyObject_Dir(PyObject *);
 
+#ifdef WITH_FIXEDINT
 /* fixed integer stored as tagged pointer */
-PyAPI_DATA(PyTypeObject) PyFixedInt_Type;
+PyAPI_DATA(PyTypeObject) _PyFixedInt_Type;
 /* return true if object is tagged pointer containing fixed int */
-#define PyFixedInt_CHECK(ob) ((ssize_t)ob & 1)
+#define _PyFixedInt_Check(ob) ((ssize_t)(ob) & 1)
 PyAPI_FUNC(PyObject *) _PyFixedInt_Add(PyObject *, PyObject *);
 
 inline PyTypeObject *
 _Py_TYPE(PyObject *ob)
 {
-    if (PyFixedInt_CHECK(ob)) {
-        return &PyFixedInt_Type;
+    if (_PyFixedInt_Check(ob)) {
+        return &_PyFixedInt_Type;
     }
     return ob->ob_type;
 }
@@ -611,7 +612,7 @@ _Py_TYPE(PyObject *ob)
 inline Py_ssize_t
 _Py_REFCNT(PyObject *ob)
 {
-    if (PyFixedInt_CHECK(ob)) {
+    if (_PyFixedInt_Check(ob)) {
         return 1;
     }
     else {
@@ -619,9 +620,18 @@ _Py_REFCNT(PyObject *ob)
     }
 }
 
-#define Py_REFCNT(ob) _Py_REFCNT((PyObject *)ob)
-#define Py_TP(ob) _Py_TYPE(ob)
-#define Py_TYPE(ob) _Py_TYPE((PyObject *)ob)
+#define Py_REFCNT(ob) (_Py_REFCNT((PyObject *)(ob)))
+#define Py_TP(ob) (_Py_TYPE(ob))
+#define Py_TYPE(ob) (_Py_TYPE((PyObject *)(ob)))
+
+#else
+
+#define Py_REFCNT(ob) (((PyObject*)(ob))->ob_refcnt)
+#define Py_TP(ob) ((ob)->ob_type)
+#define Py_TYPE(ob) (((PyObject*)(ob))->ob_type)
+
+#endif /* !WITH_FIXEDINT */
+
 #define Py_SIZE(ob) (((PyVarObject*)(ob))->ob_size)
 #define Py_SET_TYPE(ob, tp) (((PyObject*)(ob))->ob_type = (tp))
 #define Py_SET_REFCNT(ob, n) (((PyObject*)(ob))->ob_refcnt = (n))
@@ -818,10 +828,12 @@ PyAPI_FUNC(void) _Py_Dealloc(PyObject *);
 #endif
 #endif /* !Py_TRACE_REFS */
 
+#ifdef WITH_FIXEDINT
+
 inline void
 _Py_INCREF(PyObject *op)
 {
-    if (PyFixedInt_CHECK(op)) {
+    if (_PyFixedInt_Check(op)) {
         // noop
     }
     else {
@@ -833,7 +845,7 @@ _Py_INCREF(PyObject *op)
 inline void
 _Py_DECREF(PyObject *op)
 {
-    if (PyFixedInt_CHECK(op)) {
+    if (_PyFixedInt_Check(op)) {
         // noop
     }
     else {
@@ -847,6 +859,25 @@ _Py_DECREF(PyObject *op)
 
 #define Py_INCREF(op) _Py_INCREF((PyObject *)(op))
 #define Py_DECREF(op) _Py_DECREF((PyObject *)(op))
+
+#else
+
+#define Py_INCREF(op) (                         \
+    _Py_INC_REFTOTAL  _Py_REF_DEBUG_COMMA       \
+    ((PyObject *)(op))->ob_refcnt++)
+
+#define Py_DECREF(op)                                   \
+    do {                                                \
+        PyObject *_py_decref_tmp = (PyObject *)(op);    \
+        if (_Py_DEC_REFTOTAL  _Py_REF_DEBUG_COMMA       \
+        --(_py_decref_tmp)->ob_refcnt != 0)             \
+            _Py_CHECK_REFCNT(_py_decref_tmp)            \
+        else                                            \
+            _Py_Dealloc(_py_decref_tmp);                \
+    } while (0)
+
+#endif /* !WITH_FIXEDINT */
+
 
 /* Safely decref `op` and set `op` to NULL, especially useful in tp_clear
  * and tp_dealloc implementations.
