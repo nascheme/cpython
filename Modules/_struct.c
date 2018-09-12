@@ -2326,7 +2326,7 @@ PyInit__struct(void)
     if (m == NULL)
         return NULL;
 
-    Py_TYPE(&PyStructType) = &PyType_Type;
+    Py_SET_TYPE(&PyStructType, &PyType_Type);
     if (PyType_Ready(&PyStructType) < 0)
         return NULL;
 
