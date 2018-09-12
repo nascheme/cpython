@@ -595,8 +595,9 @@ PyAPI_FUNC(PyObject *) PyObject_Dir(PyObject *);
 
 /* fixed integer stored as tagged pointer */
 PyAPI_DATA(PyTypeObject) PyFixedInt_Type;
-/* return true if object is unboxed int */
-#define PyFixedInt_CHECK(ob) ((uint64_t)ob & 1)
+/* return true if object is tagged pointer containing fixed int */
+#define PyFixedInt_CHECK(ob) ((ssize_t)ob & 1)
+PyAPI_FUNC(PyObject *) _PyFixedInt_Add(PyObject *, PyObject *);
 
 inline PyTypeObject *
 _Py_TYPE(PyObject *ob)

@@ -70,22 +70,38 @@ fixedint_repr(PyObject *v)
 }
 
 static PyObject *
+fixedint_add_slow(PyObject *v, PyObject *w)
+{
+    PyObject *a = obj_as_long(v);
+    PyObject *b = obj_as_long(w);
+    PyObject *rv = PyNumber_Add(a, b);
+    Py_DECREF(a);
+    Py_DECREF(b);
+    return rv;
+}
+
+/* used by BINARY_ADD */
+PyObject *
+_PyFixedInt_Add(PyObject *v, PyObject *w)
+{
+    long a, b, x;
+    a = UNTAG_IT(v);
+    b = UNTAG_IT(w);
+    /* casts in the line below avoid undefined behaviour on overflow */
+    x = (long)((unsigned long)a + b);
+    if (((x^a) >= 0 || (x^b) >= 0) && can_tag(x)) {
+        return TAG_IT(x);
+    }
+    return fixedint_add_slow(v, w);
+}
+
+static PyObject *
 fixedint_add(PyObject *v, PyObject *w)
 {
-    PyObject *rv;
     if (IS_TAGGED(v) && IS_TAGGED(w)) {
-        Py_ssize_t c = UNTAG_IT(v) + UNTAG_IT(w);
-        assert (can_tag(c));
-        rv = TAG_IT(c);
+        return _PyFixedInt_Add(v, w);
     }
-    else {
-        PyObject *a = obj_as_long(v);
-        PyObject *b = obj_as_long(w);
-        rv = PyNumber_Add(a, b);
-        Py_DECREF(a);
-        Py_DECREF(b);
-    }
-    return rv;
+    return fixedint_add_slow(v, w);
 }
 
 static PyObject *
@@ -100,7 +116,6 @@ fixedint_dealloc(PyObject *op)
     // noop
 }
 
-// pyjon
 static PyNumberMethods fixedint_as_number = {
     fixedint_add,          /* nb_add */
     0,          /* nb_subtract */

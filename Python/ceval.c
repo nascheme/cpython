@@ -1287,7 +1287,11 @@ main_loop:
                http://bugs.python.org/issue10044 for the discussion. In short,
                no patch shown any impact on a realistic benchmark, only a minor
                speedup on microbenchmarks. */
-            if (PyUnicode_CheckExact(left) &&
+            if (PyFixedInt_CHECK(left) && PyFixedInt_CHECK(right)) {
+                sum = _PyFixedInt_Add(left, right);
+                Py_DECREF(left);
+            }
+            else if (PyUnicode_CheckExact(left) &&
                      PyUnicode_CheckExact(right)) {
                 sum = unicode_concatenate(left, right, f, next_instr);
                 /* unicode_concatenate consumed the ref to left */
