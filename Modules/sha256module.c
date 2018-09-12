@@ -709,10 +709,10 @@ PyInit__sha256(void)
 {
     PyObject *m;
 
-    Py_TYPE(&SHA224type) = &PyType_Type;
+    Py_SET_TYPE(&SHA224type, &PyType_Type);
     if (PyType_Ready(&SHA224type) < 0)
         return NULL;
-    Py_TYPE(&SHA256type) = &PyType_Type;
+    Py_SET_TYPE(&SHA256type, &PyType_Type);
     if (PyType_Ready(&SHA256type) < 0)
         return NULL;
 

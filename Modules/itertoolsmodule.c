@@ -4700,7 +4700,7 @@ PyInit_itertools(void)
         NULL
     };
 
-    Py_TYPE(&teedataobject_type) = &PyType_Type;
+    Py_SET_TYPE(&teedataobject_type, &PyType_Type);
     m = PyModule_Create(&itertoolsmodule);
     if (m == NULL)
         return NULL;

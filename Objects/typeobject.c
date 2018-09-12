@@ -3998,7 +3998,7 @@ object_set_class(PyObject *self, PyObject *value, void *closure)
     if (compatible_for_assignment(oldto, newto, "__class__")) {
         if (newto->tp_flags & Py_TPFLAGS_HEAPTYPE)
             Py_INCREF(newto);
-        Py_TYPE(self) = newto;
+        Py_SET_TYPE(self, newto);
         if (oldto->tp_flags & Py_TPFLAGS_HEAPTYPE)
             Py_DECREF(oldto);
         return 0;
