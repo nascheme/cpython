@@ -2553,7 +2553,7 @@ PyInit_select(void)
 #endif
 
 #ifdef HAVE_EPOLL
-    Py_TYPE(&pyEpoll_Type) = &PyType_Type;
+    Py_SET_TYPE(&pyEpoll_Type, &PyType_Type);
     if (PyType_Ready(&pyEpoll_Type) < 0)
         return NULL;
 
@@ -2601,14 +2601,14 @@ PyInit_select(void)
 
 #ifdef HAVE_KQUEUE
     kqueue_event_Type.tp_new = PyType_GenericNew;
-    Py_TYPE(&kqueue_event_Type) = &PyType_Type;
+    Py_SET_TYPE(&kqueue_event_Type, &PyType_Type);
     if(PyType_Ready(&kqueue_event_Type) < 0)
         return NULL;
 
     Py_INCREF(&kqueue_event_Type);
     PyModule_AddObject(m, "kevent", (PyObject *)&kqueue_event_Type);
 
-    Py_TYPE(&kqueue_queue_Type) = &PyType_Type;
+    Py_SET_TYPE(&kqueue_queue_Type, &PyType_Type);
     if(PyType_Ready(&kqueue_queue_Type) < 0)
         return NULL;
     Py_INCREF(&kqueue_queue_Type);

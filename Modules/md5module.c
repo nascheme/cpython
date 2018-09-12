@@ -570,7 +570,7 @@ PyInit__md5(void)
 {
     PyObject *m;
 
-    Py_TYPE(&MD5type) = &PyType_Type;
+    Py_SET_TYPE(&MD5type, &PyType_Type);
     if (PyType_Ready(&MD5type) < 0)
         return NULL;
 

@@ -118,6 +118,8 @@ typedef struct {
 #define Py_TP(ob)               ((ob)->ob_type)
 #define Py_TYPE(ob)             (Py_TP((PyObject*)(ob)))
 #define Py_SIZE(ob)             (((PyVarObject*)(ob))->ob_size)
+#define Py_SET_TP(ob, tp)       ((ob)->ob_type = (tp))
+#define Py_SET_TYPE(ob, tp)     (Py_SET_TP((PyObject *)(ob), (tp)))
 
 #ifndef Py_LIMITED_API
 /********************* String Literals ****************************************/
