@@ -115,7 +115,8 @@ typedef struct {
 } PyVarObject;
 
 #define Py_REFCNT(ob)           (((PyObject*)(ob))->ob_refcnt)
-#define Py_TYPE(ob)             (((PyObject*)(ob))->ob_type)
+#define Py_TP(ob)               ((ob)->ob_type)
+#define Py_TYPE(ob)             (Py_TP((PyObject*)(ob)))
 #define Py_SIZE(ob)             (((PyVarObject*)(ob))->ob_size)
 
 #ifndef Py_LIMITED_API
