@@ -2190,6 +2190,53 @@ _Py_Dealloc(PyObject *op)
 }
 #endif
 
+PyTypeObject *
+_Py_TYPE(PyObject *ob)
+{
+    if (PyFixedInt_CHECK(ob)) {
+        return &PyFixedInt_Type;
+    }
+    return ob->ob_type;
+}
+
+Py_ssize_t
+_Py_REFCNT(PyObject *ob)
+{
+    if (PyFixedInt_CHECK(ob)) {
+        return 1;
+    }
+    else {
+        return ob->ob_refcnt;
+    }
+}
+
+void
+_Py_INCREF(PyObject *op)
+{
+    if (PyFixedInt_CHECK(op)) {
+        // noop
+    }
+    else {
+        (_Py_INC_REFTOTAL  _Py_REF_DEBUG_COMMA
+         ((PyObject *)(op))->ob_refcnt++);
+    }
+}
+
+void
+_Py_DECREF(PyObject *op)
+{
+    if (PyFixedInt_CHECK(op)) {
+        // noop
+    }
+    else {
+        if (_Py_DEC_REFTOTAL  _Py_REF_DEBUG_COMMA
+            --(op)->ob_refcnt != 0)
+            _Py_CHECK_REFCNT(op)
+        else
+            _Py_Dealloc(op);
+    }
+}
+
 #ifdef __cplusplus
 }
 #endif

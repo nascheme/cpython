@@ -399,6 +399,7 @@ OBJECT_OBJS=	\
 		Objects/exceptions.o \
 		Objects/genobject.o \
 		Objects/fileobject.o \
+		Objects/fixedintobject.o \
 		Objects/floatobject.o \
 		Objects/frameobject.o \
 		Objects/funcobject.o \

@@ -2809,6 +2809,7 @@ _PyBuiltin_Init(void)
     SETBUILTIN("dict",                  &PyDict_Type);
     SETBUILTIN("enumerate",             &PyEnum_Type);
     SETBUILTIN("filter",                &PyFilter_Type);
+    SETBUILTIN("fixedint",              &PyFixedInt_Type);
     SETBUILTIN("float",                 &PyFloat_Type);
     SETBUILTIN("frozenset",             &PyFrozenSet_Type);
     SETBUILTIN("property",              &PyProperty_Type);
