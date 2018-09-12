@@ -192,7 +192,7 @@ extern "C" {
    function will delete the reference from this dictionary.
 
    Another way to look at this is that to say that the actual reference
-   count of a string is:  s->ob_refcnt + (s->state ? 2 : 0)
+   count of a string is:  Py_REFCNT(s) + (s->state ? 2 : 0)
 */
 static PyObject *interned = NULL;
 
@@ -1769,7 +1769,7 @@ unicode_dealloc(PyObject *unicode)
 
     case SSTATE_INTERNED_MORTAL:
         /* revive dead object temporarily for DelItem */
-        Py_REFCNT(unicode) = 3;
+        Py_SET_REFCNT(unicode, 3);
         if (PyDict_DelItem(interned, unicode) != 0)
             Py_FatalError(
                 "deletion of interned string failed");
@@ -15235,7 +15235,7 @@ PyUnicode_InternInPlace(PyObject **p)
     }
     /* The two references in interned are not counted by refcnt.
        The deallocator will take care of this */
-    Py_REFCNT(s) -= 2;
+    Py_SET_REFCNT(s, Py_REFCNT(s) - 2);
     _PyUnicode_STATE(s).interned = SSTATE_INTERNED_MORTAL;
 }
 
@@ -15293,11 +15293,11 @@ _Py_ReleaseInternedUnicodeStrings(void)
             /* XXX Shouldn't happen */
             break;
         case SSTATE_INTERNED_IMMORTAL:
-            Py_REFCNT(s) += 1;
+            Py_SET_REFCNT(s, Py_REFCNT(s) + 1);
             immortal_size += PyUnicode_GET_LENGTH(s);
             break;
         case SSTATE_INTERNED_MORTAL:
-            Py_REFCNT(s) += 2;
+            Py_SET_REFCNT(s, Py_REFCNT(s) + 2);
             mortal_size += PyUnicode_GET_LENGTH(s);
             break;
         default:

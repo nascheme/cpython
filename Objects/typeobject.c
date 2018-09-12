@@ -1134,7 +1134,7 @@ subtype_dealloc(PyObject *self)
         }
         if (type->tp_del) {
             type->tp_del(self);
-            if (self->ob_refcnt > 0)
+            if (Py_REFCNT(self) > 0)
                 return;
         }
 
@@ -1203,7 +1203,7 @@ subtype_dealloc(PyObject *self)
     if (type->tp_del) {
         _PyObject_GC_TRACK(self);
         type->tp_del(self);
-        if (self->ob_refcnt > 0) {
+        if (Py_REFCNT(self) > 0) {
             /* Resurrected */
             goto endlabel;
         }
