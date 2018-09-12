@@ -120,6 +120,7 @@ typedef struct {
 #define Py_SIZE(ob)             (((PyVarObject*)(ob))->ob_size)
 #define Py_SET_TP(ob, tp)       ((ob)->ob_type = (tp))
 #define Py_SET_TYPE(ob, tp)     (Py_SET_TP((PyObject *)(ob), (tp)))
+#define Py_SET_REFCNT(ob, n)    (((PyObject*)(ob))->ob_refcnt = (n))
 
 #ifndef Py_LIMITED_API
 /********************* String Literals ****************************************/
@@ -780,7 +781,7 @@ PyAPI_FUNC(void) _Py_AddToAllObjects(PyObject *, int force);
 #define _Py_NewReference(op) (                          \
     _Py_INC_TPALLOCS(op) _Py_COUNT_ALLOCS_COMMA         \
     _Py_INC_REFTOTAL  _Py_REF_DEBUG_COMMA               \
-    Py_REFCNT(op) = 1)
+    Py_SET_REFCNT(op, 1))
 
 #define _Py_ForgetReference(op) _Py_INC_TPFREES(op)
 
