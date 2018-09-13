@@ -4,24 +4,7 @@
 
 #ifdef WITH_FIXEDINT
 
-#include <stdbool.h>
-
-/* cribbed from pyjion */
-typedef ssize_t tagged_ptr;
-
-#define MAX_BITS ((sizeof(tagged_ptr) * 8) - 1)
-
-#define MAX_TAGGED_VALUE (((tagged_ptr)1<<(MAX_BITS-1)) - 1)
-#define MIN_TAGGED_VALUE (- ((tagged_ptr)1 << (MAX_BITS-1)))
-
-static bool
-can_tag(tagged_ptr value) {
-    return value >= MIN_TAGGED_VALUE && value <= MAX_TAGGED_VALUE;
-}
-
-#define TAG_IT(x) ((PyObject*) (((x) << 1) | 0x01))
-#define UNTAG_IT(x) (((tagged_ptr)(x)) >> 1)
-#define IS_TAGGED(x) (((tagged_ptr)(x)) & 0x01)
+#include "taggedptr.h"
 
 #if 0
 typedef struct _fixedintobject PyFixedIntObject;
@@ -55,7 +38,7 @@ fixedint_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
     if (!PyArg_ParseTuple(args, "|l", &x))
         return NULL;
     assert(type == &_PyFixedInt_Type);
-    if (!can_tag(x)) {
+    if (!CAN_TAG(x)) {
         PyErr_SetString(PyExc_ValueError,
                         "value will not fit into fixed integer");
         return NULL;
@@ -92,7 +75,7 @@ _PyFixedInt_Add(PyObject *v, PyObject *w)
     b = UNTAG_IT(w);
     /* casts in the line below avoid undefined behaviour on overflow */
     x = (long)((unsigned long)a + b);
-    if (((x^a) >= 0 || (x^b) >= 0) && can_tag(x)) {
+    if (((x^a) >= 0 || (x^b) >= 0) && CAN_TAG(x)) {
         return TAG_IT(x);
     }
     return fixedint_add_slow(v, w);
