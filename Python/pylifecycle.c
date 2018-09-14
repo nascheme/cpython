@@ -26,6 +26,8 @@
 #include "osdefs.h"
 #include <locale.h>
 
+#include "frozenmodules.h"
+
 #ifdef HAVE_SIGNAL_H
 #include <signal.h>
 #endif
@@ -41,6 +43,7 @@
 #ifdef MS_WINDOWS
 #undef BYTE
 #include "windows.h"
+
 
 extern PyTypeObject PyWindowsConsoleIO_Type;
 #define PyWindowsConsoleIO_Check(op) (PyObject_TypeCheck((op), &PyWindowsConsoleIO_Type))
@@ -152,11 +155,22 @@ init_importlib(PyInterpreterState *interp, PyObject *sysmod)
     PyObject *value;
     int verbose = interp->config.verbose;
 
-    /* Import _importlib through its frozen version, _frozen_importlib. */
-    if (PyImport_ImportFrozenModule("_frozen_importlib") <= 0) {
-        return _PyStatus_ERR("can't import _frozen_importlib");
+    int rv = (_PyFrozenModules_ImportBootstrap());
+    if (rv < 0) {
+        return _PyStatus_ERR("_PyFrozenModules_ImportBootstrap failed");
     }
-    else if (verbose) {
+    if (rv == 0) {
+        /* Import _importlib through its frozen.c version */
+        if (PyImport_ImportFrozenModule("_frozen_importlib") <= 0) {
+            return _PyStatus_ERR("can't import _frozen_importlib");
+        }
+    }
+    else {
+        if (verbose) {
+            PySys_FormatStderr("_PyFrozenModules_ImportBootstrap success\n");
+        }
+    }
+    if (verbose) {
         PySys_FormatStderr("import _frozen_importlib # frozen\n");
     }
     importlib = PyImport_AddModule("_frozen_importlib");
@@ -624,6 +638,7 @@ pycore_init_import_warnings(PyInterpreterState *interp, PyObject *sysmod)
 {
     const PyConfig *config = &interp->config;
 
+    _PyFrozenModules_Init();
     PyStatus status = _PyImport_Init(interp);
     if (_PyStatus_EXCEPTION(status)) {
         return status;
@@ -939,6 +954,8 @@ pyinit_main(_PyRuntimeState *runtime, PyInterpreterState *interp)
         return status;
     }
 
+
+
     /* initialize the faulthandler module */
     status = _PyFaulthandler_Init(config->faulthandler);
     if (_PyStatus_EXCEPTION(status)) {
@@ -1161,6 +1178,8 @@ Py_FinalizeEx(void)
 
     // Make any remaining pending calls.
     _Py_FinishPendingCalls(runtime);
+
+    _PyFrozenModules_Finalize();
 
     /* Get current thread state and interpreter pointer */
     PyThreadState *tstate = _PyRuntimeState_GetThreadState(runtime);
@@ -1424,6 +1443,8 @@ new_interpreter(PyThreadState **tstate_p)
 
     PyThreadState *save_tstate = PyThreadState_Swap(tstate);
 
+    _PyFrozenModules_Disable();
+
     /* Copy the current interpreter config into the new interpreter */
     PyConfig *config;
     if (save_tstate != NULL) {
@@ -1538,11 +1559,14 @@ new_interpreter(PyThreadState **tstate_p)
         goto handle_error;
     }
 
+    _PyFrozenModules_Enable();
     *tstate_p = tstate;
     return _PyStatus_OK();
 
 handle_error:
     /* Oops, it didn't work.  Undo it all. */
+
+    _PyFrozenModules_Enable();
 
     PyErr_PrintEx(0);
     PyThreadState_Clear(tstate);

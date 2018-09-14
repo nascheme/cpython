@@ -15,7 +15,9 @@
 #include "osdefs.h"
 #include "importdl.h"
 #include "pydtrace.h"
+#include "frozenmodules.h"
 
+#include <stdbool.h>
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>
 #endif
@@ -1397,6 +1399,9 @@ PyImport_ImportFrozenModule(const char *name)
     nameobj = PyUnicode_InternFromString(name);
     if (nameobj == NULL)
         return -1;
+    if (Py_VerboseFlag) {
+        PySys_FormatStderr("import frozen module %U\n", nameobj);
+    }
     ret = PyImport_ImportFrozenModuleObject(nameobj);
     Py_DECREF(nameobj);
     return ret;
@@ -1730,6 +1735,7 @@ PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
     PyObject *package = NULL;
     PyInterpreterState *interp = _PyInterpreterState_GET_UNSAFE();
     int has_from;
+    _Bool from_frozen_module = false;
 
     if (name == NULL) {
         PyErr_SetString(PyExc_ValueError, "Empty module name");
@@ -1770,10 +1776,21 @@ PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
         goto error;
     }
 
+    if (mod == NULL) {
+        mod = _PyFrozenModule_Lookup(abs_name);
+        from_frozen_module = true;
+        if (mod != NULL && Py_VerboseFlag) {
+            PySys_FormatStderr("found static frozen module %U\n", abs_name);
+        }
+    }
+
     if (mod != NULL && mod != Py_None) {
         _Py_IDENTIFIER(__spec__);
         _Py_IDENTIFIER(_lock_unlock_module);
         PyObject *spec;
+
+        if (!from_frozen_module)
+            Py_INCREF(mod);
 
         /* Optimization: only call _bootstrap._lock_unlock_module() if
            __spec__._initializing is true.

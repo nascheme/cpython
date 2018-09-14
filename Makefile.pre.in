@@ -363,6 +363,7 @@ PYTHON_OBJS=	\
 		Python/symtable.o \
 		Python/sysmodule.o \
 		Python/thread.o \
+		Python/frozenmodules.o \
 		Python/traceback.o \
 		Python/getopt.o \
 		Python/pystrcmp.o \
@@ -738,6 +739,12 @@ check-abidump: all
 		--suppressions $(srcdir)/Doc/data/python$(LDVERSION).abi.ignorefile \
 		--no-architecture --no-added-syms
 
+.PHONY: regen-freeze-startup
+regen-freeze-startup:
+	./python $(srcdir)/Tools/freeze2/freeze2.py \
+		freeze-startup-modules -o $(srcdir)/Python/frozenmodules.c \
+		./python -x bisect
+
 ############################################################################
 # Regenerate all generated files
 
@@ -799,6 +806,12 @@ Python/sysmodule.o: $(srcdir)/Python/sysmodule.c Makefile $(srcdir)/Include/pydt
 		-DABIFLAGS='"$(ABIFLAGS)"' \
 		$(MULTIARCH_CPPFLAGS) \
 		-o $@ $(srcdir)/Python/sysmodule.c
+
+Python/frozenmodules.o: $(srcdir)/Python/frozenmodules.c $(srcdir)/Python/frozenmodules.h Makefile
+	$(CC) -c $(PY_CORE_CFLAGS) \
+		-DABIFLAGS='"$(ABIFLAGS)"' \
+		$(MULTIARCH_CPPFLAGS) \
+		-o $@ $(srcdir)/Python/frozenmodules.c
 
 $(IO_OBJS): $(IO_H)
 
@@ -1105,6 +1118,7 @@ PYTHON_HEADERS= \
 		$(srcdir)/Include/internal/pycore_traceback.h \
 		$(srcdir)/Include/internal/pycore_tupleobject.h \
 		$(srcdir)/Include/internal/pycore_warnings.h \
+		$(srcdir)/Python/frozenmodules.h \
 		$(DTRACE_HEADERS)
 
 $(LIBRARY_OBJS) $(MODOBJS) Programs/python.o: $(PYTHON_HEADERS)

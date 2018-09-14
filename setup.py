@@ -753,6 +753,8 @@ class PyBuildExt(build_ext):
                            extra_compile_args=['-DPy_BUILD_CORE_MODULE']))
         # atexit
         self.add(Extension("atexit", ["atexitmodule.c"]))
+        # helper for converting Python code objects to static C structures
+        self.add(Extension('_serializer', ['_serializer.c']))
         # _json speedups
         self.add(Extension("_json", ["_json.c"],
                            extra_compile_args=['-DPy_BUILD_CORE_MODULE']))
