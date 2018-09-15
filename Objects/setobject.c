@@ -36,9 +36,9 @@
 #include "structmember.h"
 
 /* Object used as dummy key to fill deleted entries */
-static PyObject _dummy_struct;
+static _PyObjectImpl _dummy_struct;
 
-#define dummy (&_dummy_struct)
+#define dummy ((PyObject *)&_dummy_struct)
 
 
 /* ======================================================================== */
@@ -2576,7 +2576,7 @@ static PyTypeObject _PySetDummy_Type = {
     Py_TPFLAGS_DEFAULT, /*tp_flags */
 };
 
-static PyObject _dummy_struct = {
+static _PyObjectImpl _dummy_struct = {
   _PyObject_EXTRA_INIT
   2, &_PySetDummy_Type
 };

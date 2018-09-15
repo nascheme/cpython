@@ -276,7 +276,7 @@ dict_hassplittable(PyObject *self, PyObject *arg)
 static PyTypeObject _HashInheritanceTester_Type = {
     PyVarObject_HEAD_INIT(NULL, 0)
     "hashinheritancetester",            /* Name of this type */
-    sizeof(PyObject),           /* Basic object size */
+    sizeof(_PyObjectImpl),           /* Basic object size */
     0,                          /* Item size for varobject */
     (destructor)PyObject_Del, /* tp_dealloc */
     0,                          /* tp_print */

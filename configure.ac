@@ -5381,6 +5381,19 @@ if test "$have_builtin_atomic" = yes; then
     AC_DEFINE(HAVE_BUILTIN_ATOMIC, 1, [Has builtin atomics])
 fi
 
+# Check for --with-opaque-pyobject
+AC_MSG_CHECKING(for --with-opaque-pyobject)
+AC_ARG_WITH(opaque-pyobject,
+	    AS_HELP_STRING([--with(out)-opaque-pyobject],
+	    [Hide fields of PyObject structure.)]),
+[
+withbool=`test "$withval" == yes && echo 1 || echo 0`
+AC_DEFINE_UNQUOTED(WITH_OPAQUE_PYOBJECT, $withbool,
+	  [Hide fields of PyObject structure.])
+AC_MSG_RESULT($withval)
+],
+[AC_MSG_RESULT(no value specified)])
+
 # ensurepip option
 AC_MSG_CHECKING(for ensurepip)
 AC_ARG_WITH(ensurepip,

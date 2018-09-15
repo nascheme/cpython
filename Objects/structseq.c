@@ -339,7 +339,7 @@ PyStructSequence_InitType2(PyTypeObject *type, PyStructSequence_Desc *desc)
 #ifdef Py_TRACE_REFS
     /* if the type object was chained, unchain it first
        before overwriting its storage */
-    if (type->ob_base.ob_base._ob_next) {
+    if (_Py_REF_NEXT(&type->ob_base.ob_base)) {
         _Py_ForgetReference((PyObject*)type);
     }
 #endif

@@ -65,12 +65,14 @@ whose size is determined when the object is allocated.
 #error Py_LIMITED_API is incompatible with Py_DEBUG, Py_TRACE_REFS, and Py_REF_DEBUG
 #endif
 
-
 #ifdef Py_TRACE_REFS
 /* Define pointers to support a doubly-linked list of all live heap objects. */
 #define _PyObject_HEAD_EXTRA            \
     struct _object *_ob_next;           \
     struct _object *_ob_prev;
+
+#define _Py_REF_NEXT(o) (((_PyObjectImpl*)(o))->_ob_next)
+#define _Py_REF_PREV(o) (((_PyObjectImpl*)(o))->_ob_prev)
 
 #define _PyObject_EXTRA_INIT 0, 0,
 
@@ -80,7 +82,7 @@ whose size is determined when the object is allocated.
 #endif
 
 /* PyObject_HEAD defines the initial segment of every PyObject. */
-#define PyObject_HEAD                   PyObject ob_base;
+#define PyObject_HEAD                   struct _object_impl ob_base;
 
 #define PyObject_HEAD_INIT(type)        \
     { _PyObject_EXTRA_INIT              \
@@ -103,24 +105,22 @@ whose size is determined when the object is allocated.
  * by hand.  Similarly every pointer to a variable-size Python object can,
  * in addition, be cast to PyVarObject*.
  */
-typedef struct _object {
+typedef struct _object_impl {
     _PyObject_HEAD_EXTRA
     Py_ssize_t ob_refcnt;
     struct _typeobject *ob_type;
-} PyObject;
+} _PyObjectImpl;
+
+#ifdef WITH_OPAQUE_PYOBJECT
+typedef struct _object PyObject;
+#else
+typedef _PyObjectImpl PyObject;
+#endif
 
 typedef struct {
-    PyObject ob_base;
+    struct _object_impl ob_base;
     Py_ssize_t ob_size; /* Number of items in variable part */
 } PyVarObject;
-
-#define Py_REFCNT(ob)           (((PyObject*)(ob))->ob_refcnt)
-#define Py_TP(ob)               ((ob)->ob_type)
-#define Py_TYPE(ob)             (Py_TP((PyObject*)(ob)))
-#define Py_SIZE(ob)             (((PyVarObject*)(ob))->ob_size)
-#define Py_SET_TP(ob, tp)       ((ob)->ob_type = (tp))
-#define Py_SET_TYPE(ob, tp)     (Py_SET_TP((PyObject *)(ob), (tp)))
-#define Py_SET_REFCNT(ob, n)    (((PyObject*)(ob))->ob_refcnt = (n))
 
 #ifndef Py_LIMITED_API
 /********************* String Literals ****************************************/
@@ -601,6 +601,34 @@ _PyObject_GetBuiltin(const char *name);
 */
 PyAPI_FUNC(PyObject *) PyObject_Dir(PyObject *);
 
+#ifdef WITH_OPAQUE_PYOBJECT
+inline PyTypeObject *
+_Py_TYPE(PyObject *ob)
+{
+    return ((_PyObjectImpl *)ob)->ob_type;
+}
+
+inline Py_ssize_t
+_Py_REFCNT(PyObject *ob)
+{
+    return ((_PyObjectImpl *)ob)->ob_refcnt;
+}
+
+#define Py_REFCNT(ob) (_Py_REFCNT((PyObject *)(ob)))
+#define Py_TP(ob) (_Py_TYPE(ob))
+#define Py_TYPE(ob) (_Py_TYPE((PyObject *)(ob)))
+
+#else
+
+#define Py_REFCNT(ob) (((PyObject*)(ob))->ob_refcnt)
+#define Py_TP(ob) ((ob)->ob_type)
+#define Py_TYPE(ob) (((PyObject*)(ob))->ob_type)
+
+#endif /* !WITH_OPAQUE_PYOBJECT */
+
+#define Py_SIZE(ob) (((PyVarObject*)(ob))->ob_size)
+#define Py_SET_TYPE(ob, tp) (((_PyObjectImpl*)(ob))->ob_type = (tp))
+#define Py_SET_REFCNT(ob, n) (((_PyObjectImpl*)(ob))->ob_refcnt = (n))
 
 /* Helpers for printing recursive container types */
 PyAPI_FUNC(int) Py_ReprEnter(PyObject *);
@@ -736,7 +764,7 @@ PyAPI_FUNC(Py_ssize_t) _Py_GetRefTotal(void);
 #define _Py_DEC_REFTOTAL        _Py_RefTotal--
 #define _Py_REF_DEBUG_COMMA     ,
 #define _Py_CHECK_REFCNT(OP)                                    \
-{       if (((PyObject*)OP)->ob_refcnt < 0)                             \
+{       if (((_PyObjectImpl*)OP)->ob_refcnt < 0)                             \
                 _Py_NegativeRefcount(__FILE__, __LINE__,        \
                                      (PyObject *)(OP));         \
 }
@@ -794,6 +822,30 @@ PyAPI_FUNC(void) _Py_Dealloc(PyObject *);
 #endif
 #endif /* !Py_TRACE_REFS */
 
+#ifdef WITH_OPAQUE_PYOBJECT
+
+inline void
+_Py_INCREF(PyObject *op)
+{
+    (_Py_INC_REFTOTAL  _Py_REF_DEBUG_COMMA
+     ((_PyObjectImpl *)(op))->ob_refcnt++);
+}
+
+inline void
+_Py_DECREF(PyObject *op)
+{
+    if (_Py_DEC_REFTOTAL  _Py_REF_DEBUG_COMMA
+        --((_PyObjectImpl *)op)->ob_refcnt != 0)
+        _Py_CHECK_REFCNT(op)
+    else
+        _Py_Dealloc(op);
+}
+
+#define Py_INCREF(op) _Py_INCREF((PyObject *)(op))
+#define Py_DECREF(op) _Py_DECREF((PyObject *)(op))
+
+#else
+
 #define Py_INCREF(op) (                         \
     _Py_INC_REFTOTAL  _Py_REF_DEBUG_COMMA       \
     ((PyObject *)(op))->ob_refcnt++)
@@ -807,6 +859,9 @@ PyAPI_FUNC(void) _Py_Dealloc(PyObject *);
         else                                            \
             _Py_Dealloc(_py_decref_tmp);                \
     } while (0)
+
+#endif /* !WITH_OPAQUE_PYOBJECT */
+
 
 /* Safely decref `op` and set `op` to NULL, especially useful in tp_clear
  * and tp_dealloc implementations.
@@ -920,8 +975,8 @@ where NULL (nil) is not suitable (since NULL often means 'error').
 
 Don't forget to apply Py_INCREF() when returning this value!!!
 */
-PyAPI_DATA(PyObject) _Py_NoneStruct; /* Don't use this directly */
-#define Py_None (&_Py_NoneStruct)
+PyAPI_DATA(_PyObjectImpl) _Py_NoneStruct; /* Don't use this directly */
+#define Py_None ((PyObject *)(&_Py_NoneStruct))
 
 /* Macro for returning Py_None from a function */
 #define Py_RETURN_NONE return Py_INCREF(Py_None), Py_None
@@ -930,8 +985,8 @@ PyAPI_DATA(PyObject) _Py_NoneStruct; /* Don't use this directly */
 Py_NotImplemented is a singleton used to signal that an operation is
 not implemented for a given type combination.
 */
-PyAPI_DATA(PyObject) _Py_NotImplementedStruct; /* Don't use this directly */
-#define Py_NotImplemented (&_Py_NotImplementedStruct)
+PyAPI_DATA(_PyObjectImpl) _Py_NotImplementedStruct; /* Don't use this directly */
+#define Py_NotImplemented ((PyObject *)(&_Py_NotImplementedStruct))
 
 /* Macro for returning Py_NotImplemented from a function */
 #define Py_RETURN_NOTIMPLEMENTED \

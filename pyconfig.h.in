@@ -131,6 +131,9 @@
 /* Define if the C compiler supports computed gotos. */
 #undef HAVE_COMPUTED_GOTOS
 
+/* Hide files of PyObject structure */
+#undef WITH_OPAQUE_PYOBJECT
+
 /* Define to 1 if you have the `confstr' function. */
 #undef HAVE_CONFSTR
 

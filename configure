@@ -836,6 +836,7 @@ with_libm
 with_libc
 enable_big_digits
 with_computed_gotos
+with_opaque_pyobject
 with_ensurepip
 with_openssl
 with_ssl_default_suites
@@ -1541,6 +1542,8 @@ Optional Packages:
   --with(out)-computed-gotos
                           Use computed gotos in evaluation loop (enabled by
                           default on supported compilers)
+  --with(out)-opaque-pyobject
+                          Hide fields of PyObject structure.)
   --with(out)-ensurepip=[=upgrade]
                           "install" or "upgrade" using bundled pip
   --with-openssl=DIR      root of the OpenSSL directory
@@ -13688,7 +13691,6 @@ fi
 
 
 
-
 # checks for system services
 # (none yet)
 
@@ -16605,6 +16607,28 @@ if test "$have_builtin_atomic" = yes; then
 $as_echo "#define HAVE_BUILTIN_ATOMIC 1" >>confdefs.h
 
 fi
+
+# Check for --with-opaque-pyobject
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for --with-opaque-pyobject" >&5
+$as_echo_n "checking for --with-opaque-pyobject... " >&6; }
+
+# Check whether --with-opaque-pyobject was given.
+if test "${with_opaque_pyobject+set}" = set; then :
+  withval=$with_opaque_pyobject;
+withbool=`test "$withval" == yes && echo 1 || echo 0`
+
+cat >>confdefs.h <<_ACEOF
+#define WITH_OPAQUE_PYOBJECT $withbool
+_ACEOF
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $withval" >&5
+$as_echo "$withval" >&6; }
+
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no value specified" >&5
+$as_echo "no value specified" >&6; }
+fi
+
 
 # ensurepip option
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ensurepip" >&5

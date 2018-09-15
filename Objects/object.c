@@ -48,7 +48,7 @@ _PyDebug_PrintTotalRefs(void) {
  * together via the _ob_prev and _ob_next members of a PyObject, which
  * exist only in a Py_TRACE_REFS build.
  */
-static PyObject refchain = {&refchain, &refchain};
+static _PyObjectImpl refchain = {(PyObject*)&refchain, (PyObject*)&refchain};
 
 /* Insert op at the front of the list of all objects.  If force is true,
  * op is added even if _ob_prev and _ob_next are non-NULL already.  If
@@ -69,14 +69,14 @@ _Py_AddToAllObjects(PyObject *op, int force)
         /* If it's initialized memory, op must be in or out of
          * the list unambiguously.
          */
-        assert((op->_ob_prev == NULL) == (op->_ob_next == NULL));
+        assert((_Py_REF_PREV(op) == NULL) == (_Py_REF_NEXT(op) == NULL));
     }
 #endif
-    if (force || op->_ob_prev == NULL) {
-        op->_ob_next = refchain._ob_next;
-        op->_ob_prev = &refchain;
-        refchain._ob_next->_ob_prev = op;
-        refchain._ob_next = op;
+    if (force || _Py_REF_PREV(op) == NULL) {
+        _Py_REF_NEXT(op) = _Py_REF_NEXT(&refchain);
+        _Py_REF_PREV(op) = (PyObject*)&refchain;
+        _Py_REF_PREV(_Py_REF_NEXT(&refchain)) = op;
+        _Py_REF_NEXT(&refchain) = op;
     }
 }
 #endif  /* Py_TRACE_REFS */
@@ -1604,7 +1604,7 @@ PyTypeObject _PyNone_Type = {
     none_new,           /*tp_new */
 };
 
-PyObject _Py_NoneStruct = {
+_PyObjectImpl _Py_NoneStruct = {
   _PyObject_EXTRA_INIT
   1, &_PyNone_Type
 };
@@ -1689,7 +1689,7 @@ PyTypeObject _PyNotImplemented_Type = {
     notimplemented_new, /*tp_new */
 };
 
-PyObject _Py_NotImplementedStruct = {
+_PyObjectImpl _Py_NotImplementedStruct = {
     _PyObject_EXTRA_INIT
     1, &_PyNotImplemented_Type
 };
@@ -1901,27 +1901,27 @@ _Py_ForgetReference(PyObject *op)
 #endif
     if (Py_REFCNT(op) < 0)
         Py_FatalError("UNREF negative refcnt");
-    if (op == &refchain ||
-        op->_ob_prev->_ob_next != op || op->_ob_next->_ob_prev != op) {
+    if (op == (PyObject*)&refchain ||
+        _Py_REF_NEXT(_Py_REF_PREV(op)) != op || _Py_REF_PREV(_Py_REF_NEXT(op)) != op) {
         fprintf(stderr, "* ob\n");
         _PyObject_Dump(op);
         fprintf(stderr, "* op->_ob_prev->_ob_next\n");
-        _PyObject_Dump(op->_ob_prev->_ob_next);
+        _PyObject_Dump((PyObject *) _Py_REF_NEXT(_Py_REF_PREV(op)));
         fprintf(stderr, "* op->_ob_next->_ob_prev\n");
-        _PyObject_Dump(op->_ob_next->_ob_prev);
+        _PyObject_Dump((PyObject *) _Py_REF_PREV(_Py_REF_NEXT(op)));
         Py_FatalError("UNREF invalid object");
     }
 #ifdef SLOW_UNREF_CHECK
-    for (p = refchain._ob_next; p != &refchain; p = p->_ob_next) {
+    for (p = _Py_REF_NEXT(&refchain); p != &refchain; p = _Py_REF_NEXT(p)) {
         if (p == op)
             break;
     }
     if (p == &refchain) /* Not found */
         Py_FatalError("UNREF unknown object");
 #endif
-    op->_ob_next->_ob_prev = op->_ob_prev;
-    op->_ob_prev->_ob_next = op->_ob_next;
-    op->_ob_next = op->_ob_prev = NULL;
+    _Py_REF_PREV(_Py_REF_NEXT(op)) = _Py_REF_PREV(op);
+    _Py_REF_NEXT(_Py_REF_PREV(op)) = _Py_REF_NEXT(op);
+    _Py_REF_NEXT(op) = _Py_REF_PREV(op) = NULL;
     _Py_INC_TPFREES(op);
 }
 
@@ -1941,7 +1941,7 @@ _Py_PrintReferences(FILE *fp)
 {
     PyObject *op;
     fprintf(fp, "Remaining objects:\n");
-    for (op = refchain._ob_next; op != &refchain; op = op->_ob_next) {
+    for (op = _Py_REF_NEXT(&refchain); op != (PyObject*)&refchain; op = _Py_REF_NEXT(op)) {
         fprintf(fp, "%p [%" PY_FORMAT_SIZE_T "d] ", op, Py_REFCNT(op));
         if (PyObject_Print(op, fp, 0) != 0)
             PyErr_Clear();
@@ -1957,9 +1957,10 @@ _Py_PrintReferenceAddresses(FILE *fp)
 {
     PyObject *op;
     fprintf(fp, "Remaining object addresses:\n");
-    for (op = refchain._ob_next; op != &refchain; op = op->_ob_next)
+    for (op = _Py_REF_NEXT(&refchain); op != (PyObject*)&refchain; op = _Py_REF_NEXT(op)) {
         fprintf(fp, "%p [%" PY_FORMAT_SIZE_T "d] %s\n", op,
             Py_REFCNT(op), Py_TYPE(op)->tp_name);
+    }
 }
 
 PyObject *
@@ -1971,22 +1972,22 @@ _Py_GetObjects(PyObject *self, PyObject *args)
 
     if (!PyArg_ParseTuple(args, "i|O", &n, &t))
         return NULL;
-    op = refchain._ob_next;
+    op = _Py_REF_NEXT(&refchain);
     res = PyList_New(0);
     if (res == NULL)
         return NULL;
-    for (i = 0; (n == 0 || i < n) && op != &refchain; i++) {
+    for (i = 0; (n == 0 || i < n) && op != (PyObject*)&refchain; i++) {
         while (op == self || op == args || op == res || op == t ||
                (t != NULL && Py_TYPE(op) != (PyTypeObject *) t)) {
-            op = op->_ob_next;
-            if (op == &refchain)
+            op = _Py_REF_NEXT(op);
+            if (op == (PyObject*)&refchain)
                 return res;
         }
         if (PyList_Append(res, op) < 0) {
             Py_DECREF(res);
             return NULL;
         }
-        op = op->_ob_next;
+        op = _Py_REF_NEXT(op);
     }
     return res;
 }
@@ -2188,6 +2189,13 @@ _Py_Dealloc(PyObject *op)
     _Py_INC_TPFREES(op) _Py_COUNT_ALLOCS_COMMA
     (*Py_TYPE(op)->tp_dealloc)(op);
 }
+#endif
+
+#ifdef WITH_OPAQUE_PYOBJECT
+extern inline PyTypeObject * _Py_TYPE(PyObject *ob);
+extern inline Py_ssize_t _Py_REFCNT(PyObject *ob);
+extern inline void _Py_INCREF(PyObject *op);
+extern inline void _Py_DECREF(PyObject *op);
 #endif
 
 #ifdef __cplusplus
