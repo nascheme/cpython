@@ -14,6 +14,8 @@ typedef struct {
 } PyFixedIntObject;
 #endif
 
+static PyObject* _PyLong_FromLongLong(long long ival);
+
 // box v if needed, return new ref
 static PyObject *
 obj_as_long(PyObject *v)
@@ -21,7 +23,7 @@ obj_as_long(PyObject *v)
     PyObject *a;
     if (IS_TAGGED(v)) {
         ssize_t ival = UNTAG_IT(v);
-        a = PyLong_FromLongLong(ival);
+        a = _PyLong_FromLongLong(ival);
     }
     else {
         a = v;
@@ -65,6 +67,16 @@ fixedint_format_writer(_PyUnicodeWriter *writer,
     Py_XDECREF(w);
     return result;
 }
+
+static PyObject *
+fixedint_format(PyObject *v, int base)
+{
+    PyObject *w = obj_as_long(v);
+    PyObject *result = _PyLong_Format(w, base);
+    Py_XDECREF(w);
+    return result;
+}
+
 
 static long
 fixedint_as_long_and_overflow(PyObject *v, int *overflow)

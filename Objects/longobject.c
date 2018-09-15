@@ -313,7 +313,7 @@ PyObject *
 PyLong_FromLong(long ival)
 {
 #ifdef WITH_FIXEDINT
-#if 0
+#if 1
     if (CAN_TAG(ival)) {
         return TAG_IT(ival);
     }
@@ -391,7 +391,7 @@ PyObject *
 PyLong_FromUnsignedLong(unsigned long ival)
 {
 #ifdef WITH_FIXEDINT
-#if 0
+#if 1
     if (ival < MAX_TAGGED_VALUE) {
         return TAG_IT(ival);
     }
@@ -1193,7 +1193,7 @@ PyLong_AsVoidPtr(PyObject *vv)
 /* Create a new int object from a C long long int. */
 
 PyObject *
-PyLong_FromLongLong(long long ival)
+_PyLong_FromLongLong(long long ival)
 {
     PyLongObject *v;
     unsigned long long abs_ival;
@@ -1201,7 +1201,6 @@ PyLong_FromLongLong(long long ival)
     int ndigits = 0;
     int negative = 0;
 
-    CHECK_SMALL_INT(ival);
     if (ival < 0) {
         /* avoid signed overflow on negation;  see comments
            in PyLong_FromLong above. */
@@ -1232,6 +1231,21 @@ PyLong_FromLongLong(long long ival)
         }
     }
     return (PyObject *)v;
+}
+
+PyObject *
+PyLong_FromLongLong(long long ival)
+{
+#ifdef WITH_FIXEDINT
+#if 0
+    if (CAN_TAG(ival)) {
+        return TAG_IT(ival);
+    }
+#endif
+#endif
+
+    CHECK_SMALL_INT(ival);
+    return _PyLong_FromLongLong(ival);
 }
 
 /* Create a new int object from a C unsigned long long int. */
@@ -2197,6 +2211,10 @@ long_format_binary(PyObject *aa, int base, int alternate,
 PyObject *
 _PyLong_Format(PyObject *obj, int base)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(obj))
+        return fixedint_format(obj, base);
+#endif
     PyObject *str;
     int err;
     if (base == 10)
@@ -5204,6 +5222,8 @@ long_subtype_new(PyTypeObject *type, PyObject *x, PyObject *obase)
     if (tmp == NULL)
         return NULL;
     assert(PyLong_Check(tmp));
+    // FIXME: not sure why we have fixedint here
+    tmp = (PyLongObject *)obj_as_long((PyObject *)tmp);
     n = NDIGITS(tmp);
     if (n < 0)
         n = -n;

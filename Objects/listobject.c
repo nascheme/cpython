@@ -2069,6 +2069,7 @@ unsafe_latin_compare(PyObject *v, PyObject *w, MergeState *ms)
     return res;
 }
 
+#ifndef WITH_FIXEDINT
 /* Bounded int compare: compare any two longs that fit in a single machine word. */
 static int
 unsafe_long_compare(PyObject *v, PyObject *w, MergeState *ms)
@@ -2096,6 +2097,7 @@ unsafe_long_compare(PyObject *v, PyObject *w, MergeState *ms)
     assert(res == PyObject_RichCompareBool(v, w, Py_LT));
     return res;
 }
+#endif
 
 /* Float compare: compare any two floats. */
 static int
@@ -2293,9 +2295,11 @@ list_sort_impl(PyListObject *self, PyObject *keyfunc, int reverse)
             if (key_type == &PyUnicode_Type && strings_are_latin) {
                 ms.key_compare = unsafe_latin_compare;
             }
+#ifndef WITH_FIXEDINT
             else if (key_type == &PyLong_Type && ints_are_bounded) {
                 ms.key_compare = unsafe_long_compare;
             }
+#endif
             else if (key_type == &PyFloat_Type) {
                 ms.key_compare = unsafe_float_compare;
             }
