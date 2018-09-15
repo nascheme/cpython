@@ -55,6 +55,17 @@ fixedint_repr(PyObject *v)
     return result;
 }
 
+static int
+fixedint_format_writer(_PyUnicodeWriter *writer,
+                       PyObject *obj,
+                       int base, int alternate)
+{
+    PyObject *w = obj_as_long(obj);
+    long result = _PyLong_FormatWriter(writer, w, base, alternate);
+    Py_XDECREF(w);
+    return result;
+}
+
 static long
 fixedint_as_long_and_overflow(PyObject *v, int *overflow)
 {
@@ -295,7 +306,7 @@ fixedint_mul(PyObject *v, PyObject *w)
 {
     PyObject *a = obj_as_long(v);
     PyObject *b = obj_as_long(w);
-    PyObject *rv = PyLong_Type.tp_as_number->nb_remainder(a, b);
+    PyObject *rv = PyLong_Type.tp_as_number->nb_multiply(a, b);
     Py_DECREF(a);
     Py_DECREF(b);
     return rv;

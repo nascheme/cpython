@@ -312,6 +312,13 @@ _PyLong_Copy(PyLongObject *src)
 PyObject *
 PyLong_FromLong(long ival)
 {
+#ifdef WITH_FIXEDINT
+#if 0
+    if (CAN_TAG(ival)) {
+        return TAG_IT(ival);
+    }
+#endif
+#endif
     PyLongObject *v;
     unsigned long abs_ival;
     unsigned long t;  /* unsigned so >> doesn't propagate sign bit */
@@ -377,11 +384,19 @@ PyLong_FromLong(long ival)
     return (PyObject *)v;
 }
 
+
 /* Create a new int object from a C unsigned long int */
 
 PyObject *
 PyLong_FromUnsignedLong(unsigned long ival)
 {
+#ifdef WITH_FIXEDINT
+#if 0
+    if (ival < MAX_TAGGED_VALUE) {
+        return TAG_IT(ival);
+    }
+#endif
+#endif
     PyLongObject *v;
     unsigned long t;
     int ndigits = 0;
@@ -2198,6 +2213,10 @@ _PyLong_FormatWriter(_PyUnicodeWriter *writer,
                      PyObject *obj,
                      int base, int alternate)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(obj))
+        return fixedint_format_writer(writer, obj, base, alternate);
+#endif
     if (base == 10)
         return long_to_decimal_string_internal(obj, NULL, writer,
                                                NULL, NULL);
