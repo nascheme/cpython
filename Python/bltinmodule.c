@@ -2695,6 +2695,7 @@ PyTypeObject PyZip_Type = {
     PyObject_GC_Del,                    /* tp_free */
 };
 
+extern PyObject * _PyFixedInt_New(PyObject *self, PyObject *args);
 
 static PyMethodDef builtin_methods[] = {
     {"__build_class__", (PyCFunction)builtin___build_class__,
@@ -2714,6 +2715,9 @@ static PyMethodDef builtin_methods[] = {
     BUILTIN_DIVMOD_METHODDEF
     BUILTIN_EVAL_METHODDEF
     BUILTIN_EXEC_METHODDEF
+#ifdef WITH_FIXEDINT
+    {"fixedint",             _PyFixedInt_New,        METH_VARARGS, dir_doc},
+#endif
     BUILTIN_FORMAT_METHODDEF
     {"getattr",         (PyCFunction)builtin_getattr, METH_FASTCALL, getattr_doc},
     BUILTIN_GLOBALS_METHODDEF
@@ -2809,9 +2813,6 @@ _PyBuiltin_Init(void)
     SETBUILTIN("dict",                  &PyDict_Type);
     SETBUILTIN("enumerate",             &PyEnum_Type);
     SETBUILTIN("filter",                &PyFilter_Type);
-#ifdef WITH_FIXEDINT
-    SETBUILTIN("fixedint",              &_PyFixedInt_Type);
-#endif
     SETBUILTIN("float",                 &PyFloat_Type);
     SETBUILTIN("frozenset",             &PyFrozenSet_Type);
     SETBUILTIN("property",              &PyProperty_Type);

@@ -4,10 +4,15 @@
 
 #include "Python.h"
 #include "longintrepr.h"
+#include "taggedptr.h"
 
 #include <float.h>
 #include <ctype.h>
 #include <stddef.h>
+
+#ifdef WITH_FIXEDINT
+#include "fixedintobject.c"
+#endif
 
 #include "clinic/longobject.c.h"
 /*[clinic input]
@@ -67,6 +72,7 @@ get_small_int(sdigit ival)
     assert(-NSMALLNEGINTS <= ival && ival < NSMALLPOSINTS);
     v = (PyObject *)&small_ints[ival + NSMALLNEGINTS];
     Py_INCREF(v);
+
 #ifdef COUNT_ALLOCS
     if (ival >= 0)
         quick_int_allocs++;
@@ -79,6 +85,24 @@ get_small_int(sdigit ival)
     do if (-NSMALLNEGINTS <= ival && ival < NSMALLPOSINTS) { \
         return get_small_int((sdigit)ival); \
     } while(0)
+
+/* convert a PyLong of size 1, 0 or -1 to an sdigit */
+#if 0
+#define MEDIUM_VALUE(x) (assert(-1 <= GET_SIZE(x) && GET_SIZE(x) <= 1),   \
+         GET_SIZE(x) < 0 ? -(sdigit)(x)->ob_digit[0] :   \
+             (GET_SIZE(x) == 0 ? (sdigit)0 :                             \
+              (sdigit)(x)->ob_digit[0]))
+#endif
+static sdigit
+medium_value(PyLongObject *x)
+{
+    assert(-1 <= GET_SIZE(x) && GET_SIZE(x) <= 1);
+    return (GET_SIZE(x) < 0 ? -(sdigit)(x)->ob_digit[0] :
+            (GET_SIZE(x) == 0 ? (sdigit)0 :
+             (sdigit)(x)->ob_digit[0]));
+};
+#define MEDIUM_VALUE(x) (medium_value(x))
+
 
 static PyLongObject *
 maybe_small_long(PyLongObject *v)
@@ -122,6 +146,8 @@ fill_digits(PyLongObject *a, Py_ssize_t a_offset,
     memset(a->ob_digit + a_offset, val, n * sizeof(digit));
 }
 
+#define MAYBE_TAG(v) (v)
+
 /* If a freshly-allocated int is already shared, it must
    be a small integer, so negating it must go to PyLong_FromLong */
 Py_LOCAL_INLINE(void)
@@ -130,7 +156,7 @@ _PyLong_Negate(PyLongObject **x_p)
     PyLongObject *x;
 
     x = (PyLongObject *)*x_p;
-    if (Py_REFCNT(x) == 1) {
+    if (!IS_TAGGED(x) && Py_REFCNT(x) == 1) {
         SET_NDIGITS(x, -NDIGITS(x));
         return;
     }
@@ -257,6 +283,10 @@ _PyLong_New(Py_ssize_t size)
 PyObject *
 _PyLong_Copy(PyLongObject *src)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(src))
+        return obj_as_long((PyObject *)src);
+#endif
     PyLongObject *result;
     Py_ssize_t i;
 
@@ -442,6 +472,10 @@ PyLong_FromDouble(double dval)
 long
 PyLong_AsLongAndOverflow(PyObject *vv, int *overflow)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(vv))
+        return fixedint_as_long_and_overflow(vv, overflow);
+#endif
     /* This version by Tim Peters */
     PyLongObject *v;
     unsigned long x, prev;
@@ -555,6 +589,10 @@ _PyLong_AsInt(PyObject *obj)
 
 Py_ssize_t
 PyLong_AsSsize_t(PyObject *vv) {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(vv))
+        return fixedint_as_ssize_t(vv);
+#endif
     PyLongObject *v;
     size_t x, prev;
     Py_ssize_t i;
@@ -611,6 +649,10 @@ PyLong_AsSsize_t(PyObject *vv) {
 unsigned long
 PyLong_AsUnsignedLong(PyObject *vv)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(vv))
+        return fixedint_as_unsignedlong(vv);
+#endif
     PyLongObject *v;
     unsigned long x, prev;
     Py_ssize_t i;
@@ -655,6 +697,10 @@ PyLong_AsUnsignedLong(PyObject *vv)
 size_t
 PyLong_AsSize_t(PyObject *vv)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(vv))
+        return fixedint_as_size_t(vv);
+#endif
     PyLongObject *v;
     size_t x, prev;
     Py_ssize_t i;
@@ -698,6 +744,10 @@ PyLong_AsSize_t(PyObject *vv)
 static unsigned long
 _PyLong_AsUnsignedLongMask(PyObject *vv)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(vv))
+        return fixedint_as_unsignedlongmask(vv);
+#endif
     PyLongObject *v;
     unsigned long x;
     Py_ssize_t i;
@@ -752,6 +802,10 @@ PyLong_AsUnsignedLongMask(PyObject *op)
 int
 _PyLong_Sign(PyObject *vv)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(vv))
+        return fixedint_sign((PyObject *)vv);
+#endif
     PyLongObject *v = (PyLongObject *)vv;
 
     assert(v != NULL);
@@ -783,6 +837,10 @@ bits_in_digit(digit d)
 size_t
 _PyLong_NumBits(PyObject *vv)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(vv))
+        return fixedint_numbits((PyObject *)vv);
+#endif
     PyLongObject *v = (PyLongObject *)vv;
     size_t result = 0;
     Py_ssize_t ndigits;
@@ -926,6 +984,11 @@ _PyLong_AsByteArray(PyLongObject* v,
                     unsigned char* bytes, size_t n,
                     int little_endian, int is_signed)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v))
+        return fixedint_as_bytearray((PyObject *)v, bytes, n, little_endian,
+                                     is_signed);
+#endif
     Py_ssize_t i;               /* index into v->ob_digit */
     Py_ssize_t ndigits;         /* |v->ob_size| */
     twodigits accum;            /* sliding register */
@@ -1076,6 +1139,10 @@ PyLong_FromVoidPtr(void *p)
 void *
 PyLong_AsVoidPtr(PyObject *vv)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(vv))
+        return fixedint_as_voidptr((PyObject *)vv);
+#endif
 #if SIZEOF_VOID_P <= SIZEOF_LONG
     long x;
 
@@ -1255,6 +1322,10 @@ PyLong_FromSize_t(size_t ival)
 long long
 PyLong_AsLongLong(PyObject *vv)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(vv))
+        return fixedint_as_longlong(vv);
+#endif
     PyLongObject *v;
     long long bytes;
     int res;
@@ -1307,6 +1378,10 @@ PyLong_AsLongLong(PyObject *vv)
 unsigned long long
 PyLong_AsUnsignedLongLong(PyObject *vv)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(vv))
+        return fixedint_as_unsignedlonglong(vv);
+#endif
     PyLongObject *v;
     unsigned long long bytes;
     int res;
@@ -1342,6 +1417,10 @@ PyLong_AsUnsignedLongLong(PyObject *vv)
 static unsigned long long
 _PyLong_AsUnsignedLongLongMask(PyObject *vv)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(vv))
+        return fixedint_as_unsignedlonglongmask(vv);
+#endif
     PyLongObject *v;
     unsigned long long x;
     Py_ssize_t i;
@@ -1406,6 +1485,10 @@ PyLong_AsUnsignedLongLongMask(PyObject *op)
 long long
 PyLong_AsLongLongAndOverflow(PyObject *vv, int *overflow)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(vv))
+        return fixedint_as_longlong_and_overflow(vv, overflow);
+#endif
     /* This version by Tim Peters */
     PyLongObject *v;
     unsigned long long x, prev;
@@ -1482,6 +1565,10 @@ PyLong_AsLongLongAndOverflow(PyObject *vv, int *overflow)
 int
 _PyLong_UnsignedShort_Converter(PyObject *obj, void *ptr)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(obj))
+        return fixedint_unsignedshort_converter(obj, ptr);
+#endif
     unsigned long uval;
 
     if (PyLong_Check(obj) && _PyLong_Sign(obj) < 0) {
@@ -1504,6 +1591,10 @@ _PyLong_UnsignedShort_Converter(PyObject *obj, void *ptr)
 int
 _PyLong_UnsignedInt_Converter(PyObject *obj, void *ptr)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(obj))
+        return fixedint_unsignedint_converter(obj, ptr);
+#endif
     unsigned long uval;
 
     if (PyLong_Check(obj) && _PyLong_Sign(obj) < 0) {
@@ -1526,6 +1617,10 @@ _PyLong_UnsignedInt_Converter(PyObject *obj, void *ptr)
 int
 _PyLong_UnsignedLong_Converter(PyObject *obj, void *ptr)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(obj))
+        return fixedint_unsignedlong_converter(obj, ptr);
+#endif
     unsigned long uval;
 
     if (PyLong_Check(obj) && _PyLong_Sign(obj) < 0) {
@@ -1543,6 +1638,10 @@ _PyLong_UnsignedLong_Converter(PyObject *obj, void *ptr)
 int
 _PyLong_UnsignedLongLong_Converter(PyObject *obj, void *ptr)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(obj))
+        return fixedint_unsignedlonglong_converter(obj, ptr);
+#endif
     unsigned long long uval;
 
     if (PyLong_Check(obj) && _PyLong_Sign(obj) < 0) {
@@ -1560,6 +1659,10 @@ _PyLong_UnsignedLongLong_Converter(PyObject *obj, void *ptr)
 int
 _PyLong_Size_t_Converter(PyObject *obj, void *ptr)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(obj))
+        return fixedint_size_t_converter(obj, ptr);
+#endif
     size_t uval;
 
     if (PyLong_Check(obj) && _PyLong_Sign(obj) < 0) {
@@ -1898,6 +2001,11 @@ long_to_decimal_string_internal(PyObject *aa,
 static PyObject *
 long_to_decimal_string(PyObject *aa)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(aa)) {
+        return fixedint_repr(aa);
+    }
+#endif
     PyObject *v;
     if (long_to_decimal_string_internal(aa, &v, NULL, NULL, NULL) == -1)
         return NULL;
@@ -2882,6 +2990,10 @@ x_divrem(PyLongObject *v1, PyLongObject *w1, PyLongObject **prem)
 double
 _PyLong_Frexp(PyLongObject *a, Py_ssize_t *e)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(a))
+        return fixedint_frexp((PyObject *)a, e);
+#endif
     Py_ssize_t a_size, a_bits, shift_digits, shift_bits, x_size;
     /* See below for why x_digits is always large enough. */
     digit rem, x_digits[2 + (DBL_MANT_DIG + 1) / PyLong_SHIFT];
@@ -2995,6 +3107,10 @@ _PyLong_Frexp(PyLongObject *a, Py_ssize_t *e)
 double
 PyLong_AsDouble(PyObject *v)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v))
+        return fixedint_as_double(v);
+#endif
     Py_ssize_t exponent;
     double x;
 
@@ -3002,6 +3118,7 @@ PyLong_AsDouble(PyObject *v)
         PyErr_BadInternalCall();
         return -1.0;
     }
+
     if (!PyLong_Check(v)) {
         PyErr_SetString(PyExc_TypeError, "an integer is required");
         return -1.0;
@@ -3027,6 +3144,8 @@ PyLong_AsDouble(PyObject *v)
 static void
 long_dealloc(PyObject *v)
 {
+    if (IS_TAGGED(v))
+        return;
     Py_TYPE(v)->tp_free(v);
 }
 
@@ -3056,7 +3175,13 @@ long_compare(PyLongObject *a, PyLongObject *b)
 static PyObject *
 long_richcompare(PyObject *self, PyObject *other, int op)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(self) || _PyFixedInt_Check(other)) {
+        return fixedint_richcompare((PyObject *)self, (PyObject *)other, op);
+    }
+#endif
     int result;
+
     CHECK_BINOP(self, other);
     if (self == other)
         result = 0;
@@ -3068,6 +3193,11 @@ long_richcompare(PyObject *self, PyObject *other, int op)
 static Py_hash_t
 long_hash(PyLongObject *v)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v)) {
+        return fixedint_hash((PyObject *)v);
+    }
+#endif
     Py_uhash_t x;
     Py_ssize_t i;
     int sign;
@@ -3216,6 +3346,11 @@ x_sub(PyLongObject *a, PyLongObject *b)
 static PyObject *
 long_add(PyLongObject *a, PyLongObject *b)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(a) || _PyFixedInt_Check(b)) {
+        return fixedint_add((PyObject *)a, (PyObject *)b);
+    }
+#endif
     PyLongObject *z;
 
     CHECK_BINOP(a, b);
@@ -3250,6 +3385,11 @@ long_add(PyLongObject *a, PyLongObject *b)
 static PyObject *
 long_sub(PyLongObject *a, PyLongObject *b)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(a) || _PyFixedInt_Check(b)) {
+        return fixedint_sub((PyObject *)a, (PyObject *)b);
+    }
+#endif
     PyLongObject *z;
 
     CHECK_BINOP(a, b);
@@ -3679,6 +3819,11 @@ k_lopsided_mul(PyLongObject *a, PyLongObject *b)
 static PyObject *
 long_mul(PyLongObject *a, PyLongObject *b)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(a) || _PyFixedInt_Check(b)) {
+        return fixedint_mul((PyObject *)a, (PyObject *)b);
+    }
+#endif
     PyLongObject *z;
 
     CHECK_BINOP(a, b);
@@ -3833,6 +3978,11 @@ l_divmod(PyLongObject *v, PyLongObject *w,
 static PyObject *
 long_div(PyObject *a, PyObject *b)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(a) || _PyFixedInt_Check(b)) {
+        return fixedint_div(a, b);
+    }
+#endif
     PyLongObject *div;
 
     CHECK_BINOP(a, b);
@@ -3854,6 +4004,11 @@ long_div(PyObject *a, PyObject *b)
 static PyObject *
 long_true_divide(PyObject *v, PyObject *w)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v) || _PyFixedInt_Check(w)) {
+        return fixedint_true_divide((PyObject *)v, (PyObject *)w);
+    }
+#endif
     PyLongObject *a, *b, *x;
     Py_ssize_t a_size, b_size, shift, extra_bits, diff, x_size, x_bits;
     digit mask, low;
@@ -4112,6 +4267,11 @@ long_true_divide(PyObject *v, PyObject *w)
 static PyObject *
 long_mod(PyObject *a, PyObject *b)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(a) || _PyFixedInt_Check(b)) {
+        return fixedint_mod(a, b);
+    }
+#endif
     PyLongObject *mod;
 
     CHECK_BINOP(a, b);
@@ -4128,6 +4288,11 @@ long_mod(PyObject *a, PyObject *b)
 static PyObject *
 long_divmod(PyObject *a, PyObject *b)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(a) || _PyFixedInt_Check(b)) {
+        return fixedint_divmod(a, b);
+    }
+#endif
     PyLongObject *div, *mod;
     PyObject *z;
 
@@ -4152,6 +4317,11 @@ long_divmod(PyObject *a, PyObject *b)
 static PyObject *
 long_pow(PyObject *v, PyObject *w, PyObject *x)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v) || _PyFixedInt_Check(w)) {
+        return fixedint_pow(v, w, x);
+    }
+#endif
     PyLongObject *a, *b, *c; /* a,b,c = v,w,x */
     int negativeOutput = 0;  /* if x<0 return negative output */
 
@@ -4342,6 +4512,10 @@ long_pow(PyObject *v, PyObject *w, PyObject *x)
 static PyObject *
 long_invert(PyLongObject *v)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v))
+        return fixedint_invert((PyObject *)v);
+#endif
     /* Implement ~x as -(x+1) */
     PyLongObject *x;
     if (Py_ABS(NDIGITS(v)) <=1)
@@ -4358,6 +4532,10 @@ long_invert(PyLongObject *v)
 static PyObject *
 long_neg(PyLongObject *v)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v))
+        return fixedint_neg((PyObject *)v);
+#endif
     PyLongObject *z;
     if (Py_ABS(NDIGITS(v)) <= 1)
         return PyLong_FromLong(-MEDIUM_VALUE(v));
@@ -4370,6 +4548,10 @@ long_neg(PyLongObject *v)
 static PyObject *
 long_abs(PyLongObject *v)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v))
+        return fixedint_abs((PyObject *)v);
+#endif
     if (NDIGITS(v) < 0)
         return long_neg(v);
     else
@@ -4379,6 +4561,10 @@ long_abs(PyLongObject *v)
 static int
 long_bool(PyLongObject *v)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v))
+        return fixedint_bool((PyObject *)v);
+#endif
     return NDIGITS(v) != 0;
 }
 
@@ -4421,6 +4607,12 @@ long_rshift(PyLongObject *a, PyLongObject *b)
     PyLongObject *z = NULL;
     Py_ssize_t newsize, wordshift, hishift, i, j;
     digit loshift, lomask, himask;
+
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(a) || _PyFixedInt_Check(b)) {
+        return fixedint_rshift((PyObject *)a, (PyObject *)b);
+    }
+#endif
 
     CHECK_BINOP(a, b);
 
@@ -4468,6 +4660,11 @@ long_rshift(PyLongObject *a, PyLongObject *b)
 static PyObject *
 long_lshift(PyObject *v, PyObject *w)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v) || _PyFixedInt_Check(w)) {
+        return fixedint_lshift(v, w);
+    }
+#endif
     /* This version due to Tim Peters */
     PyLongObject *a = (PyLongObject*)v;
     PyLongObject *b = (PyLongObject*)w;
@@ -4542,6 +4739,12 @@ long_bitwise(PyLongObject *a,
     int nega, negb, negz;
     Py_ssize_t size_a, size_b, size_z, i;
     PyLongObject *z;
+
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(a) || _PyFixedInt_Check(b)) {
+        return fixedint_bitwise((PyObject *)a, op, (PyObject *)b);
+    }
+#endif
 
     /* Bitwise operations for negative numbers operate as though
        on a two's complement representation.  So convert arguments
@@ -5128,8 +5331,8 @@ _PyLong_DivmodNear(PyObject *a, PyObject *b)
         goto error;
 
     /* PyTuple_SET_ITEM steals references */
-    PyTuple_SET_ITEM(result, 0, (PyObject *)quo);
-    PyTuple_SET_ITEM(result, 1, (PyObject *)rem);
+    PyTuple_SET_ITEM(result, 0, MAYBE_TAG((PyObject *)quo));
+    PyTuple_SET_ITEM(result, 1, MAYBE_TAG((PyObject *)rem));
     return result;
 
   error:
@@ -5203,7 +5406,7 @@ long_round(PyObject *self, PyObject *args)
     Py_DECREF(result);
     result = temp;
 
-    return result;
+    return MAYBE_TAG(result);
 }
 
 /*[clinic input]
@@ -5279,7 +5482,7 @@ int_bit_length_impl(PyObject *self)
     Py_DECREF(result);
     result = y;
 
-    return (PyObject *)result;
+    return MAYBE_TAG((PyObject *)result);
 
   error:
     Py_DECREF(result);
@@ -5407,7 +5610,7 @@ int_from_bytes_impl(PyTypeObject *type, PyObject *bytes_obj,
                                                          long_obj, NULL));
     }
 
-    return long_obj;
+    return MAYBE_TAG(long_obj);
 }
 
 static PyObject *

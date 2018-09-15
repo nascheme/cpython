@@ -39,6 +39,7 @@ PyStructSequence_New(PyTypeObject *type)
         return NULL;
     /* Hack the size of the variable object, so invisible fields don't appear
      to Python code. */
+    assert(!_PyFixedInt_Check(obj));
     Py_SIZE(obj) = VISIBLE_SIZE_TP(type);
     for (i = 0; i < size; i++)
         obj->ob_item[i] = NULL;

@@ -596,6 +596,7 @@ PyAPI_FUNC(PyObject *) PyObject_Dir(PyObject *);
 #ifdef WITH_FIXEDINT
 /* fixed integer stored as tagged pointer */
 PyAPI_DATA(PyTypeObject) _PyFixedInt_Type;
+PyAPI_DATA(PyTypeObject) PyLong_Type;
 /* return true if object is tagged pointer containing fixed int */
 #define _PyFixedInt_Check(ob) ((ssize_t)(ob) & 1)
 PyAPI_FUNC(PyObject *) _PyFixedInt_Add(PyObject *, PyObject *);
@@ -604,7 +605,7 @@ inline PyTypeObject *
 _Py_TYPE(PyObject *ob)
 {
     if (_PyFixedInt_Check(ob)) {
-        return &_PyFixedInt_Type;
+        return &PyLong_Type;
     }
     return ob->ob_type;
 }

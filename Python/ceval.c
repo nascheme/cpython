@@ -1288,10 +1288,12 @@ main_loop:
                no patch shown any impact on a realistic benchmark, only a minor
                speedup on microbenchmarks. */
 #ifdef WITH_FIXEDINT
+#if 0
             if (_PyFixedInt_Check(left) && _PyFixedInt_Check(right)) {
                 sum = _PyFixedInt_Add(left, right);
                 Py_DECREF(left);
             } else
+#endif
 #endif
 	    if (PyUnicode_CheckExact(left) &&
                      PyUnicode_CheckExact(right)) {
