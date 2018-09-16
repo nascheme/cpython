@@ -488,7 +488,6 @@ PyLong_AsLongAndOverflow(PyObject *vv, int *overflow)
     long res;
     Py_ssize_t i;
     int sign;
-    int do_decref = 0; /* if nb_int was called */
 
     *overflow = 0;
     if (vv == NULL) {
@@ -503,7 +502,9 @@ PyLong_AsLongAndOverflow(PyObject *vv, int *overflow)
         v = _PyLong_FromNbInt(vv);
         if (v == NULL)
             return -1;
-        do_decref = 1;
+        res = PyLong_AsLongAndOverflow((PyObject *)v, overflow);
+        Py_DECREF(v);
+        return res;
     }
 
     res = -1;
@@ -549,9 +550,6 @@ PyLong_AsLongAndOverflow(PyObject *vv, int *overflow)
         }
     }
   exit:
-    if (do_decref) {
-        Py_DECREF(v);
-    }
     return res;
 }
 
@@ -1358,7 +1356,6 @@ PyLong_AsLongLong(PyObject *vv)
     PyLongObject *v;
     long long bytes;
     int res;
-    int do_decref = 0; /* if nb_int was called */
 
     if (vv == NULL) {
         PyErr_BadInternalCall();
@@ -1372,7 +1369,9 @@ PyLong_AsLongLong(PyObject *vv)
         v = _PyLong_FromNbInt(vv);
         if (v == NULL)
             return -1;
-        do_decref = 1;
+        res = PyLong_AsLongLong((PyObject *)v);
+        Py_DECREF(v);
+        return res;
     }
 
     res = 0;
@@ -1389,9 +1388,6 @@ PyLong_AsLongLong(PyObject *vv)
     default:
         res = _PyLong_AsByteArray((PyLongObject *)v, (unsigned char *)&bytes,
                                   SIZEOF_LONG_LONG, PY_LITTLE_ENDIAN, 1);
-    }
-    if (do_decref) {
-        Py_DECREF(v);
     }
 
     /* Plan 9 can't handle long long in ? : expressions */
@@ -1524,7 +1520,6 @@ PyLong_AsLongLongAndOverflow(PyObject *vv, int *overflow)
     long long res;
     Py_ssize_t i;
     int sign;
-    int do_decref = 0; /* if nb_int was called */
 
     *overflow = 0;
     if (vv == NULL) {
@@ -1539,7 +1534,9 @@ PyLong_AsLongLongAndOverflow(PyObject *vv, int *overflow)
         v = _PyLong_FromNbInt(vv);
         if (v == NULL)
             return -1;
-        do_decref = 1;
+        res = PyLong_AsLongLongAndOverflow((PyObject*)v, overflow);
+        Py_DECREF(v);
+        return res;
     }
 
     res = -1;
@@ -1585,9 +1582,6 @@ PyLong_AsLongLongAndOverflow(PyObject *vv, int *overflow)
         }
     }
   exit:
-    if (do_decref) {
-        Py_DECREF(v);
-    }
     return res;
 }
 
