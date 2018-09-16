@@ -2276,7 +2276,8 @@ list_sort_impl(PyListObject *self, PyObject *keyfunc, int reverse)
             }
 
             if (key_type == &PyLong_Type) {
-                if (ints_are_bounded && Py_ABS(Py_SIZE(key)) > 1)
+                if (ints_are_bounded &&
+                        Py_ABS(_PyLong_NumDigits((PyLongObject *)key)) > 1)
                     ints_are_bounded = 0;
             }
             else if (key_type == &PyUnicode_Type){

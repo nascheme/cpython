@@ -92,6 +92,16 @@ PyAPI_FUNC(PyLongObject *) _PyLong_New(Py_ssize_t);
 /* Return a copy of src. */
 PyAPI_FUNC(PyObject *) _PyLong_Copy(PyLongObject *src);
 
+/* Return the number of digits */
+static inline Py_ssize_t
+_PyLong_NumDigits(PyLongObject *v)
+{
+#ifdef Py_DEBUG
+    assert(PyLong_Check(v));
+#endif
+    return Py_SIZE(v);
+}
+
 #ifdef __cplusplus
 }
 #endif

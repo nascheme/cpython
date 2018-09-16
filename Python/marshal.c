@@ -224,13 +224,13 @@ w_short_pstring(const char *s, Py_ssize_t n, WFILE *p)
 } while(0)
 
 static void
-w_PyLong(const PyLongObject *ob, char flag, WFILE *p)
+w_PyLong(PyLongObject *ob, char flag, WFILE *p)
 {
     Py_ssize_t i, j, n, l;
     digit d;
 
     W_TYPE(TYPE_LONG, p);
-    if (Py_SIZE(ob) == 0) {
+    if (_PyLong_NumDigits(ob) == 0) {
         w_long((long)0, p);
         return;
     }
