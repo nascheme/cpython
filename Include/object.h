@@ -65,6 +65,7 @@ whose size is determined when the object is allocated.
 #error Py_LIMITED_API is incompatible with Py_DEBUG, Py_TRACE_REFS, and Py_REF_DEBUG
 #endif
 
+
 #ifdef Py_TRACE_REFS
 /* Define pointers to support a doubly-linked list of all live heap objects. */
 #define _PyObject_HEAD_EXTRA            \
@@ -79,6 +80,12 @@ whose size is determined when the object is allocated.
 #else
 #define _PyObject_HEAD_EXTRA
 #define _PyObject_EXTRA_INIT
+#endif
+
+#ifndef WITH_OPAQUE_PYOBJECT
+/* for better backwards compatibility, use the old names */
+#define _object_impl _object
+#define _PyObjectImpl PyObject
 #endif
 
 /* PyObject_HEAD defines the initial segment of every PyObject. */
