@@ -242,7 +242,7 @@ PyObject_InitVar(PyVarObject *op, PyTypeObject *tp, Py_ssize_t size)
     if (op == NULL)
         return (PyVarObject *) PyErr_NoMemory();
     /* Any changes should be reflected in PyObject_INIT_VAR */
-    op->ob_size = size;
+    Py_SET_SIZE(op, size);
     Py_SET_TYPE(op, tp);
     _Py_NewReference((PyObject *)op);
     return op;
@@ -1021,7 +1021,7 @@ _PyObject_GetDictPtr(PyObject *obj)
         Py_ssize_t tsize;
         size_t size;
 
-        tsize = ((PyVarObject *)obj)->ob_size;
+        tsize = Py_SIZE((PyVarObject *)obj);
         if (tsize < 0)
             tsize = -tsize;
         size = _PyObject_VAR_SIZE(tp, tsize);
@@ -1211,7 +1211,7 @@ _PyObject_GenericGetAttrWithDict(PyObject *obj, PyObject *name,
                 Py_ssize_t tsize;
                 size_t size;
 
-                tsize = ((PyVarObject *)obj)->ob_size;
+                tsize = Py_SIZE((PyVarObject *)obj);
                 if (tsize < 0)
                     tsize = -tsize;
                 size = _PyObject_VAR_SIZE(tp, tsize);
@@ -2196,6 +2196,7 @@ extern inline PyTypeObject * _Py_TYPE(PyObject *ob);
 extern inline Py_ssize_t _Py_REFCNT(PyObject *ob);
 extern inline void _Py_INCREF(PyObject *op);
 extern inline void _Py_DECREF(PyObject *op);
+extern inline Py_ssize_t _Py_SIZE(PyVarObject *op);
 #endif
 
 #ifdef __cplusplus

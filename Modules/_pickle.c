@@ -457,7 +457,7 @@ Pdata_New(void)
 
     if (!(self = PyObject_New(Pdata, &Pdata_Type)))
         return NULL;
-    Py_SIZE(self) = 0;
+    Py_SET_SIZE(self, 0);
     self->mark_set = 0;
     self->fence = 0;
     self->allocated = 8;
@@ -484,7 +484,7 @@ Pdata_clear(Pdata *self, Py_ssize_t clearto)
     while (--i >= clearto) {
         Py_CLEAR(self->data[i]);
     }
-    Py_SIZE(self) = clearto;
+    Py_SET_SIZE(self, clearto);
     return 0;
 }
 
@@ -535,7 +535,8 @@ Pdata_pop(Pdata *self)
         Pdata_stack_underflow(self);
         return NULL;
     }
-    return self->data[--Py_SIZE(self)];
+    Py_INC_SIZE(self, -1);
+    return self->data[Py_SIZE(self)];
 }
 #define PDATA_POP(D, V) do { (V) = Pdata_pop((D)); } while (0)
 
@@ -545,7 +546,8 @@ Pdata_push(Pdata *self, PyObject *obj)
     if (Py_SIZE(self) == self->allocated && Pdata_grow(self) < 0) {
         return -1;
     }
-    self->data[Py_SIZE(self)++] = obj;
+    self->data[Py_SIZE(self)] = obj;
+    Py_INC_SIZE(self, 1);
     return 0;
 }
 
@@ -575,7 +577,7 @@ Pdata_poptuple(Pdata *self, Py_ssize_t start)
     for (i = start, j = 0; j < len; i++, j++)
         PyTuple_SET_ITEM(tuple, j, self->data[i]);
 
-    Py_SIZE(self) = start;
+    Py_SET_SIZE(self, start);
     return tuple;
 }
 
@@ -592,7 +594,7 @@ Pdata_poplist(Pdata *self, Py_ssize_t start)
     for (i = start, j = 0; j < len; i++, j++)
         PyList_SET_ITEM(list, j, self->data[i]);
 
-    Py_SIZE(self) = start;
+    Py_SET_SIZE(self, start);
     return list;
 }
 
@@ -5685,7 +5687,7 @@ load_pop(UnpicklerObject *self)
     else {
         len--;
         Py_DECREF(self->stack->data[len]);
-        Py_SIZE(self->stack) = len;
+        Py_SET_SIZE(self->stack, len);
     }
     return 0;
 }
@@ -6029,13 +6031,13 @@ do_append(UnpicklerObject *self, Py_ssize_t x)
                 result = _Pickle_FastCall(append_func, value);
                 if (result == NULL) {
                     Pdata_clear(self->stack, i + 1);
-                    Py_SIZE(self->stack) = x;
+                    Py_SET_SIZE(self->stack, x);
                     Py_DECREF(append_func);
                     return -1;
                 }
                 Py_DECREF(result);
             }
-            Py_SIZE(self->stack) = x;
+            Py_SET_SIZE(self->stack, x);
             Py_DECREF(append_func);
         }
     }
@@ -6157,12 +6159,12 @@ load_additems(UnpicklerObject *self)
             result = _Pickle_FastCall(add_func, item);
             if (result == NULL) {
                 Pdata_clear(self->stack, i + 1);
-                Py_SIZE(self->stack) = mark;
+                Py_SET_SIZE(self->stack, mark);
                 return -1;
             }
             Py_DECREF(result);
         }
-        Py_SIZE(self->stack) = mark;
+        Py_SET_SIZE(self->stack, mark);
     }
 
     return 0;

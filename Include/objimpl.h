@@ -143,7 +143,7 @@ PyAPI_FUNC(PyVarObject *) _PyObject_NewVar(PyTypeObject *, Py_ssize_t);
 #define PyObject_INIT(op, typeobj) \
     ( ((_PyObjectImpl*)(op))->ob_type = typeobj, _Py_NewReference((PyObject *)(op)), (op) )
 #define PyObject_INIT_VAR(op, typeobj, size) \
-    ( Py_SIZE(op) = (size), PyObject_INIT((op), (typeobj)) )
+    ( ((_PyVarObjectImpl*)(op))->ob_size = size, PyObject_INIT((op), (typeobj)) )
 
 #define _PyObject_SIZE(typeobj) ( (typeobj)->tp_basicsize )
 

@@ -86,6 +86,7 @@ whose size is determined when the object is allocated.
 /* for better backwards compatibility, use the old names */
 #define _object_impl _object
 #define _PyObjectImpl PyObject
+#define _PyVarObjectImpl PyVarObject
 #endif
 
 /* PyObject_HEAD defines the initial segment of every PyObject. */
@@ -104,7 +105,7 @@ whose size is determined when the object is allocated.
  * has room for ob_size elements.  Note that ob_size is an element count,
  * not necessarily a byte count.
  */
-#define PyObject_VAR_HEAD      PyVarObject ob_base;
+#define PyObject_VAR_HEAD      _PyVarObjectImpl ob_base;
 #define Py_INVALID_SIZE (Py_ssize_t)-1
 
 /* Nothing is actually declared to be a PyObject, but every pointer to
@@ -118,16 +119,18 @@ typedef struct _object_impl {
     struct _typeobject *ob_type;
 } _PyObjectImpl;
 
-#ifdef WITH_OPAQUE_PYOBJECT
-typedef struct _object PyObject;
-#else
-typedef _PyObjectImpl PyObject;
-#endif
-
-typedef struct {
+typedef struct _varobject_impl {
     struct _object_impl ob_base;
     Py_ssize_t ob_size; /* Number of items in variable part */
-} PyVarObject;
+} _PyVarObjectImpl;
+
+#ifdef WITH_OPAQUE_PYOBJECT
+typedef struct _object PyObject;
+typedef struct _varobject PyVarObject;
+#else
+typedef _PyObjectImpl PyObject;
+typedef _PyVarObjectImpl PyVarObject;
+#endif
 
 #ifndef Py_LIMITED_API
 /********************* String Literals ****************************************/
@@ -621,21 +624,30 @@ _Py_REFCNT(PyObject *ob)
     return ((_PyObjectImpl *)ob)->ob_refcnt;
 }
 
+inline Py_ssize_t
+_Py_SIZE(PyVarObject *ob)
+{
+    return ((_PyVarObjectImpl *)ob)->ob_size;
+}
+
 #define Py_REFCNT(ob) (_Py_REFCNT((PyObject *)(ob)))
 #define Py_TP(ob) (_Py_TYPE(ob))
 #define Py_TYPE(ob) (_Py_TYPE((PyObject *)(ob)))
+#define Py_SIZE(ob) (_Py_SIZE((PyVarObject*)(ob)))
 
 #else
 
 #define Py_REFCNT(ob) (((PyObject*)(ob))->ob_refcnt)
 #define Py_TP(ob) ((ob)->ob_type)
 #define Py_TYPE(ob) (((PyObject*)(ob))->ob_type)
+#define Py_SIZE(ob) (((PyVarObject*)(ob))->ob_size)
 
 #endif /* !WITH_OPAQUE_PYOBJECT */
 
-#define Py_SIZE(ob) (((PyVarObject*)(ob))->ob_size)
 #define Py_SET_TYPE(ob, tp) (((_PyObjectImpl*)(ob))->ob_type = (tp))
 #define Py_SET_REFCNT(ob, n) (((_PyObjectImpl*)(ob))->ob_refcnt = (n))
+#define Py_SET_SIZE(ob, n) (((_PyVarObjectImpl*)(ob))->ob_size = (n))
+#define Py_INC_SIZE(ob, n) (((_PyVarObjectImpl*)(ob))->ob_size += (n))
 
 /* Helpers for printing recursive container types */
 PyAPI_FUNC(int) Py_ReprEnter(PyObject *);
