@@ -99,6 +99,15 @@ _PyLong_NumDigits(PyLongObject *v)
 #ifdef Py_DEBUG
     assert(PyLong_Check(v));
 #endif
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v)) {
+        ssize_t ival = _PyFixedInt_Val((PyObject *)v);
+        if (ival == 0) {
+            return 0;
+        }
+        return (ival > 0) ? 1 : -1;
+    }
+#endif
     return Py_SIZE(v);
 }
 

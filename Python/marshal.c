@@ -223,20 +223,28 @@ w_short_pstring(const char *s, Py_ssize_t n, WFILE *p)
     w_byte((t) | flag, (p)); \
 } while(0)
 
+/* number of digits in long integer */
+#define NDIGITS(v) _PyLong_NumDigits((PyLongObject *)v)
+
 static void
-w_PyLong(PyLongObject *ob, char flag, WFILE *p)
+w_PyLong(PyLongObject *obj, char flag, WFILE *p)
 {
     Py_ssize_t i, j, n, l;
     digit d;
+#ifdef WITH_FIXEDINT
+    PyLongObject *ob = (PyLongObject *)_PyFixedInt_Untag((PyObject *)obj);
+#else
+    const PyLongObject *ob = obj;
+#endif
 
     W_TYPE(TYPE_LONG, p);
-    if (_PyLong_NumDigits(ob) == 0) {
+    if (NDIGITS(ob) == 0) {
         w_long((long)0, p);
-        return;
+        goto out;
     }
 
     /* set l to number of base PyLong_MARSHAL_BASE digits */
-    n = Py_ABS(Py_SIZE(ob));
+    n = Py_ABS(NDIGITS(ob));
     l = (n-1) * PyLong_MARSHAL_RATIO;
     d = ob->ob_digit[n-1];
     assert(d != 0); /* a PyLong is always normalized */
@@ -247,9 +255,9 @@ w_PyLong(PyLongObject *ob, char flag, WFILE *p)
     if (l > SIZE32_MAX) {
         p->depth--;
         p->error = WFERR_UNMARSHALLABLE;
-        return;
+        goto out;
     }
-    w_long((long)(Py_SIZE(ob) > 0 ? l : -l), p);
+    w_long((long)(NDIGITS(ob) > 0 ? l : -l), p);
 
     for (i=0; i < n-1; i++) {
         d = ob->ob_digit[i];
@@ -264,6 +272,11 @@ w_PyLong(PyLongObject *ob, char flag, WFILE *p)
         w_short(d & PyLong_MARSHAL_MASK, p);
         d >>= PyLong_MARSHAL_SHIFT;
     } while (d != 0);
+out:
+#ifdef WITH_FIXEDINT
+    Py_XDECREF(ob);
+#endif
+    return;
 }
 
 static void

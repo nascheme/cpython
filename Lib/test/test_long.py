@@ -953,24 +953,6 @@ class LongTest(unittest.TestCase):
         self.assertEqual(huge >> (sys.maxsize + 1), (1 << 499) + 5)
         self.assertEqual(huge >> (sys.maxsize + 1000), 0)
 
-    def test_small_ints(self):
-        for i in range(-5, 257):
-            self.assertIs(i, i + 0)
-            self.assertIs(i, i * 1)
-            self.assertIs(i, i - 0)
-            self.assertIs(i, i // 1)
-            self.assertIs(i, i & -1)
-            self.assertIs(i, i | 0)
-            self.assertIs(i, i ^ 0)
-            self.assertIs(i, ~~i)
-            self.assertIs(i, i**1)
-            self.assertIs(i, int(str(i)))
-            self.assertIs(i, i<<2>>2, str(i))
-        # corner cases
-        i = 1 << 70
-        self.assertIs(i - i, 0)
-        self.assertIs(0 * i, 0)
-
     def test_bit_length(self):
         tiny = 1e-10
         for x in range(-65000, 65000):

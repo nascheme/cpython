@@ -86,27 +86,15 @@ get_small_int(sdigit ival)
         return get_small_int((sdigit)ival); \
     } while(0)
 
-/* convert a PyLong of size 1, 0 or -1 to an sdigit */
-#if 0
-#define MEDIUM_VALUE(x) (assert(-1 <= GET_SIZE(x) && GET_SIZE(x) <= 1),   \
-         GET_SIZE(x) < 0 ? -(sdigit)(x)->ob_digit[0] :   \
-             (GET_SIZE(x) == 0 ? (sdigit)0 :                             \
-              (sdigit)(x)->ob_digit[0]))
-#endif
-static sdigit
-medium_value(PyLongObject *x)
-{
-    assert(-1 <= GET_SIZE(x) && GET_SIZE(x) <= 1);
-    return (GET_SIZE(x) < 0 ? -(sdigit)(x)->ob_digit[0] :
-            (GET_SIZE(x) == 0 ? (sdigit)0 :
-             (sdigit)(x)->ob_digit[0]));
-};
-#define MEDIUM_VALUE(x) (medium_value(x))
-
 
 static PyLongObject *
 maybe_small_long(PyLongObject *v)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v)) {
+        return v;
+    }
+#endif
     if (v && Py_ABS(NDIGITS(v)) <= 1) {
         sdigit ival = MEDIUM_VALUE(v);
         if (-NSMALLNEGINTS <= ival && ival < NSMALLPOSINTS) {
@@ -148,20 +136,19 @@ fill_digits(PyLongObject *a, Py_ssize_t a_offset,
 
 #define MAYBE_TAG(v) (v)
 
-/* If a freshly-allocated int is already shared, it must
-   be a small integer, so negating it must go to PyLong_FromLong */
+static PyObject * long_sub(PyLongObject *a, PyLongObject *b);
+
 Py_LOCAL_INLINE(void)
 _PyLong_Negate(PyLongObject **x_p)
 {
     PyLongObject *x;
-
     x = (PyLongObject *)*x_p;
     if (!IS_TAGGED(x) && Py_REFCNT(x) == 1) {
         SET_NDIGITS(x, -NDIGITS(x));
         return;
     }
 
-    *x_p = (PyLongObject *)PyLong_FromLong(-MEDIUM_VALUE(x));
+    *x_p = (PyLongObject *) long_sub((PyLongObject *)_PyLong_Zero, x);
     Py_DECREF(x);
 }
 
@@ -191,6 +178,12 @@ _PyLong_Negate(PyLongObject **x_p)
 static PyLongObject *
 long_normalize(PyLongObject *v)
 {
+#if WITH_FIXEDINT
+    if (_PyFixedInt_Check(v)) {
+        // FIXME: does this leak since it returns a new ref?
+        return (PyLongObject *)obj_as_long((PyObject *)v);
+    }
+#endif
     Py_ssize_t j = Py_ABS(NDIGITS(v));
     Py_ssize_t i = j;
 
@@ -2824,6 +2817,11 @@ static int
 long_divrem(PyLongObject *a, PyLongObject *b,
             PyLongObject **pdiv, PyLongObject **prem)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(a) || _PyFixedInt_Check(b)) {
+        return fixedint_divrem((PyObject *)a, (PyObject *)b, pdiv, prem);
+    }
+#endif
     Py_ssize_t size_a = Py_ABS(NDIGITS(a)), size_b = Py_ABS(NDIGITS(b));
     PyLongObject *z;
 
@@ -4936,6 +4934,11 @@ long_long(PyObject *v)
 PyObject *
 _PyLong_GCD(PyObject *aarg, PyObject *barg)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(aarg) || _PyFixedInt_Check(barg)) {
+        return fixedint_gcd(aarg, barg);
+    }
+#endif
     PyLongObject *a, *b, *c = NULL, *d = NULL, *r;
     stwodigits x, y, q, s, t, c_carry, d_carry;
     stwodigits A, B, C, D, T;
@@ -5222,8 +5225,10 @@ long_subtype_new(PyTypeObject *type, PyObject *x, PyObject *obase)
     if (tmp == NULL)
         return NULL;
     assert(PyLong_Check(tmp));
+#ifdef WITH_FIXEDINT
     // FIXME: not sure why we have fixedint here
     tmp = (PyLongObject *)obj_as_long((PyObject *)tmp);
+#endif
     n = NDIGITS(tmp);
     if (n < 0)
         n = -n;
@@ -5383,6 +5388,10 @@ _PyLong_DivmodNear(PyObject *a, PyObject *b)
 static PyObject *
 long_round(PyObject *self, PyObject *args)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(self))
+        return fixedint_round(self, args);
+#endif
     PyObject *o_ndigits=NULL, *temp, *result, *ndigits;
 
     /* To round an integer m to the nearest 10**n (n positive), we make use of
@@ -5479,28 +5488,38 @@ static PyObject *
 int_bit_length_impl(PyObject *self)
 /*[clinic end generated code: output=fc1977c9353d6a59 input=e4eb7a587e849a32]*/
 {
-    PyLongObject *result, *x, *y;
+#ifdef WITH_FIXEDINT
+    PyObject *v = _PyFixedInt_Untag(self);
+#else
+    PyObject *v = self;
+    Py_INCREF(v);
+#endif
+    PyLongObject *result = NULL, *x, *y;
     Py_ssize_t ndigits;
     int msd_bits;
     digit msd;
 
-    assert(self != NULL);
-    assert(PyLong_Check(self));
+    assert(v != NULL);
+    assert(PyLong_Check(v));
 
     ndigits = Py_ABS(NDIGITS(self));
-    if (ndigits == 0)
+    if (ndigits == 0) {
+        Py_DECREF(v);
         return PyLong_FromLong(0);
+    }
 
-    msd = ((PyLongObject *)self)->ob_digit[ndigits-1];
+    msd = ((PyLongObject *)v)->ob_digit[ndigits-1];
     msd_bits = bits_in_digit(msd);
 
-    if (ndigits <= PY_SSIZE_T_MAX/PyLong_SHIFT)
+    if (ndigits <= PY_SSIZE_T_MAX/PyLong_SHIFT) {
+        Py_DECREF(v);
         return PyLong_FromSsize_t((ndigits-1)*PyLong_SHIFT + msd_bits);
+    }
 
     /* expression above may overflow; use Python integers instead */
     result = (PyLongObject *)PyLong_FromSsize_t(ndigits - 1);
     if (result == NULL)
-        return NULL;
+        goto error;
     x = (PyLongObject *)PyLong_FromLong(PyLong_SHIFT);
     if (x == NULL)
         goto error;
@@ -5524,6 +5543,7 @@ int_bit_length_impl(PyObject *self)
     return MAYBE_TAG((PyObject *)result);
 
   error:
+    Py_DECREF(v);
     Py_DECREF(result);
     return NULL;
 }
@@ -5867,7 +5887,7 @@ _PyLong_Init(void)
         else {
             (void)PyObject_INIT(v, &PyLong_Type);
         }
-        Py_SIZE(v) = size;
+        SET_NDIGITS(v, size);
         v->ob_digit[0] = (digit)abs(ival);
     }
 #endif

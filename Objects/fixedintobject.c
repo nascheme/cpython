@@ -1,6 +1,4 @@
-/* ixed integer object, stored tagged pointer */
-
-//#include "Python.h"
+/* Fixed integer object, stored tagged pointer */
 
 #ifdef WITH_FIXEDINT
 
@@ -16,12 +14,19 @@ typedef struct {
 
 static PyObject* _PyLong_FromLongLong(long long ival);
 
+Py_ssize_t _PyFixedInt_Val(PyObject *v)
+{
+    assert(IS_TAGGED(v));
+    ssize_t ival = UNTAG_IT(v);
+    return ival;
+}
+
 // box v if needed, return new ref
-static PyObject *
-obj_as_long(PyObject *v)
+PyObject *
+_PyFixedInt_Untag(PyObject *v)
 {
     PyObject *a;
-    if (IS_TAGGED(v)) {
+    if (_PyFixedInt_Check(v)) {
         ssize_t ival = UNTAG_IT(v);
         a = _PyLong_FromLongLong(ival);
     }
@@ -31,6 +36,9 @@ obj_as_long(PyObject *v)
     }
     return a;
 }
+
+// FIXME: cleanup
+#define obj_as_long _PyFixedInt_Untag
 
 
 PyObject *
@@ -135,8 +143,17 @@ fixedint_sign(PyObject *v)
 static size_t
 fixedint_numbits(PyObject *v)
 {
+    if (_PyFixedInt_Check(v)) {
+        ssize_t ival = UNTAG_IT(v);
+        if (Py_ABS(ival) <= ((1L)<<48)) {
+            return 48;
+        }
+        else {
+            return MAX_BITS;
+        }
+    }
     PyObject *w = obj_as_long(v);
-    size_t result = _PyLong_Sign(w);
+    size_t result = _PyLong_NumBits(w);
     Py_XDECREF(w);
     return result;
 }
@@ -267,6 +284,20 @@ fixedint_richcompare(PyObject *v, PyObject *w, int op)
     return rv;
 }
 
+#if 0
+Py_LOCAL_INLINE(void) _PyLong_Negate(PyLongObject **x_p);
+
+static void
+fixedint_negate(PyObject **v_p)
+{
+    PyObject *v = obj_as_long(*v_p);
+    _PyLong_Negate((PyLongObject**)(&v));
+    Py_DECREF(*v_p);
+    *v_p = v;
+    Py_XDECREF(v);
+}
+#endif
+
 static PyObject *
 fixedint_add_slow(PyObject *v, PyObject *w)
 {
@@ -346,6 +377,19 @@ fixedint_divmod(PyObject *v, PyObject *w)
     return rv;
 }
 
+static PyObject *long_round(PyObject *self, PyObject *args);
+
+static PyObject *
+fixedint_round(PyObject *v, PyObject *args)
+{
+    PyObject *a = obj_as_long(v);
+    PyObject *b = obj_as_long(v);
+    PyObject *rv = long_round(a, b);
+    Py_DECREF(a);
+    Py_DECREF(b);
+    return rv;
+}
+
 static PyObject *
 fixedint_pow(PyObject *v, PyObject *w, PyObject *z)
 {
@@ -376,7 +420,7 @@ static double
 fixedint_frexp(PyObject *v, Py_ssize_t *e)
 {
     PyObject *w = obj_as_long(v);
-    double rv = _PyLong_Frexp((PyLongObject *)v, e);
+    double rv = _PyLong_Frexp((PyLongObject *)w, e);
     Py_XDECREF(w);
     return rv;
 }
@@ -385,7 +429,7 @@ static double
 fixedint_as_double(PyObject *v)
 {
     PyObject *w = obj_as_long(v);
-    double rv = PyLong_AsDouble(v);
+    double rv = PyLong_AsDouble(w);
     Py_XDECREF(w);
     return rv;
 }
@@ -407,6 +451,21 @@ fixedint_true_divide(PyObject *v, PyObject *w)
     PyObject *a = obj_as_long(v);
     PyObject *b = obj_as_long(w);
     PyObject *rv = PyLong_Type.tp_as_number->nb_true_divide(a, b);
+    Py_XDECREF(a);
+    Py_XDECREF(b);
+    return rv;
+}
+
+static int long_divrem(PyLongObject *a, PyLongObject *b,
+                       PyLongObject **pdiv, PyLongObject **prem);
+
+static int
+fixedint_divrem(PyObject *v, PyObject *w,
+                PyLongObject **pdiv, PyLongObject **prem)
+{
+    PyObject *a = obj_as_long(v);
+    PyObject *b = obj_as_long(w);
+    int rv = long_divrem((PyLongObject*)a, (PyLongObject*)b, pdiv, prem);
     Py_XDECREF(a);
     Py_XDECREF(b);
     return rv;
@@ -480,6 +539,17 @@ fixedint_lshift(PyObject *v, PyObject *w)
     PyObject *a = obj_as_long(v);
     PyObject *b = obj_as_long(w);
     PyObject *rv = PyLong_Type.tp_as_number->nb_lshift(a, b);
+    Py_XDECREF(a);
+    Py_XDECREF(b);
+    return rv;
+}
+
+static PyObject *
+fixedint_gcd(PyObject *v, PyObject *w)
+{
+    PyObject *a = obj_as_long(v);
+    PyObject *b = obj_as_long(w);
+    PyObject *rv = _PyLong_GCD(a, b);
     Py_XDECREF(a);
     Py_XDECREF(b);
     return rv;
