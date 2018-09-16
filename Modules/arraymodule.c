@@ -2571,7 +2571,13 @@ array_buffer_getbuf(arrayobject *self, Py_buffer *view, int flags)
     view->suboffsets = NULL;
     view->shape = NULL;
     if ((flags & PyBUF_ND)==PyBUF_ND) {
-        view->shape = &(((_PyVarObjectImpl *)self)->ob_size);
+#if WITH_OPAQUE_PYOBJECT
+        /* messy looking because this is looking inside parts of
+         * PyVarObject that normally should be opaque */
+        view->shape = &(((_PyVarObjectImpl *)self)->_ob_size);
+#else
+        view->shape = &(Py_SIZE(self));
+#endif
     }
     view->strides = NULL;
     if ((flags & PyBUF_STRIDES)==PyBUF_STRIDES)

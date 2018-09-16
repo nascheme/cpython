@@ -140,10 +140,19 @@ PyAPI_FUNC(PyVarObject *) _PyObject_NewVar(PyTypeObject *, Py_ssize_t);
 
 /* Macros trading binary compatibility for speed. See also pymem.h.
    Note that these macros expect non-NULL object pointers.*/
+#ifdef WITH_OPAQUE_PYOBJECT
 #define PyObject_INIT(op, typeobj) \
-    ( ((_PyObjectImpl*)(op))->ob_type = typeobj, _Py_NewReference((PyObject *)(op)), (op) )
+    ( ((_PyObjectImpl*)(op))->_ob_type = typeobj, \
+      _Py_NewReference((PyObject *)(op)), (op) )
 #define PyObject_INIT_VAR(op, typeobj, size) \
-    ( ((_PyVarObjectImpl*)(op))->ob_size = size, PyObject_INIT((op), (typeobj)) )
+    ( ((_PyVarObjectImpl*)(op))->_ob_size = size, \
+      PyObject_INIT((op), (typeobj)) )
+#else
+#define PyObject_INIT(op, typeobj) \
+    ( Py_TYPE(op) = typeobj, _Py_NewReference((PyObject *)(op)), (op) )
+#define PyObject_INIT_VAR(op, typeobj, size) \
+    ( Py_SIZE(op) = size, PyObject_INIT((op), (typeobj)) )
+#endif
 
 #define _PyObject_SIZE(typeobj) ( (typeobj)->tp_basicsize )
 
