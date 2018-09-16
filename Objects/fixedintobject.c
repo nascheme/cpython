@@ -86,6 +86,21 @@ fixedint_format(PyObject *v, int base)
 }
 
 
+static int
+fixedint_as_int(PyObject *v)
+{
+    if (_PyFixedInt_Check(v)) {
+        ssize_t ival = UNTAG_IT(v);
+        if (!(ival > INT_MAX && ival < INT_MIN)) {
+            return ival;
+        }
+    }
+    PyObject *w = obj_as_long(v);
+    int result = _PyLong_AsInt(w);
+    Py_XDECREF(w);
+    return result;
+}
+
 static long
 fixedint_as_long_and_overflow(PyObject *v, int *overflow)
 {
@@ -170,9 +185,15 @@ fixedint_as_voidptr(PyObject *v)
 static long long
 fixedint_as_longlong(PyObject *v)
 {
-    PyObject *w = obj_as_long(v);
-    long long result = PyLong_AsLongLong(w);
-    Py_XDECREF(w);
+    long long result;
+    if (_PyFixedInt_Check(v)) {
+        result = UNTAG_IT(v);
+    }
+    else {
+        PyObject *w = obj_as_long(v);
+        result = PyLong_AsLongLong(w);
+        Py_XDECREF(w);
+    }
     return result;
 }
 
@@ -197,9 +218,15 @@ fixedint_as_unsignedlonglongmask(PyObject *v)
 static long long
 fixedint_as_longlong_and_overflow(PyObject *v, int *overflow)
 {
-    PyObject *w = obj_as_long(v);
-    long long result = PyLong_AsLongLongAndOverflow(w, overflow);
-    Py_XDECREF(w);
+    long long result;
+    if (_PyFixedInt_Check(v)) {
+        result = UNTAG_IT(v);
+    }
+    else {
+        PyObject *w = obj_as_long(v);
+        result = PyLong_AsLongLongAndOverflow(w, overflow);
+        Py_XDECREF(w);
+    }
     return result;
 }
 

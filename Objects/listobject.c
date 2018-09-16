@@ -2736,6 +2736,15 @@ static PySequenceMethods list_as_sequence = {
 static PyObject *
 list_subscript(PyListObject* self, PyObject* item)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(item)) {
+        Py_ssize_t i = _PyFixedInt_Val(item);
+        if (i < 0)
+            i += PyList_GET_SIZE(self);
+        return list_item(self, i);
+    }
+    else
+#endif
     if (PyIndex_Check(item)) {
         Py_ssize_t i;
         i = PyNumber_AsSsize_t(item, PyExc_IndexError);

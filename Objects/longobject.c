@@ -306,11 +306,9 @@ PyObject *
 PyLong_FromLong(long ival)
 {
 #ifdef WITH_FIXEDINT
-#if 1
     if (CAN_TAG(ival)) {
         return TAG_IT(ival);
     }
-#endif
 #endif
     PyLongObject *v;
     unsigned long abs_ival;
@@ -580,6 +578,10 @@ PyLong_AsLong(PyObject *obj)
 int
 _PyLong_AsInt(PyObject *obj)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(obj))
+        return fixedint_as_int(obj);
+#endif
     int overflow;
     long result = PyLong_AsLongAndOverflow(obj, &overflow);
     if (overflow || result > INT_MAX || result < INT_MIN) {
@@ -1274,6 +1276,11 @@ PyLong_FromUnsignedLongLong(unsigned long long ival)
 PyObject *
 PyLong_FromSsize_t(Py_ssize_t ival)
 {
+#ifdef WITH_FIXEDINT
+    if (CAN_TAG(ival)) {
+        return TAG_IT(ival);
+    }
+#endif
     PyLongObject *v;
     size_t abs_ival;
     size_t t;  /* unsigned so >> doesn't propagate sign bit */
