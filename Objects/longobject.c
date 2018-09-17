@@ -45,11 +45,33 @@ long_set_ndigits(PyObject *v, Py_ssize_t n)
 
 #define SET_NDIGITS(v, n) long_set_ndigits((PyObject*)(v), n)
 
+static ssize_t
+long_get_digit(PyLongObject *v, Py_ssize_t i)
+{
+    assert(i <= Py_ABS(NDIGITS(v)));
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v)) {
+        unsigned long ival = Py_ABS(_PyFixedInt_Val((PyObject*)v));
+        if (i == 0) {
+            return Py_SAFE_DOWNCAST(ival & PyLong_MASK, unsigned long, digit);
+        }
+        else {
+            /* second digit */
+            return Py_SAFE_DOWNCAST(ival >> PyLong_SHIFT, unsigned long,
+                                    digit);
+        }
+    }
+#endif
+    return v->ob_digit[i];
+}
+#define GET_DIGIT(v, i) long_get_digit((PyLongObject*)(v), i)
+
+
 /* convert a PyLong of size 1, 0 or -1 to an sdigit */
 #define MEDIUM_VALUE(x) (assert(-1 <= NDIGITS(x) && NDIGITS(x) <= 1),\
-         NDIGITS(x) < 0 ? -(sdigit)(x)->ob_digit[0] :                    \
-             (NDIGITS(x) == 0 ? (sdigit)0 :                              \
-              (sdigit)(x)->ob_digit[0]))
+         NDIGITS(x) < 0 ? -(sdigit)GET_DIGIT(x, 0) :                 \
+             (NDIGITS(x) == 0 ? (sdigit)0 :                          \
+              (sdigit)GET_DIGIT(x, 0)))
 
 PyObject *_PyLong_Zero = NULL;
 PyObject *_PyLong_One = NULL;
@@ -3440,7 +3462,12 @@ long_sub(PyLongObject *a, PyLongObject *b)
             z = x_add(a, b);
         if (z != NULL) {
             assert(NDIGITS(z) == 0 || Py_REFCNT(z) == 1);
-            Py_SIZE(z) = -(Py_SIZE(z));
+#ifdef WITH_FIXEDINT
+            if (!_PyFixedInt_Check(z))
+#endif
+            {
+                Py_SIZE(z) = -(NDIGITS(z));
+            }
         }
     }
     else {
@@ -3884,8 +3911,8 @@ long_mul(PyLongObject *a, PyLongObject *b)
 static PyObject *
 fast_mod(PyLongObject *a, PyLongObject *b)
 {
-    sdigit left = a->ob_digit[0];
-    sdigit right = b->ob_digit[0];
+    sdigit left = GET_DIGIT(a, 0);
+    sdigit right = GET_DIGIT(b, 0);
     sdigit mod;
 
     assert(Py_ABS(NDIGITS(a)) == 1);
@@ -3907,8 +3934,8 @@ fast_mod(PyLongObject *a, PyLongObject *b)
 static PyObject *
 fast_floor_div(PyLongObject *a, PyLongObject *b)
 {
-    sdigit left = a->ob_digit[0];
-    sdigit right = b->ob_digit[0];
+    sdigit left = GET_DIGIT(a, 0);
+    sdigit right = GET_DIGIT(b, 0);
     sdigit div;
 
     assert(Py_ABS(NDIGITS(a)) == 1);
@@ -4430,7 +4457,7 @@ long_pow(PyObject *v, PyObject *w, PyObject *x)
 
         /* if modulus == 1:
                return 0 */
-        if ((NDIGITS(c) == 1) && (c->ob_digit[0] == 1)) {
+        if ((NDIGITS(c) == 1) && (GET_DIGIT(c, 0) == 1)) {
             z = (PyLongObject *)PyLong_FromLong(0L);
             goto Done;
         }

@@ -1982,7 +1982,7 @@ dec_from_long(PyTypeObject *type, const PyObject *v,
         return NULL;
     }
 
-    ob_size = Py_SIZE(l);
+    ob_size = _PyLong_NumDigits(l);
     if (ob_size == 0) {
         _dec_settriple(dec, MPD_POS, 0, 0);
         return dec;
@@ -1996,6 +1996,16 @@ dec_from_long(PyTypeObject *type, const PyObject *v,
         len = ob_size;
         sign = MPD_POS;
     }
+
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(l)) {
+        ssize_t ival = _PyFixedInt_Val((PyObject*)l);
+        // FIXME: handle overflow
+        _dec_settriple(dec, sign, (uint32_t)ival, 0);
+        mpd_qfinalize(MPD(dec), ctx, status);
+        return dec;
+    }
+#endif
 
     if (len == 1) {
         _dec_settriple(dec, sign, *l->ob_digit, 0);
