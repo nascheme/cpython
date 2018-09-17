@@ -233,14 +233,6 @@ class IntTestCases(unittest.TestCase):
         self.assertRaises(ValueError, int, "1__00")
         self.assertRaises(ValueError, int, "100_")
 
-    @support.cpython_only
-    def test_small_ints(self):
-        # Bug #3236: Return small longs from PyLong_FromString
-        self.assertIs(int('10'), 10)
-        self.assertIs(int('-1'), -1)
-        self.assertIs(int(b'10'), 10)
-        self.assertIs(int(b'-1'), -1)
-
     def test_no_args(self):
         self.assertEqual(int(), 0)
 

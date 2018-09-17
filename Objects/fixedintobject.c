@@ -41,6 +41,13 @@ _PyFixedInt_Untag(PyObject *v)
 #define obj_as_long _PyFixedInt_Untag
 
 
+static ssize_t
+fixedint_get_digit(PyLongObject *v, Py_ssize_t i)
+{
+    size_t ival = Py_ABS(_PyFixedInt_Val((PyObject*)v));
+    return (ival >> (PyLong_SHIFT*i)) & PyLong_MASK;
+}
+
 PyObject *
 _PyFixedInt_New(PyObject *self, PyObject *args)
 {
@@ -348,7 +355,7 @@ fixedint_add_slow(PyObject *v, PyObject *w)
     return rv;
 }
 
-/* used by BINARY_ADD */
+/* used by PyNumber_Add */
 PyObject *
 _PyFixedInt_Add(PyObject *v, PyObject *w)
 {

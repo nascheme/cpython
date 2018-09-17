@@ -105,7 +105,13 @@ _PyLong_NumDigits(PyLongObject *v)
         if (ival == 0) {
             return 0;
         }
-        return (ival > 0) ? 1 : -1;
+        size_t uval = Py_ABS(ival);
+        int digits = 0;
+        while (uval) {
+            uval >>= PyLong_SHIFT;
+            digits++;
+        }
+        return (ival > 0) ? digits : -digits;
     }
 #endif
     return Py_SIZE(v);

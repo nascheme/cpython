@@ -51,15 +51,7 @@ long_get_digit(PyLongObject *v, Py_ssize_t i)
     assert(i <= Py_ABS(NDIGITS(v)));
 #ifdef WITH_FIXEDINT
     if (_PyFixedInt_Check(v)) {
-        unsigned long ival = Py_ABS(_PyFixedInt_Val((PyObject*)v));
-        if (i == 0) {
-            return Py_SAFE_DOWNCAST(ival & PyLong_MASK, unsigned long, digit);
-        }
-        else {
-            /* second digit */
-            return Py_SAFE_DOWNCAST(ival >> PyLong_SHIFT, unsigned long,
-                                    digit);
-        }
+        return fixedint_get_digit(v, i);
     }
 #endif
     return v->ob_digit[i];
@@ -404,11 +396,9 @@ PyObject *
 PyLong_FromUnsignedLong(unsigned long ival)
 {
 #ifdef WITH_FIXEDINT
-#if 1
     if (ival < MAX_TAGGED_VALUE) {
         return TAG_IT(ival);
     }
-#endif
 #endif
     PyLongObject *v;
     unsigned long t;
@@ -1252,11 +1242,9 @@ PyObject *
 PyLong_FromLongLong(long long ival)
 {
 #ifdef WITH_FIXEDINT
-#if 0
     if (CAN_TAG(ival)) {
         return TAG_IT(ival);
     }
-#endif
 #endif
 
     CHECK_SMALL_INT(ival);
@@ -2854,7 +2842,7 @@ long_divrem(PyLongObject *a, PyLongObject *b,
     }
     if (size_a < size_b ||
         (size_a == size_b &&
-         a->ob_digit[size_a-1] < b->ob_digit[size_b-1])) {
+         GET_DIGIT(a, size_a-1) < GET_DIGIT(b, size_b-1))) {
         /* |a| < |b|. */
         *prem = (PyLongObject *)long_long((PyObject *)a);
         if (*prem == NULL) {
@@ -2866,7 +2854,7 @@ long_divrem(PyLongObject *a, PyLongObject *b,
     }
     if (size_b == 1) {
         digit rem = 0;
-        z = divrem1(a, b->ob_digit[0], &rem);
+        z = divrem1(a, GET_DIGIT(b, 0), &rem);
         if (z == NULL)
             return -1;
         *prem = (PyLongObject *) PyLong_FromLong((long)rem);
@@ -5375,7 +5363,7 @@ _PyLong_DivmodNear(PyObject *a, PyObject *b)
     cmp = long_compare((PyLongObject *)twice_rem, (PyLongObject *)b);
     Py_DECREF(twice_rem);
 
-    quo_is_odd = NDIGITS(quo) != 0 && ((quo->ob_digit[0] & 1) != 0);
+    quo_is_odd = NDIGITS(quo) != 0 && ((GET_DIGIT(quo, 0) & 1) != 0);
     if ((NDIGITS(b) < 0 ? cmp < 0 : cmp > 0) || (cmp == 0 && quo_is_odd)) {
         /* fix up quotient */
         if (quo_is_neg)
@@ -5511,12 +5499,7 @@ static PyObject *
 int_bit_length_impl(PyObject *self)
 /*[clinic end generated code: output=fc1977c9353d6a59 input=e4eb7a587e849a32]*/
 {
-#ifdef WITH_FIXEDINT
-    PyObject *v = _PyFixedInt_Untag(self);
-#else
     PyObject *v = self;
-    Py_INCREF(v);
-#endif
     PyLongObject *result = NULL, *x, *y;
     Py_ssize_t ndigits;
     int msd_bits;
@@ -5527,15 +5510,13 @@ int_bit_length_impl(PyObject *self)
 
     ndigits = Py_ABS(NDIGITS(self));
     if (ndigits == 0) {
-        Py_DECREF(v);
         return PyLong_FromLong(0);
     }
 
-    msd = ((PyLongObject *)v)->ob_digit[ndigits-1];
+    msd = GET_DIGIT(v, ndigits-1);
     msd_bits = bits_in_digit(msd);
 
     if (ndigits <= PY_SSIZE_T_MAX/PyLong_SHIFT) {
-        Py_DECREF(v);
         return PyLong_FromSsize_t((ndigits-1)*PyLong_SHIFT + msd_bits);
     }
 
@@ -5566,7 +5547,6 @@ int_bit_length_impl(PyObject *self)
     return MAYBE_TAG((PyObject *)result);
 
   error:
-    Py_DECREF(v);
     Py_DECREF(result);
     return NULL;
 }

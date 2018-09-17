@@ -616,7 +616,7 @@ inline Py_ssize_t
 _Py_REFCNT(PyObject *ob)
 {
     if (_PyFixedInt_Check(ob)) {
-        return 1;
+        return 0xff; /* return something higher than 1 */
     }
     else {
         return ob->ob_refcnt;
