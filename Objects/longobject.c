@@ -1873,7 +1873,7 @@ long_to_decimal_string_internal(PyObject *aa,
     PyLongObject *scratch, *a;
     PyObject *str = NULL;
     Py_ssize_t size, strlen, size_a, i, j;
-    digit *pout, *pin, rem, tenpow;
+    digit *pout, rem, tenpow;
     int negative;
     int d;
     enum PyUnicode_Kind kind;
@@ -1911,11 +1911,10 @@ long_to_decimal_string_internal(PyObject *aa,
     /* convert array of base _PyLong_BASE digits in pin to an array of
        base _PyLong_DECIMAL_BASE digits in pout, following Knuth (TAOCP,
        Volume 2 (3rd edn), section 4.4, Method 1b). */
-    pin = a->ob_digit;
     pout = scratch->ob_digit;
     size = 0;
     for (i = size_a; --i >= 0; ) {
-        digit hi = pin[i];
+        digit hi = GET_DIGIT(a, i);
         for (j = 0; j < size; j++) {
             twodigits z = (twodigits)pout[j] << PyLong_SHIFT | hi;
             hi = (digit)(z / _PyLong_DECIMAL_BASE);
@@ -2111,7 +2110,7 @@ long_format_binary(PyObject *aa, int base, int alternate,
             return -1;
         }
         size_a_in_bits = (size_a - 1) * PyLong_SHIFT +
-                         bits_in_digit(a->ob_digit[size_a - 1]);
+                         bits_in_digit(GET_DIGIT(a, size_a - 1));
         /* Allow 1 character for a '-' sign. */
         sz = negative + (size_a_in_bits + (bits - 1)) / bits;
     }
@@ -2148,7 +2147,7 @@ long_format_binary(PyObject *aa, int base, int alternate,
             int accumbits = 0;   /* # of bits in accum */               \
             Py_ssize_t i;                                               \
             for (i = 0; i < size_a; ++i) {                              \
-                accum |= (twodigits)a->ob_digit[i] << accumbits;        \
+                accum |= (twodigits)GET_DIGIT(a, i) << accumbits;        \
                 accumbits += PyLong_SHIFT;                              \
                 assert(accumbits >= bits);                              \
                 do {                                                    \
@@ -3217,12 +3216,12 @@ long_compare(PyLongObject *a, PyLongObject *b)
     }
     else {
         Py_ssize_t i = Py_ABS(NDIGITS(a));
-        while (--i >= 0 && a->ob_digit[i] == b->ob_digit[i])
+        while (--i >= 0 && GET_DIGIT(a, i) == GET_DIGIT(b, i))
             ;
         if (i < 0)
             sign = 0;
         else {
-            sign = (sdigit)a->ob_digit[i] - (sdigit)b->ob_digit[i];
+            sign = (sdigit)GET_DIGIT(a, i) - (sdigit)GET_DIGIT(b, i);
             if (NDIGITS(a) < 0)
                 sign = -sign;
         }
@@ -5025,9 +5024,9 @@ _PyLong_GCD(PyObject *aarg, PyObject *barg)
              ((twodigits)a->ob_digit[size_a-2] << (PyLong_SHIFT-nbits)) |
              (a->ob_digit[size_a-3] >> nbits));
 
-        y = ((size_b >= size_a - 2 ? b->ob_digit[size_a-3] >> nbits : 0) |
-             (size_b >= size_a - 1 ? (twodigits)b->ob_digit[size_a-2] << (PyLong_SHIFT-nbits) : 0) |
-             (size_b >= size_a ? (twodigits)b->ob_digit[size_a-1] << (2*PyLong_SHIFT-nbits) : 0));
+        y = ((size_b >= size_a - 2 ? GET_DIGIT(b, size_a-3) >> nbits : 0) |
+             (size_b >= size_a - 1 ? (twodigits)GET_DIGIT(b, size_a-2) << (PyLong_SHIFT-nbits) : 0) |
+             (size_b >= size_a ? (twodigits)GET_DIGIT(b, size_a-1) << (2*PyLong_SHIFT-nbits) : 0));
 
         /* inner loop of Lehmer's algorithm; A, B, C, D never grow
            larger than PyLong_MASK during the algorithm. */
