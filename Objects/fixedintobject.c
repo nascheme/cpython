@@ -155,17 +155,29 @@ fixedint_sign(PyObject *v)
     return result;
 }
 
+static const unsigned char fixedint_bit_table[32] = {
+    0, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5
+};
+
+static int
+bits_in_ulong(unsigned long long d)
+{
+    int d_bits = 0;
+    while (d >= 32) {
+        d_bits += 6;
+        d >>= 6;
+    }
+    d_bits += (int)fixedint_bit_table[d];
+    return d_bits;
+}
+
 static size_t
 fixedint_numbits(PyObject *v)
 {
     if (_PyFixedInt_Check(v)) {
         ssize_t ival = UNTAG_IT(v);
-        if (Py_ABS(ival) <= ((1L)<<48)) {
-            return 48;
-        }
-        else {
-            return MAX_BITS;
-        }
+        return bits_in_ulong(Py_ABS(ival));
     }
     PyObject *w = obj_as_long(v);
     size_t result = _PyLong_NumBits(w);
@@ -399,19 +411,6 @@ fixedint_divmod(PyObject *v, PyObject *w)
     PyObject *a = obj_as_long(v);
     PyObject *b = obj_as_long(w);
     PyObject *rv = PyLong_Type.tp_as_number->nb_divmod(a, b);
-    Py_DECREF(a);
-    Py_DECREF(b);
-    return rv;
-}
-
-static PyObject *long_round(PyObject *self, PyObject *args);
-
-static PyObject *
-fixedint_round(PyObject *v, PyObject *args)
-{
-    PyObject *a = obj_as_long(v);
-    PyObject *b = obj_as_long(v);
-    PyObject *rv = long_round(a, b);
     Py_DECREF(a);
     Py_DECREF(b);
     return rv;

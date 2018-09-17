@@ -5416,10 +5416,6 @@ _PyLong_DivmodNear(PyObject *a, PyObject *b)
 static PyObject *
 long_round(PyObject *self, PyObject *args)
 {
-#ifdef WITH_FIXEDINT
-    if (_PyFixedInt_Check(self))
-        return fixedint_round(self, args);
-#endif
     PyObject *o_ndigits=NULL, *temp, *result, *ndigits;
 
     /* To round an integer m to the nearest 10**n (n positive), we make use of
