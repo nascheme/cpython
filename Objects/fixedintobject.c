@@ -22,8 +22,8 @@ static PyObject* _PyLong_FromLongLong(long long ival);
 
 Py_ssize_t _PyFixedInt_Val(PyObject *v)
 {
-    assert(IS_TAGGED(v));
-    ssize_t ival = UNTAG_IT(v);
+    assert(TAGGED_CHECK(v));
+    ssize_t ival = FROM_TAGGED(v);
     return ival;
 }
 
@@ -33,7 +33,7 @@ _PyFixedInt_Untag(PyObject *v)
 {
     PyObject *a;
     if (_PyFixedInt_Check(v)) {
-        ssize_t ival = UNTAG_IT(v);
+        ssize_t ival = FROM_TAGGED(v);
         if (-NSMALLNEGFIXEDINTS <= ival && ival < NSMALLPOSFIXEDINTS) {
             a = (PyObject *)small_fixedints[ival + NSMALLNEGFIXEDINTS];
             Py_INCREF(a);
@@ -67,12 +67,12 @@ _PyFixedInt_New(PyObject *self, PyObject *args)
 
     if (!PyArg_ParseTuple(args, "l", &x))
         return NULL;
-    if (!CAN_TAG(x)) {
+    if (!TAGGED_IN_RANGE(x)) {
         PyErr_SetString(PyExc_ValueError,
                         "value will not fit into fixed integer");
         return NULL;
     }
-    return TAG_IT(x);
+    return AS_TAGGED(x);
 }
 
 static PyObject *
@@ -109,7 +109,7 @@ static int
 fixedint_as_int(PyObject *v)
 {
     if (_PyFixedInt_Check(v)) {
-        ssize_t ival = UNTAG_IT(v);
+        ssize_t ival = FROM_TAGGED(v);
         if (!(ival > INT_MAX && ival < INT_MIN)) {
             return ival;
         }
@@ -195,7 +195,7 @@ static size_t
 fixedint_numbits(PyObject *v)
 {
     if (_PyFixedInt_Check(v)) {
-        ssize_t ival = UNTAG_IT(v);
+        ssize_t ival = FROM_TAGGED(v);
         return bits_in_ulong(Py_ABS(ival));
     }
     PyObject *w = obj_as_long(v);
@@ -218,7 +218,7 @@ fixedint_as_longlong(PyObject *v)
 {
     long long result;
     if (_PyFixedInt_Check(v)) {
-        result = UNTAG_IT(v);
+        result = FROM_TAGGED(v);
     }
     else {
         PyObject *w = obj_as_long(v);
@@ -251,7 +251,7 @@ fixedint_as_longlong_and_overflow(PyObject *v, int *overflow)
 {
     long long result;
     if (_PyFixedInt_Check(v)) {
-        result = UNTAG_IT(v);
+        result = FROM_TAGGED(v);
     }
     else {
         PyObject *w = obj_as_long(v);
@@ -330,7 +330,7 @@ static PyObject *
 fixedint_richcompare(PyObject *v, PyObject *w, int op)
 {
     int result;
-    if (IS_TAGGED(v) && IS_TAGGED(w)) {
+    if (TAGGED_CHECK(v) && TAGGED_CHECK(w)) {
         result = fixedint_compare(v, w);
         Py_RETURN_RICHCOMPARE(result, 0, op);
     }
@@ -372,12 +372,12 @@ PyObject *
 _PyFixedInt_Add(PyObject *v, PyObject *w)
 {
     long a, b, x;
-    a = UNTAG_IT(v);
-    b = UNTAG_IT(w);
+    a = FROM_TAGGED(v);
+    b = FROM_TAGGED(w);
     /* casts in the line below avoid undefined behaviour on overflow */
     x = (long)((unsigned long)a + b);
-    if (((x^a) >= 0 || (x^b) >= 0) && CAN_TAG(x)) {
-        return TAG_IT(x);
+    if (((x^a) >= 0 || (x^b) >= 0) && TAGGED_IN_RANGE(x)) {
+        return AS_TAGGED(x);
     }
     return fixedint_add_slow(v, w);
 }
@@ -387,12 +387,12 @@ PyObject *
 _PyFixedInt_Subtract(PyObject *v, PyObject *w)
 {
     long a, b, x;
-    a = UNTAG_IT(v);
-    b = UNTAG_IT(w);
+    a = FROM_TAGGED(v);
+    b = FROM_TAGGED(w);
     /* casts in the line below avoid undefined behaviour on overflow */
     x = (long)((unsigned long)a - b);
     if ((x^a) >= 0 || (x^~b) >= 0)
-        return TAG_IT(x);
+        return AS_TAGGED(x);
 
     return fixedint_add_slow(v, w);
 }
@@ -400,7 +400,7 @@ _PyFixedInt_Subtract(PyObject *v, PyObject *w)
 static PyObject *
 fixedint_add(PyObject *v, PyObject *w)
 {
-    if (IS_TAGGED(v) && IS_TAGGED(w)) {
+    if (TAGGED_CHECK(v) && TAGGED_CHECK(w)) {
         return _PyFixedInt_Add(v, w);
     }
     return fixedint_add_slow(v, w);
@@ -578,7 +578,7 @@ fixedint_abs(PyObject *v)
 static int
 fixedint_bool(PyObject *v)
 {
-    return UNTAG_IT(v) != 0;
+    return FROM_TAGGED(v) != 0;
 
 }
 

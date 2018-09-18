@@ -5,18 +5,33 @@
 extern "C" {
 #endif
 
+/* Support for storing values in tagged pointers. Due to memory alignment
+   requirements, low order bits of pointers are always zero.  Tags abuse
+   that fact to store non-pointer data (like fixed integers) in pointer
+   data types.  The trick is that you must always be careful to check and
+   untag before trying to de-reference the pointer.
+   */
+
 typedef ssize_t tagged_ptr;
 
-#define MAX_BITS ((sizeof(tagged_ptr) * 8) - 1)
+/* number of bits to use for the tagged value */
+#define TAGGED_MAX_BITS ((sizeof(tagged_ptr) * 8) - 1)
 
-#define MAX_TAGGED_VALUE (((tagged_ptr)1<<(MAX_BITS-1)) - 1)
-#define MIN_TAGGED_VALUE (- ((tagged_ptr)1 << (MAX_BITS-1)))
+/* min/max signed value that can be represented */
+#define TAGGED_MAX_VALUE (((tagged_ptr)1<<(TAGGED_MAX_BITS-1)) - 1)
+#define TAGGED_MIN_VALUE (- ((tagged_ptr)1 << (TAGGED_MAX_BITS-1)))
 
-#define CAN_TAG(v) ((v) >= MIN_TAGGED_VALUE && (v) <= MAX_TAGGED_VALUE)
+/* return true if value can be storedas tagged */
+#define TAGGED_IN_RANGE(v) ((v) >= TAGGED_MIN_VALUE && (v) <= TAGGED_MAX_VALUE)
 
-#define TAG_IT(x) ((PyObject*) (((x) << 1) | 0x01))
-#define UNTAG_IT(x) (((tagged_ptr)(x)) >> 1)
-#define IS_TAGGED(x) (((tagged_ptr)(x)) & 0x01)
+/* shift value and add tag */
+#define AS_TAGGED(x) ((PyObject*) (((x) << 1) | 0x01))
+
+/* remove tag and unshift */
+#define FROM_TAGGED(x) (((tagged_ptr)(x)) >> 1)
+
+/* return true if value is a tagged value */
+#define TAGGED_CHECK(x) (((tagged_ptr)(x)) & 0x01)
 
 #ifdef __cplusplus
 }
