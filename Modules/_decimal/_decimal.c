@@ -2002,7 +2002,7 @@ dec_from_long(PyTypeObject *type, const PyObject *v,
     if (_PyFixedInt_Check(l)) {
         need_decref = 1;
         /* no decref of 'l' needed, it is a tagged pointer */
-        l = _PyFixedInt_Untag(v);
+        l = (PyLongObject *)_PyFixedInt_Untag((PyObject *)l);
         if (l == NULL) {
             return NULL;
         }

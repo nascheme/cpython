@@ -356,12 +356,26 @@ fixedint_negate(PyObject **v_p)
 }
 #endif
 
+enum {OP_ADD, OP_SUB, OP_MUL};
+
+/* slow version of binop */
 static PyObject *
-fixedint_add_slow(PyObject *v, PyObject *w)
+fixedint_binop(PyObject *v, PyObject *w, int op)
 {
     PyObject *a = obj_as_long(v);
     PyObject *b = obj_as_long(w);
-    PyObject *rv = PyNumber_Add(a, b);
+    PyObject *rv;
+    switch (op) {
+        case OP_ADD:
+            rv = PyNumber_Add(a, b);
+            break;
+        case OP_SUB:
+            rv = PyNumber_Add(a, b);
+            break;
+        case OP_MUL:
+            rv = PyNumber_Multiply(a, b);
+            break;
+    }
     Py_DECREF(a);
     Py_DECREF(b);
     return rv;
@@ -379,7 +393,7 @@ _PyFixedInt_Add(PyObject *v, PyObject *w)
     if (((x^a) >= 0 || (x^b) >= 0) && TAGGED_IN_RANGE(x)) {
         return AS_TAGGED(x);
     }
-    return fixedint_add_slow(v, w);
+    return fixedint_binop(v, w, OP_ADD);
 }
 
 /* used by PyNumber_Subtract */
@@ -393,8 +407,33 @@ _PyFixedInt_Subtract(PyObject *v, PyObject *w)
     x = (long)((unsigned long)a - b);
     if ((x^a) >= 0 || (x^~b) >= 0)
         return AS_TAGGED(x);
+    return fixedint_binop(v, w, OP_SUB);
+}
 
-    return fixedint_add_slow(v, w);
+/* used by PyNumber_Multiply */
+PyObject *
+_PyFixedInt_Multiply(PyObject *v, PyObject *w)
+{
+    long a, b;
+    long longprod;                      /* a*b in native long arithmetic */
+    double doubled_longprod;            /* (double)longprod */
+    double doubleprod;                  /* (double)a * (double)b */
+
+    a = FROM_TAGGED(v);
+    b = FROM_TAGGED(w);
+    /* casts in the next line avoid undefined behaviour on overflow */
+    longprod = (long)((unsigned long)a * b);
+    doubleprod = (double)a * (double)b;
+    doubled_longprod = (double)longprod;
+
+    /* Fast path for normal case:  small multiplicands, and no info
+       is lost in either method. */
+    if (doubled_longprod == doubleprod) {
+        if (TAGGED_IN_RANGE(longprod)) {
+            return AS_TAGGED(longprod);
+        }
+    }
+    return fixedint_binop(v, w, OP_MUL);
 }
 
 static PyObject *
@@ -403,7 +442,7 @@ fixedint_add(PyObject *v, PyObject *w)
     if (TAGGED_CHECK(v) && TAGGED_CHECK(w)) {
         return _PyFixedInt_Add(v, w);
     }
-    return fixedint_add_slow(v, w);
+    return fixedint_binop(v, w, OP_ADD);
 }
 
 static PyObject *

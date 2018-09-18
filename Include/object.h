@@ -594,16 +594,7 @@ _PyObject_GetBuiltin(const char *name);
 PyAPI_FUNC(PyObject *) PyObject_Dir(PyObject *);
 
 #ifdef WITH_FIXEDINT
-/* fixed integer stored as tagged pointer */
-PyAPI_DATA(PyTypeObject) _PyFixedInt_Type;
-PyAPI_DATA(PyTypeObject) PyLong_Type;
-/* return true if object is tagged pointer containing fixed int */
-#define _PyFixedInt_Check(ob) ((ssize_t)(ob) & 1)
-PyAPI_FUNC(PyObject *) _PyFixedInt_Add(PyObject *, PyObject *);
-PyAPI_FUNC(PyObject *) _PyFixedInt_Subtract(PyObject *, PyObject *);
-PyAPI_FUNC(PyObject *) _PyFixedInt_Untag(PyObject *);
-PyAPI_FUNC(Py_ssize_t) _PyFixedInt_Val(PyObject *);
-
+#include "fixedintobject.h"
 inline PyTypeObject *
 _Py_TYPE(PyObject *ob)
 {

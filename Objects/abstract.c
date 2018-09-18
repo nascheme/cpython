@@ -997,6 +997,11 @@ sequence_repeat(ssizeargfunc repeatfunc, PyObject *seq, PyObject *n)
 PyObject *
 PyNumber_Multiply(PyObject *v, PyObject *w)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v) && _PyFixedInt_Check(w)) {
+        return _PyFixedInt_Multiply(v, w);
+    }
+#endif
     PyObject *result = binary_op1(v, w, NB_SLOT(nb_multiply));
     if (result == Py_NotImplemented) {
         PySequenceMethods *mv = Py_TP(v)->tp_as_sequence;
