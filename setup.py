@@ -1522,19 +1522,21 @@ class PyBuildExt(build_ext):
 
         # Fredrik Lundh's cElementTree module.  Note that this also
         # uses expat (via the CAPI hook in pyexpat).
-
-        if os.path.isfile(os.path.join(srcdir, 'Modules', '_elementtree.c')):
-            define_macros.append(('USE_PYEXPAT_CAPI', None))
-            exts.append(Extension('_elementtree',
-                                  define_macros = define_macros,
-                                  include_dirs = expat_inc,
-                                  libraries = expat_lib,
-                                  sources = ['_elementtree.c'],
-                                  depends = ['pyexpat.c'] + expat_sources +
-                                      expat_depends,
-                                  ))
-        else:
-            missing.append('_elementtree')
+        if not hasattr(sys, 'maxfixedint'):
+            # _elementtree.c not compatible with tagged pointers (fixedints)
+            et_src = os.path.join(srcdir, 'Modules', '_elementtree.c')
+            if os.path.isfile(et_src):
+                define_macros.append(('USE_PYEXPAT_CAPI', None))
+                exts.append(Extension('_elementtree',
+                                      define_macros = define_macros,
+                                      include_dirs = expat_inc,
+                                      libraries = expat_lib,
+                                      sources = ['_elementtree.c'],
+                                      depends = ['pyexpat.c'] + expat_sources +
+                                          expat_depends,
+                                      ))
+            else:
+                missing.append('_elementtree')
 
         # Hye-Shik Chang's CJKCodecs modules.
         exts.append(Extension('_multibytecodec',
