@@ -1119,6 +1119,11 @@ PyNumber_InPlaceTrueDivide(PyObject *v, PyObject *w)
 PyObject *
 PyNumber_InPlaceAdd(PyObject *v, PyObject *w)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v) && _PyFixedInt_Check(w)) {
+        return  _PyFixedInt_Add(v, w);
+    }
+#endif
     PyObject *result = binary_iop1(v, w, NB_SLOT(nb_inplace_add),
                                    NB_SLOT(nb_add));
     if (result == Py_NotImplemented) {
@@ -1264,6 +1269,11 @@ PyNumber_Absolute(PyObject *o)
 int
 PyIndex_Check(PyObject *obj)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(obj)) {
+        return 1;
+    }
+#endif
     return Py_TP(obj)->tp_as_number != NULL &&
                Py_TP(obj)->tp_as_number->nb_index != NULL;
 }
@@ -1317,6 +1327,11 @@ PyNumber_Index(PyObject *item)
 Py_ssize_t
 PyNumber_AsSsize_t(PyObject *item, PyObject *err)
 {
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(item)) {
+        return _PyFixedInt_Val(item);
+    }
+#endif
     Py_ssize_t result;
     PyObject *runerr;
     PyObject *value = PyNumber_Index(item);
