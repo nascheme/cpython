@@ -945,7 +945,6 @@ BINARY_FUNC(PyNumber_Xor, nb_xor, "^")
 BINARY_FUNC(PyNumber_And, nb_and, "&")
 BINARY_FUNC(PyNumber_Lshift, nb_lshift, "<<")
 BINARY_FUNC(PyNumber_Rshift, nb_rshift, ">>")
-BINARY_FUNC(PyNumber_Subtract, nb_subtract, "-")
 BINARY_FUNC(PyNumber_Divmod, nb_divmod, "divmod()")
 
 PyObject *
@@ -966,6 +965,17 @@ PyNumber_Add(PyObject *v, PyObject *w)
         result = binop_type_error(v, w, "+");
     }
     return result;
+}
+
+PyObject *
+PyNumber_Subtract(PyObject *v, PyObject *w)
+{
+#ifdef WITH_FIXEDINT
+    if (_PyFixedInt_Check(v) && _PyFixedInt_Check(w)) {
+        return  _PyFixedInt_Subtract(v, w);
+    }
+#endif
+    return binary_op(v, w, NB_SLOT(nb_subtract), "-");
 }
 
 static PyObject *

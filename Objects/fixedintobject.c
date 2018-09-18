@@ -382,6 +382,21 @@ _PyFixedInt_Add(PyObject *v, PyObject *w)
     return fixedint_add_slow(v, w);
 }
 
+/* used by PyNumber_Subtract */
+PyObject *
+_PyFixedInt_Subtract(PyObject *v, PyObject *w)
+{
+    long a, b, x;
+    a = UNTAG_IT(v);
+    b = UNTAG_IT(w);
+    /* casts in the line below avoid undefined behaviour on overflow */
+    x = (long)((unsigned long)a - b);
+    if ((x^a) >= 0 || (x^~b) >= 0)
+        return TAG_IT(x);
+
+    return fixedint_add_slow(v, w);
+}
+
 static PyObject *
 fixedint_add(PyObject *v, PyObject *w)
 {
