@@ -944,7 +944,8 @@ asBignumObj(PyObject *value)
     const char *hexchars;
     mp_int bigValue;
 
-    neg = Py_SIZE(value) < 0;
+
+    neg = _PyLong_NumDigits(value) < 0;
     hexstr = _PyLong_Format(value, 16);
     if (hexstr == NULL)
         return NULL;
@@ -2038,7 +2039,7 @@ _tkinter_tkapp_getboolean(TkappObject *self, PyObject *arg)
     int v;
 
     if (PyLong_Check(arg)) { /* int or bool */
-        return PyBool_FromLong(Py_SIZE(arg) != 0);
+        return PyBool_FromLong(_PyLong_NumDigits(arg) != 0);
     }
 
     if (PyTclObject_Check(arg)) {
