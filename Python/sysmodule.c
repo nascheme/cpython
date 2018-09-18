@@ -19,6 +19,7 @@ Data members:
 #include "code.h"
 #include "frameobject.h"
 #include "pythread.h"
+#include "taggedptr.h"
 
 #include "osdefs.h"
 #include <locale.h>
@@ -1984,6 +1985,8 @@ hexversion -- version information encoded as a single integer\n\
 implementation -- Python implementation information.\n\
 int_info -- a struct sequence with information about the int implementation.\n\
 maxsize -- the largest supported length of containers.\n\
+maxfixedint -- the largest supported fixed integer, 0 if disabled\n\
+minfixedint -- the smallest supported fixed integer, 0 if disabled\n\
 maxunicode -- the value of the largest Unicode code point\n\
 platform -- platform identifier\n\
 prefix -- prefix used to find the Python library\n\
@@ -2344,6 +2347,10 @@ _PySys_BeginInit(PyObject **sysmod)
                         PyUnicode_FromString(Py_GetPlatform()));
     SET_SYS_FROM_STRING("maxsize",
                         PyLong_FromSsize_t(PY_SSIZE_T_MAX));
+    SET_SYS_FROM_STRING("maxfixedint",
+                        PyLong_FromSsize_t(TAGGED_MAX_VALUE));
+    SET_SYS_FROM_STRING("minfixedint",
+                        PyLong_FromSsize_t(TAGGED_MIN_VALUE));
     SET_SYS_FROM_STRING("float_info",
                         PyFloat_GetInfo());
     SET_SYS_FROM_STRING("int_info",
