@@ -227,14 +227,21 @@ w_short_pstring(const char *s, Py_ssize_t n, WFILE *p)
 #define NDIGITS(v) _PyLong_NumDigits((PyLongObject *)v)
 
 static void
-w_PyLong(PyLongObject *obj, char flag, WFILE *p)
+w_PyLong(PyLongObject *ob, char flag, WFILE *p)
 {
     Py_ssize_t i, j, n, l;
     digit d;
+    int need_decref = 0;
 #ifdef WITH_FIXEDINT
-    PyLongObject *ob = (PyLongObject *)_PyFixedInt_Untag((PyObject *)obj);
-#else
-    const PyLongObject *ob = obj;
+    if (_PyFixedInt_Check(ob)) {
+        need_decref = 1;
+        /* no decref of 'ob' needed, it is a tagged pointer */
+        ob = (PyLongObject *)_PyFixedInt_Untag((PyObject*)ob);
+        if (ob == NULL) {
+            p->error = WFERR_NOMEMORY;
+            return;
+        }
+    }
 #endif
 
     W_TYPE(TYPE_LONG, p);
@@ -273,9 +280,9 @@ w_PyLong(PyLongObject *obj, char flag, WFILE *p)
         d >>= PyLong_MARSHAL_SHIFT;
     } while (d != 0);
 out:
-#ifdef WITH_FIXEDINT
-    Py_XDECREF(ob);
-#endif
+    if (need_decref) {
+        Py_DECREF(ob);
+    }
     return;
 }
 
