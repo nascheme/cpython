@@ -1976,6 +1976,7 @@ dec_from_long(PyTypeObject *type, const PyObject *v,
     Py_ssize_t ob_size;
     size_t len;
     uint8_t sign;
+    int need_decref = 0;
 
     dec = PyDecType_New(type);
     if (dec == NULL) {
@@ -1999,17 +2000,21 @@ dec_from_long(PyTypeObject *type, const PyObject *v,
 
 #ifdef WITH_FIXEDINT
     if (_PyFixedInt_Check(l)) {
-        ssize_t ival = _PyFixedInt_Val((PyObject*)l);
-        // FIXME: handle overflow
-        _dec_settriple(dec, sign, (uint32_t)ival, 0);
-        mpd_qfinalize(MPD(dec), ctx, status);
-        return dec;
+        need_decref = 1;
+        /* no decref of 'l' needed, it is a tagged pointer */
+        l = _PyFixedInt_Untag(v);
+        if (l == NULL) {
+            return NULL;
+        }
     }
 #endif
 
     if (len == 1) {
         _dec_settriple(dec, sign, *l->ob_digit, 0);
         mpd_qfinalize(MPD(dec), ctx, status);
+        if (need_decref) {
+            Py_DECREF(l);
+        }
         return dec;
     }
 
@@ -2023,6 +2028,9 @@ dec_from_long(PyTypeObject *type, const PyObject *v,
   #error "PYLONG_BITS_IN_DIGIT should be 15 or 30"
 #endif
 
+    if (need_decref) {
+        Py_DECREF(l);
+    }
     return dec;
 }
 
