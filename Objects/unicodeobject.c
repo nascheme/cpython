@@ -13921,6 +13921,14 @@ unicode_subscript(PyObject* self, PyObject* item)
     if (PyUnicode_READY(self) == -1)
         return NULL;
 
+#if WITH_FIXEDINT
+    if (_PyFixedInt_Check(item)) {
+        Py_ssize_t i = _PyFixedInt_Val(item);
+        if (i < 0)
+            i += PyUnicode_GET_LENGTH(self);
+        return unicode_getitem(self, i);
+    }
+#endif
     if (PyIndex_Check(item)) {
         Py_ssize_t i = PyNumber_AsSsize_t(item, PyExc_IndexError);
         if (i == -1 && PyErr_Occurred())
