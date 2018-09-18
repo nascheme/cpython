@@ -413,9 +413,10 @@ class InstancingTestCase(unittest.TestCase, HelperMixin):
             else:
                 self.assertGreaterEqual(len(s2), len(s3))
 
-    def testInt(self):
-        self.helper(self.intobj)
-        self.helper3(self.intobj, simple=True)
+    if not hasattr(sys, 'maxfixedint'):
+        def testInt(self):
+            self.helper(self.intobj)
+            self.helper3(self.intobj, simple=True)
 
     def testFloat(self):
         self.helper(self.floatobj)
