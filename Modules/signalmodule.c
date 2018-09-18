@@ -388,6 +388,17 @@ signal_pause_impl(PyObject *module)
 
 #endif
 
+static int
+is_handler(PyObject *op, PyObject *handler)
+{
+    if (PyLong_CheckExact(op)) {
+        int rv = PyObject_RichCompareBool(op, handler, Py_EQ);
+        assert(rv != -1); // should not happen, op and handler are both longs
+        return rv;
+    }
+    return 0;
+}
+
 
 /*[clinic input]
 signal.signal
@@ -441,9 +452,9 @@ signal_signal_impl(PyObject *module, int signalnum, PyObject *handler)
                         "signal number out of range");
         return NULL;
     }
-    if (handler == IgnoreHandler)
+    if (is_handler(handler, IgnoreHandler))
         func = SIG_IGN;
-    else if (handler == DefaultHandler)
+    else if (is_handler(handler, DefaultHandler))
         func = SIG_DFL;
     else if (!PyCallable_Check(handler)) {
         PyErr_SetString(PyExc_TypeError,
@@ -1343,7 +1354,7 @@ PyInit__signal(void)
             Handlers[i].func = Py_None; /* None of our business */
         Py_INCREF(Handlers[i].func);
     }
-    if (Handlers[SIGINT].func == DefaultHandler) {
+    if (is_handler(Handlers[SIGINT].func,  DefaultHandler)) {
         /* Install default int handler */
         Py_INCREF(IntHandler);
         Py_SETREF(Handlers[SIGINT].func, IntHandler);
@@ -1558,7 +1569,8 @@ finisignal(void)
         _Py_atomic_store_relaxed(&Handlers[i].tripped, 0);
         Handlers[i].func = NULL;
         if (func != NULL && func != Py_None &&
-            func != DefaultHandler && func != IgnoreHandler)
+            !is_handler(func, DefaultHandler) &&
+            !is_handler(func, IgnoreHandler))
             PyOS_setsig(i, SIG_DFL);
         Py_XDECREF(func);
     }
