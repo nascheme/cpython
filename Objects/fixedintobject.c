@@ -12,6 +12,12 @@ typedef struct {
 } PyFixedIntObject;
 #endif
 
+/* small integer cache */
+#define NSMALLPOSFIXEDINTS 257
+#define NSMALLNEGFIXEDINTS 5
+static PyObject *small_fixedints[NSMALLNEGFIXEDINTS + NSMALLPOSFIXEDINTS];
+
+
 static PyObject* _PyLong_FromLongLong(long long ival);
 
 Py_ssize_t _PyFixedInt_Val(PyObject *v)
@@ -28,7 +34,13 @@ _PyFixedInt_Untag(PyObject *v)
     PyObject *a;
     if (_PyFixedInt_Check(v)) {
         ssize_t ival = UNTAG_IT(v);
-        a = _PyLong_FromLongLong(ival);
+        if (-NSMALLNEGFIXEDINTS <= ival && ival < NSMALLPOSFIXEDINTS) {
+            a = (PyObject *)small_fixedints[ival + NSMALLNEGFIXEDINTS];
+            Py_INCREF(a);
+        }
+        else {
+            a = _PyLong_FromLongLong(ival);
+        }
     }
     else {
         a = v;
@@ -586,6 +598,30 @@ fixedint_gcd(PyObject *v, PyObject *w)
     Py_XDECREF(a);
     Py_XDECREF(b);
     return rv;
+}
+
+static int
+fixedint_init_small_cache(void)
+{
+    PyObject *v;
+    for (int ival = -NSMALLNEGFIXEDINTS; ival < NSMALLPOSFIXEDINTS; ival++) {
+        v = (PyObject *)_PyLong_FromLongLong(ival);
+        if (v == NULL) {
+            return 0;
+        }
+        small_fixedints[ival + NSMALLNEGFIXEDINTS] = v;
+    }
+    return 1;
+}
+
+static void
+fixedint_fini_small_cache(void)
+{
+    PyObject *v;
+    for (int ival = -NSMALLNEGFIXEDINTS; ival < NSMALLPOSFIXEDINTS; ival++) {
+        v = small_fixedints[ival + NSMALLNEGFIXEDINTS];
+        Py_XDECREF(v);
+    }
 }
 
 #endif /* WITH_FIXEDINT */

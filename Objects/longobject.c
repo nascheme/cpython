@@ -5901,6 +5901,13 @@ _PyLong_Init(void)
     if (_PyLong_One == NULL)
         return 0;
 
+#ifdef WITH_FIXEDINT
+    /* small integer cache */
+    if (!fixedint_init_small_cache()) {
+        return 0;
+    }
+#endif
+
     /* initialize int_info */
     if (Int_InfoType.tp_name == NULL) {
         if (PyStructSequence_InitType2(&Int_InfoType, &int_info_desc) < 0)
@@ -5925,5 +5932,10 @@ PyLong_Fini(void)
         _Py_DEC_REFTOTAL;
         _Py_ForgetReference((PyObject*)v);
     }
+#endif
+
+#ifdef WITH_FIXEDINT
+    /* small integer cache */
+    fixedint_fini_small_cache();
 #endif
 }
