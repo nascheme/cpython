@@ -596,7 +596,7 @@ PyAPI_FUNC(PyObject *) PyObject_Dir(PyObject *);
 #ifdef WITH_FIXEDINT
 #include "fixedintobject.h"
 inline PyTypeObject *
-_Py_TYPE(PyObject *ob)
+_Py_TYPE(const PyObject *ob)
 {
     if (_PyFixedInt_Check(ob)) {
         return &PyLong_Type;
@@ -605,7 +605,7 @@ _Py_TYPE(PyObject *ob)
 }
 
 inline Py_ssize_t
-_Py_REFCNT(PyObject *ob)
+_Py_REFCNT(const PyObject *ob)
 {
     if (_PyFixedInt_Check(ob)) {
         return 0xff; /* return something higher than 1 */

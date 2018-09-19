@@ -2192,8 +2192,8 @@ _Py_Dealloc(PyObject *op)
 
 #ifdef WITH_FIXEDINT
 /* these are macros if !WITH_FIXEDINT */
-extern inline PyTypeObject * _Py_TYPE(PyObject *ob);
-extern inline Py_ssize_t _Py_REFCNT(PyObject *ob);
+extern inline PyTypeObject * _Py_TYPE(const PyObject *ob);
+extern inline Py_ssize_t _Py_REFCNT(const PyObject *ob);
 extern inline void _Py_INCREF(PyObject *op);
 extern inline void _Py_DECREF(PyObject *op);
 #endif
