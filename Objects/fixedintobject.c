@@ -4,14 +4,6 @@
 
 #include "taggedptr.h"
 
-#if 0
-typedef struct _fixedintobject PyFixedIntObject;
-
-typedef struct {
-    PyObject_HEAD
-} PyFixedIntObject;
-#endif
-
 /* small integer cache */
 #define NSMALLPOSFIXEDINTS 257
 #define NSMALLNEGFIXEDINTS 5
@@ -100,31 +92,6 @@ fixedint_format(PyObject *v, int base)
 {
     PyObject *w = obj_as_long(v);
     PyObject *result = _PyLong_Format(w, base);
-    Py_XDECREF(w);
-    return result;
-}
-
-
-static int
-fixedint_as_int(PyObject *v)
-{
-    if (_PyFixedInt_Check(v)) {
-        ssize_t ival = FROM_TAGGED(v);
-        if (!(ival > INT_MAX && ival < INT_MIN)) {
-            return ival;
-        }
-    }
-    PyObject *w = obj_as_long(v);
-    int result = _PyLong_AsInt(w);
-    Py_XDECREF(w);
-    return result;
-}
-
-static long
-fixedint_as_long_and_overflow(PyObject *v, int *overflow)
-{
-    PyObject *w = obj_as_long(v);
-    long result = PyLong_AsLongAndOverflow(w, overflow);
     Py_XDECREF(w);
     return result;
 }
@@ -246,66 +213,6 @@ fixedint_as_unsignedlonglongmask(PyObject *v)
     return result;
 }
 
-static long long
-fixedint_as_longlong_and_overflow(PyObject *v, int *overflow)
-{
-    long long result;
-    if (_PyFixedInt_Check(v)) {
-        result = FROM_TAGGED(v);
-    }
-    else {
-        PyObject *w = obj_as_long(v);
-        result = PyLong_AsLongLongAndOverflow(w, overflow);
-        Py_XDECREF(w);
-    }
-    return result;
-}
-
-static int
-fixedint_unsignedshort_converter(PyObject *v, void *ptr)
-{
-    PyObject *w = obj_as_long(v);
-    int result = _PyLong_UnsignedShort_Converter(w, ptr);
-    Py_XDECREF(w);
-    return result;
-}
-
-static int
-fixedint_unsignedint_converter(PyObject *v, void *ptr)
-{
-    PyObject *w = obj_as_long(v);
-    int result = _PyLong_UnsignedInt_Converter(w, ptr);
-    Py_XDECREF(w);
-    return result;
-}
-
-static int
-fixedint_unsignedlong_converter(PyObject *v, void *ptr)
-{
-    PyObject *w = obj_as_long(v);
-    int result = _PyLong_UnsignedLong_Converter(w, ptr);
-    Py_XDECREF(w);
-    return result;
-}
-
-static int
-fixedint_unsignedlonglong_converter(PyObject *v, void *ptr)
-{
-    PyObject *w = obj_as_long(v);
-    int result = _PyLong_UnsignedLongLong_Converter(w, ptr);
-    Py_XDECREF(w);
-    return result;
-}
-
-static int
-fixedint_size_t_converter(PyObject *v, void *ptr)
-{
-    PyObject *w = obj_as_long(v);
-    int result = _PyLong_Size_t_Converter(w, ptr);
-    Py_XDECREF(w);
-    return result;
-}
-
 static int
 fixedint_as_bytearray(PyObject* v,
                       unsigned char* bytes, size_t n,
@@ -341,20 +248,6 @@ fixedint_richcompare(PyObject *v, PyObject *w, int op)
     Py_XDECREF(b);
     return rv;
 }
-
-#if 0
-Py_LOCAL_INLINE(void) _PyLong_Negate(PyLongObject **x_p);
-
-static void
-fixedint_negate(PyObject **v_p)
-{
-    PyObject *v = obj_as_long(*v_p);
-    _PyLong_Negate((PyLongObject**)(&v));
-    Py_DECREF(*v_p);
-    *v_p = v;
-    Py_XDECREF(v);
-}
-#endif
 
 enum {OP_ADD, OP_SUB, OP_MUL};
 
@@ -569,14 +462,6 @@ fixedint_divrem(PyObject *v, PyObject *w,
     Py_XDECREF(b);
     return rv;
 }
-
-#if 0
-static PyObject *
-fixedint_index(PyObject *v)
-{
-    return obj_as_long(v);
-}
-#endif
 
 static Py_hash_t
 fixedint_hash(PyObject *v)

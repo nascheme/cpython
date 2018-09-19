@@ -491,8 +491,16 @@ long
 PyLong_AsLongAndOverflow(PyObject *vv, int *overflow)
 {
 #ifdef WITH_FIXEDINT
-    if (_PyFixedInt_Check(vv))
-        return fixedint_as_long_and_overflow(vv, overflow);
+    if (_PyFixedInt_Check(vv)) {
+        Py_ssize_t i = _PyFixedInt_Val((PyObject *)vv);
+        /* FIXME: check overflow */
+        if (i > LONG_MAX || i < LONG_MIN) {
+            *overflow = 1;
+            return -1;
+        }
+        *overflow = 0;
+        return i;
+    }
 #endif
     /* This version by Tim Peters */
     PyLongObject *v;
@@ -588,10 +596,6 @@ PyLong_AsLong(PyObject *obj)
 int
 _PyLong_AsInt(PyObject *obj)
 {
-#ifdef WITH_FIXEDINT
-    if (_PyFixedInt_Check(obj))
-        return fixedint_as_int(obj);
-#endif
     int overflow;
     long result = PyLong_AsLongAndOverflow(obj, &overflow);
     if (overflow || result > INT_MAX || result < INT_MIN) {
@@ -1521,8 +1525,9 @@ long long
 PyLong_AsLongLongAndOverflow(PyObject *vv, int *overflow)
 {
 #ifdef WITH_FIXEDINT
-    if (_PyFixedInt_Check(vv))
-        return fixedint_as_longlong_and_overflow(vv, overflow);
+    if (_PyFixedInt_Check(vv)) {
+        return _PyFixedInt_Val(vv);
+    }
 #endif
     /* This version by Tim Peters */
     PyLongObject *v;
@@ -1598,10 +1603,6 @@ PyLong_AsLongLongAndOverflow(PyObject *vv, int *overflow)
 int
 _PyLong_UnsignedShort_Converter(PyObject *obj, void *ptr)
 {
-#ifdef WITH_FIXEDINT
-    if (_PyFixedInt_Check(obj))
-        return fixedint_unsignedshort_converter(obj, ptr);
-#endif
     unsigned long uval;
 
     if (PyLong_Check(obj) && _PyLong_Sign(obj) < 0) {
@@ -1624,10 +1625,6 @@ _PyLong_UnsignedShort_Converter(PyObject *obj, void *ptr)
 int
 _PyLong_UnsignedInt_Converter(PyObject *obj, void *ptr)
 {
-#ifdef WITH_FIXEDINT
-    if (_PyFixedInt_Check(obj))
-        return fixedint_unsignedint_converter(obj, ptr);
-#endif
     unsigned long uval;
 
     if (PyLong_Check(obj) && _PyLong_Sign(obj) < 0) {
@@ -1650,10 +1647,6 @@ _PyLong_UnsignedInt_Converter(PyObject *obj, void *ptr)
 int
 _PyLong_UnsignedLong_Converter(PyObject *obj, void *ptr)
 {
-#ifdef WITH_FIXEDINT
-    if (_PyFixedInt_Check(obj))
-        return fixedint_unsignedlong_converter(obj, ptr);
-#endif
     unsigned long uval;
 
     if (PyLong_Check(obj) && _PyLong_Sign(obj) < 0) {
@@ -1671,10 +1664,6 @@ _PyLong_UnsignedLong_Converter(PyObject *obj, void *ptr)
 int
 _PyLong_UnsignedLongLong_Converter(PyObject *obj, void *ptr)
 {
-#ifdef WITH_FIXEDINT
-    if (_PyFixedInt_Check(obj))
-        return fixedint_unsignedlonglong_converter(obj, ptr);
-#endif
     unsigned long long uval;
 
     if (PyLong_Check(obj) && _PyLong_Sign(obj) < 0) {
@@ -1692,10 +1681,6 @@ _PyLong_UnsignedLongLong_Converter(PyObject *obj, void *ptr)
 int
 _PyLong_Size_t_Converter(PyObject *obj, void *ptr)
 {
-#ifdef WITH_FIXEDINT
-    if (_PyFixedInt_Check(obj))
-        return fixedint_size_t_converter(obj, ptr);
-#endif
     size_t uval;
 
     if (PyLong_Check(obj) && _PyLong_Sign(obj) < 0) {
