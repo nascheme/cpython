@@ -1923,15 +1923,11 @@ save_bool(PicklerObject *self, PyObject *obj)
 }
 
 static int
-save_long(PicklerObject *self, PyObject *obj)
+write_long(PicklerObject *self, PyObject *obj, long val, int overflow)
 {
     PyObject *repr = NULL;
     Py_ssize_t size;
-    long val;
-    int overflow;
     int status = 0;
-
-    val= PyLong_AsLongAndOverflow(obj, &overflow);
     if (!overflow && (sizeof(long) <= 4 ||
             (val <= 0x7fffffffL && val >= (-0x7fffffffL - 1))))
     {
@@ -2083,6 +2079,23 @@ save_long(PicklerObject *self, PyObject *obj)
     Py_XDECREF(repr);
 
     return status;
+}
+
+#ifdef WITH_FIXEDINT
+static int
+save_fixedint(PicklerObject *self, PyObject *obj)
+{
+    Py_ssize_t val = _PyFixedInt_Val((PyObject *)obj);
+    return write_long(self, obj, val, 0);
+}
+#endif
+
+static int
+save_long(PicklerObject *self, PyObject *obj)
+{
+    int overflow;
+    long val = PyLong_AsLongAndOverflow(obj, &overflow);
+    return write_long(self, obj, val, overflow);
 }
 
 static int
@@ -3955,6 +3968,13 @@ save(PicklerObject *self, PyObject *obj, int pers_save)
         if ((status = save_pers(self, obj)) != 0)
             return status;
     }
+
+#ifdef WITH_FIXEDINT
+    /* check fixedint before getting type, avoids pointer derefs */
+    if (_PyFixedInt_Check(obj)) {
+        return save_fixedint(self, obj);
+    }
+#endif
 
     type = Py_TYPE(obj);
 
