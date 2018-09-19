@@ -602,13 +602,13 @@ _PyObject_GetBuiltin(const char *name);
 PyAPI_FUNC(PyObject *) PyObject_Dir(PyObject *);
 
 inline PyTypeObject *
-_Py_TYPE(PyObject *ob)
+_Py_TYPE(const PyObject *ob)
 {
     return ob->ob_type;
 }
 
 inline Py_ssize_t
-_Py_REFCNT(PyObject *ob)
+_Py_REFCNT(const PyObject *ob)
 {
     return ob->ob_refcnt;
 }
