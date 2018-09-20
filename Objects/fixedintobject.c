@@ -2,7 +2,7 @@
 
 #ifdef WITH_FIXEDINT
 
-#include "taggedptr.h"
+#define AS_TAGGED_INT(v) _Py_AS_TAGGED(v, _PyFixedInt_Tag)
 
 /* small integer cache */
 #define NSMALLPOSFIXEDINTS 257
@@ -14,8 +14,8 @@ static PyObject* _PyLong_FromLongLong(long long ival);
 
 Py_ssize_t _PyFixedInt_Val(PyObject *v)
 {
-    assert(TAGGED_CHECK(v));
-    ssize_t ival = FROM_TAGGED(v);
+    assert(_PyFixedInt_Check(v));
+    ssize_t ival = _Py_FROM_TAGGED(v);
     return ival;
 }
 
@@ -25,7 +25,7 @@ _PyFixedInt_Untag(PyObject *v)
 {
     PyObject *a;
     if (_PyFixedInt_Check(v)) {
-        ssize_t ival = FROM_TAGGED(v);
+        ssize_t ival = _Py_FROM_TAGGED(v);
         if (-NSMALLNEGFIXEDINTS <= ival && ival < NSMALLPOSFIXEDINTS) {
             a = (PyObject *)small_fixedints[ival + NSMALLNEGFIXEDINTS];
             Py_INCREF(a);
@@ -59,12 +59,12 @@ _PyFixedInt_New(PyObject *self, PyObject *args)
 
     if (!PyArg_ParseTuple(args, "l", &x))
         return NULL;
-    if (!TAGGED_IN_RANGE(x)) {
+    if (!_Py_TAGGED_IN_RANGE(x)) {
         PyErr_SetString(PyExc_ValueError,
                         "value will not fit into fixed integer");
         return NULL;
     }
-    return AS_TAGGED(x);
+    return AS_TAGGED_INT(x);
 }
 
 static PyObject *
@@ -162,7 +162,7 @@ static size_t
 fixedint_numbits(PyObject *v)
 {
     if (_PyFixedInt_Check(v)) {
-        ssize_t ival = FROM_TAGGED(v);
+        ssize_t ival = _Py_FROM_TAGGED(v);
         return bits_in_ulong(Py_ABS(ival));
     }
     PyObject *w = obj_as_long(v);
@@ -185,7 +185,7 @@ fixedint_as_longlong(PyObject *v)
 {
     long long result;
     if (_PyFixedInt_Check(v)) {
-        result = FROM_TAGGED(v);
+        result = _Py_FROM_TAGGED(v);
     }
     else {
         PyObject *w = obj_as_long(v);
@@ -237,7 +237,7 @@ static PyObject *
 fixedint_richcompare(PyObject *v, PyObject *w, int op)
 {
     int result;
-    if (TAGGED_CHECK(v) && TAGGED_CHECK(w)) {
+    if (_PyFixedInt_Check(v) && _PyFixedInt_Check(w)) {
         result = fixedint_compare(v, w);
         Py_RETURN_RICHCOMPARE(result, 0, op);
     }
@@ -279,12 +279,12 @@ PyObject *
 _PyFixedInt_Add(PyObject *v, PyObject *w)
 {
     long a, b, x;
-    a = FROM_TAGGED(v);
-    b = FROM_TAGGED(w);
+    a = _Py_FROM_TAGGED(v);
+    b = _Py_FROM_TAGGED(w);
     /* casts in the line below avoid undefined behaviour on overflow */
     x = (long)((unsigned long)a + b);
-    if (((x^a) >= 0 || (x^b) >= 0) && TAGGED_IN_RANGE(x)) {
-        return AS_TAGGED(x);
+    if (((x^a) >= 0 || (x^b) >= 0) && _Py_TAGGED_IN_RANGE(x)) {
+        return AS_TAGGED_INT(x);
     }
     return fixedint_binop(v, w, OP_ADD);
 }
@@ -294,12 +294,12 @@ PyObject *
 _PyFixedInt_Subtract(PyObject *v, PyObject *w)
 {
     long a, b, x;
-    a = FROM_TAGGED(v);
-    b = FROM_TAGGED(w);
+    a = _Py_FROM_TAGGED(v);
+    b = _Py_FROM_TAGGED(w);
     /* casts in the line below avoid undefined behaviour on overflow */
     x = (long)((unsigned long)a - b);
     if ((x^a) >= 0 || (x^~b) >= 0)
-        return AS_TAGGED(x);
+        return AS_TAGGED_INT(x);
     return fixedint_binop(v, w, OP_SUB);
 }
 
@@ -312,8 +312,8 @@ _PyFixedInt_Multiply(PyObject *v, PyObject *w)
     double doubled_longprod;            /* (double)longprod */
     double doubleprod;                  /* (double)a * (double)b */
 
-    a = FROM_TAGGED(v);
-    b = FROM_TAGGED(w);
+    a = _Py_FROM_TAGGED(v);
+    b = _Py_FROM_TAGGED(w);
     /* casts in the next line avoid undefined behaviour on overflow */
     longprod = (long)((unsigned long)a * b);
     doubleprod = (double)a * (double)b;
@@ -322,8 +322,8 @@ _PyFixedInt_Multiply(PyObject *v, PyObject *w)
     /* Fast path for normal case:  small multiplicands, and no info
        is lost in either method. */
     if (doubled_longprod == doubleprod) {
-        if (TAGGED_IN_RANGE(longprod)) {
-            return AS_TAGGED(longprod);
+        if (_Py_TAGGED_IN_RANGE(longprod)) {
+            return AS_TAGGED_INT(longprod);
         }
     }
     return fixedint_binop(v, w, OP_MUL);
@@ -332,7 +332,7 @@ _PyFixedInt_Multiply(PyObject *v, PyObject *w)
 static PyObject *
 fixedint_add(PyObject *v, PyObject *w)
 {
-    if (TAGGED_CHECK(v) && TAGGED_CHECK(w)) {
+    if (_PyFixedInt_Check(v) && _PyFixedInt_Check(w)) {
         return _PyFixedInt_Add(v, w);
     }
     return fixedint_binop(v, w, OP_ADD);
@@ -502,7 +502,7 @@ fixedint_abs(PyObject *v)
 static int
 fixedint_bool(PyObject *v)
 {
-    return FROM_TAGGED(v) != 0;
+    return _Py_FROM_TAGGED(v) != 0;
 
 }
 

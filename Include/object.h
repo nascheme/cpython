@@ -51,6 +51,15 @@ A standard interface exists for objects that contain an array of items
 whose size is determined when the object is allocated.
 */
 
+#ifdef WITH_FIXEDINT
+/* fixed ints require this */
+#define WITH_TAGGED_POINTERS 1
+#endif
+
+#ifdef WITH_TAGGED_POINTERS
+#include "taggedptr.h"
+#endif
+
 /* Py_DEBUG implies Py_TRACE_REFS. */
 #if defined(Py_DEBUG) && !defined(Py_TRACE_REFS)
 #define Py_TRACE_REFS
@@ -593,13 +602,18 @@ _PyObject_GetBuiltin(const char *name);
 */
 PyAPI_FUNC(PyObject *) PyObject_Dir(PyObject *);
 
-#ifdef WITH_FIXEDINT
-#include "fixedintobject.h"
+#ifdef WITH_TAGGED_POINTERS
+
+PyAPI_DATA(PyTypeObject) PyLong_Type;
+
 inline PyTypeObject *
 _Py_TYPE(const PyObject *ob)
 {
-    if (_PyFixedInt_Check(ob)) {
-        return &PyLong_Type;
+    switch (_Py_GET_TAG(ob)) {
+#ifdef WITH_FIXEDINT
+        case _PyFixedInt_Tag:
+            return &PyLong_Type;
+#endif
     }
     return ob->ob_type;
 }
@@ -607,7 +621,7 @@ _Py_TYPE(const PyObject *ob)
 inline Py_ssize_t
 _Py_REFCNT(const PyObject *ob)
 {
-    if (_PyFixedInt_Check(ob)) {
+    if (_Py_IS_TAGGED(ob)) {
         return 0xff; /* return something higher than 1 */
     }
     else {
@@ -625,7 +639,7 @@ _Py_REFCNT(const PyObject *ob)
 #define Py_TP(ob) ((ob)->ob_type)
 #define Py_TYPE(ob) (((PyObject*)(ob))->ob_type)
 
-#endif /* !WITH_FIXEDINT */
+#endif /* !WITH_TAGGED_POINTERS */
 
 #define Py_SIZE(ob) (((PyVarObject*)(ob))->ob_size)
 #define Py_SET_TYPE(ob, tp) (((PyObject*)(ob))->ob_type = (tp))
@@ -823,15 +837,12 @@ PyAPI_FUNC(void) _Py_Dealloc(PyObject *);
 #endif
 #endif /* !Py_TRACE_REFS */
 
-#ifdef WITH_FIXEDINT
+#ifdef WITH_TAGGED_POINTERS
 
 inline void
 _Py_INCREF(PyObject *op)
 {
-    if (_PyFixedInt_Check(op)) {
-        // noop
-    }
-    else {
+    if (!_Py_IS_TAGGED(op)) {
         (_Py_INC_REFTOTAL  _Py_REF_DEBUG_COMMA
          ((PyObject *)(op))->ob_refcnt++);
     }
@@ -840,10 +851,7 @@ _Py_INCREF(PyObject *op)
 inline void
 _Py_DECREF(PyObject *op)
 {
-    if (_PyFixedInt_Check(op)) {
-        // noop
-    }
-    else {
+    if (!_Py_IS_TAGGED(op)) {
         if (_Py_DEC_REFTOTAL  _Py_REF_DEBUG_COMMA
             --(op)->ob_refcnt != 0)
             _Py_CHECK_REFCNT(op)
@@ -856,6 +864,10 @@ _Py_DECREF(PyObject *op)
 #define Py_DECREF(op) _Py_DECREF((PyObject *)(op))
 
 #else
+
+#ifdef WITH_FIXEDINT
+#error "The WITH_FIXEDINT option requires WITH_TAGGED_POINTERS"
+#endif
 
 #define Py_INCREF(op) (                         \
     _Py_INC_REFTOTAL  _Py_REF_DEBUG_COMMA       \
@@ -871,7 +883,7 @@ _Py_DECREF(PyObject *op)
             _Py_Dealloc(_py_decref_tmp);                \
     } while (0)
 
-#endif /* !WITH_FIXEDINT */
+#endif /* !WITH_TAGGED_POINTERS */
 
 
 /* Safely decref `op` and set `op` to NULL, especially useful in tp_clear

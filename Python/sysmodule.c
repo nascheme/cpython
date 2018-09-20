@@ -2348,9 +2348,9 @@ _PySys_BeginInit(PyObject **sysmod)
     SET_SYS_FROM_STRING("maxsize",
                         PyLong_FromSsize_t(PY_SSIZE_T_MAX));
     SET_SYS_FROM_STRING("maxfixedint",
-                        PyLong_FromSsize_t(TAGGED_MAX_VALUE));
+                        PyLong_FromSsize_t(_Py_TAGGED_MAX_VALUE));
     SET_SYS_FROM_STRING("minfixedint",
-                        PyLong_FromSsize_t(TAGGED_MIN_VALUE));
+                        PyLong_FromSsize_t(_Py_TAGGED_MIN_VALUE));
     SET_SYS_FROM_STRING("float_info",
                         PyFloat_GetInfo());
     SET_SYS_FROM_STRING("int_info",

@@ -157,7 +157,7 @@ _PyLong_Negate(PyLongObject **x_p)
 {
     PyLongObject *x;
     x = (PyLongObject *)*x_p;
-    if (!TAGGED_CHECK(x) && Py_REFCNT(x) == 1) {
+    if (!_PyFixedInt_Check(x) && Py_REFCNT(x) == 1) {
         SET_NDIGITS(x, -NDIGITS(x));
         return;
     }
@@ -320,8 +320,8 @@ PyObject *
 PyLong_FromLong(long ival)
 {
 #ifdef WITH_FIXEDINT
-    if (TAGGED_IN_RANGE(ival)) {
-        return AS_TAGGED(ival);
+    if (_Py_TAGGED_IN_RANGE(ival)) {
+        return AS_TAGGED_INT(ival);
     }
 #endif
     PyLongObject *v;
@@ -396,8 +396,8 @@ PyObject *
 PyLong_FromUnsignedLong(unsigned long ival)
 {
 #ifdef WITH_FIXEDINT
-    if (ival < TAGGED_MAX_VALUE) {
-        return AS_TAGGED(ival);
+    if (ival < _Py_TAGGED_MAX_VALUE) {
+        return AS_TAGGED_INT(ival);
     }
 #endif
     PyLongObject *v;
@@ -1246,8 +1246,8 @@ PyObject *
 PyLong_FromLongLong(long long ival)
 {
 #ifdef WITH_FIXEDINT
-    if (TAGGED_IN_RANGE(ival)) {
-        return AS_TAGGED(ival);
+    if (_Py_TAGGED_IN_RANGE(ival)) {
+        return AS_TAGGED_INT(ival);
     }
 #endif
 
@@ -1289,8 +1289,8 @@ PyObject *
 PyLong_FromSsize_t(Py_ssize_t ival)
 {
 #ifdef WITH_FIXEDINT
-    if (TAGGED_IN_RANGE(ival)) {
-        return AS_TAGGED(ival);
+    if (_Py_TAGGED_IN_RANGE(ival)) {
+        return AS_TAGGED_INT(ival);
     }
 #endif
     PyLongObject *v;
@@ -3174,7 +3174,7 @@ PyLong_AsDouble(PyObject *v)
 static void
 long_dealloc(PyObject *v)
 {
-    if (TAGGED_CHECK(v))
+    if (_PyFixedInt_Check(v))
         return;
     Py_TYPE(v)->tp_free(v);
 }

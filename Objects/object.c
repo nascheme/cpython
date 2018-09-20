@@ -2190,8 +2190,7 @@ _Py_Dealloc(PyObject *op)
 }
 #endif
 
-#ifdef WITH_FIXEDINT
-/* these are macros if !WITH_FIXEDINT */
+#ifdef WITH_TAGGED_POINTERS
 extern inline PyTypeObject * _Py_TYPE(const PyObject *ob);
 extern inline Py_ssize_t _Py_REFCNT(const PyObject *ob);
 extern inline void _Py_INCREF(PyObject *op);

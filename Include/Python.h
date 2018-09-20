@@ -78,6 +78,9 @@
 #include "bytearrayobject.h"
 #include "bytesobject.h"
 #include "unicodeobject.h"
+#ifdef WITH_FIXEDINT
+#include "fixedintobject.h"
+#endif
 #include "longobject.h"
 #include "longintrepr.h"
 #include "boolobject.h"
