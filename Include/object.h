@@ -609,12 +609,17 @@ PyAPI_DATA(PyTypeObject) PyLong_Type;
 inline PyTypeObject *
 _Py_TYPE(const PyObject *ob)
 {
+#if 0
     switch (_Py_GET_TAG(ob)) {
 #ifdef WITH_FIXEDINT
         case _PyFixedInt_Tag:
             return &PyLong_Type;
 #endif
     }
+#else
+    if (_Py_IS_TAGGED(ob))
+        return &PyLong_Type;
+#endif
     return ob->ob_type;
 }
 
