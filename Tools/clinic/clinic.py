@@ -3005,17 +3005,13 @@ class self_converter(CConverter):
         cls = self.function.cls
 
         if ((kind in (METHOD_NEW, METHOD_INIT)) and cls and cls.typedef):
+            type_object = self.function.cls.type_object
             if kind == METHOD_NEW:
-                passed_in_type = self.name
+                type_check = f'{self.name} == {type_object}'
             else:
-                passed_in_type = 'Py_TYPE({})'.format(self.name)
-
-            line = '({passed_in_type} == {type_object}) &&\n        '
-            d = {
-                'type_object': self.function.cls.type_object,
-                'passed_in_type': passed_in_type
-                }
-            template_dict['self_type_check'] = line.format_map(d)
+                type_check = f'Py_IS_TYPE({self.name}, {type_object})'
+            line = f'{type_check} &&\n        '
+            template_dict['self_type_check'] = line
 
 
 
