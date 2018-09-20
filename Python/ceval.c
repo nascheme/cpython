@@ -1318,9 +1318,28 @@ main_loop:
         TARGET(BINARY_SUBSCR) {
             PyObject *sub = POP();
             PyObject *container = TOP();
-            PyObject *res = PyObject_GetItem(container, sub);
-            Py_DECREF(container);
-            Py_DECREF(sub);
+            PyObject *res;
+#ifdef WITH_FIXEDINT
+            if (_PyFixedInt_Check(sub) && PyList_CheckExact(container)) {
+                Py_ssize_t i = _PyFixedInt_Val(sub);
+                if (i < 0)
+                    i += PyList_GET_SIZE(container);
+                if (i >= 0 && i < PyList_GET_SIZE(container)) {
+                    res = PyList_GET_ITEM(container, i);
+                    Py_INCREF(res);
+                }
+                else {
+                    goto slow_get;
+                }
+            }
+            else
+#endif
+            {
+slow_get:
+                res = PyObject_GetItem(container, sub);
+                Py_DECREF(container);
+                Py_DECREF(sub);
+            }
             SET_TOP(res);
             if (res == NULL)
                 goto error;
