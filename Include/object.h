@@ -489,7 +489,7 @@ typedef struct _heaptypeobject {
 /* Generic type check */
 PyAPI_FUNC(int) PyType_IsSubtype(PyTypeObject *, PyTypeObject *);
 #define PyObject_TypeCheck(ob, tp) \
-    (Py_TYPE(ob) == (tp) || PyType_IsSubtype(Py_TYPE(ob), (tp)))
+    (Py_IS_TYPE(ob, tp) || PyType_IsSubtype(Py_TYPE(ob), (tp)))
 
 PyAPI_DATA(PyTypeObject) PyType_Type; /* built-in 'type' */
 PyAPI_DATA(PyTypeObject) PyBaseObject_Type; /* built-in 'object' */
@@ -499,7 +499,7 @@ PyAPI_FUNC(unsigned long) PyType_GetFlags(PyTypeObject*);
 
 #define PyType_Check(op) \
     PyType_FastSubclass(Py_TYPE(op), Py_TPFLAGS_TYPE_SUBCLASS)
-#define PyType_CheckExact(op) (Py_TYPE(op) == &PyType_Type)
+#define PyType_CheckExact(op) Py_IS_TYPE(op, &PyType_Type)
 
 PyAPI_FUNC(int) PyType_Ready(PyTypeObject *);
 PyAPI_FUNC(PyObject *) PyType_GenericAlloc(PyTypeObject *, Py_ssize_t);
@@ -633,11 +633,25 @@ _Py_REFCNT(const PyObject *ob)
 #define Py_TP(ob) (_Py_TYPE(ob))
 #define Py_TYPE(ob) (_Py_TYPE((PyObject *)(ob)))
 
+static inline int
+_Py_IS_TYPE(PyObject *op, PyTypeObject *tp)
+{
+    switch (_Py_GET_TAG(op)) {
+#ifdef WITH_FIXEDINT
+        case _PyFixedInt_Tag:
+            return tp == &PyLong_Type;
+#endif
+    }
+    return op->ob_type == tp;
+}
+#define Py_IS_TYPE(op, tp) (_Py_IS_TYPE((PyObject *)op, tp))
+
 #else
 
 #define Py_REFCNT(ob) (((PyObject*)(ob))->ob_refcnt)
 #define Py_TP(ob) ((ob)->ob_type)
 #define Py_TYPE(ob) (((PyObject*)(ob))->ob_type)
+#define Py_IS_TYPE(ob, tp) (Py_TYPE(ob) == (tp))
 
 #endif /* !WITH_TAGGED_POINTERS */
 

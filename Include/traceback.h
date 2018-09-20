@@ -29,7 +29,7 @@ PyAPI_FUNC(void) _PyTraceback_Add(const char *, const char *, int);
 
 /* Reveal traceback type so we can typecheck traceback objects */
 PyAPI_DATA(PyTypeObject) PyTraceBack_Type;
-#define PyTraceBack_Check(v) (Py_TYPE(v) == &PyTraceBack_Type)
+#define PyTraceBack_Check(v) Py_IS_TYPE(v, &PyTraceBack_Type)
 
 #ifndef Py_LIMITED_API
 /* Write the Python traceback into the file 'fd'. For example:

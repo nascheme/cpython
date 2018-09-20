@@ -2191,6 +2191,7 @@ _Py_Dealloc(PyObject *op)
 #endif
 
 #ifdef WITH_TAGGED_POINTERS
+extern inline int _Py_IS_TYPE(PyObject *op, PyTypeObject *tp);
 extern inline PyTypeObject * _Py_TYPE(const PyObject *ob);
 extern inline Py_ssize_t _Py_REFCNT(const PyObject *ob);
 extern inline void _Py_INCREF(PyObject *op);

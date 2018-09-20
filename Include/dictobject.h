@@ -57,7 +57,7 @@ PyAPI_DATA(PyTypeObject) PyDictValues_Type;
 
 #define PyDict_Check(op) \
                  PyType_FastSubclass(Py_TYPE(op), Py_TPFLAGS_DICT_SUBCLASS)
-#define PyDict_CheckExact(op) (Py_TYPE(op) == &PyDict_Type)
+#define PyDict_CheckExact(op) Py_IS_TYPE(op, &PyDict_Type)
 #define PyDictKeys_Check(op) PyObject_TypeCheck(op, &PyDictKeys_Type)
 #define PyDictItems_Check(op) PyObject_TypeCheck(op, &PyDictItems_Type)
 #define PyDictValues_Check(op) PyObject_TypeCheck(op, &PyDictValues_Type)

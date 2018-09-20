@@ -36,7 +36,7 @@ typedef struct {
 PyAPI_DATA(PyTypeObject) PyGen_Type;
 
 #define PyGen_Check(op) PyObject_TypeCheck(op, &PyGen_Type)
-#define PyGen_CheckExact(op) (Py_TYPE(op) == &PyGen_Type)
+#define PyGen_CheckExact(op) Py_IS_TYPE(op, &PyGen_Type)
 
 PyAPI_FUNC(PyObject *) PyGen_New(struct _frame *);
 PyAPI_FUNC(PyObject *) PyGen_NewWithQualName(struct _frame *,
@@ -59,7 +59,7 @@ PyAPI_DATA(PyTypeObject) _PyCoroWrapper_Type;
 
 PyAPI_DATA(PyTypeObject) _PyAIterWrapper_Type;
 
-#define PyCoro_CheckExact(op) (Py_TYPE(op) == &PyCoro_Type)
+#define PyCoro_CheckExact(op) Py_IS_TYPE(op, &PyCoro_Type)
 PyObject *_PyCoro_GetAwaitableIter(PyObject *o);
 PyAPI_FUNC(PyObject *) PyCoro_New(struct _frame *,
     PyObject *name, PyObject *qualname);
@@ -88,7 +88,7 @@ PyAPI_DATA(PyTypeObject) _PyAsyncGenAThrow_Type;
 PyAPI_FUNC(PyObject *) PyAsyncGen_New(struct _frame *,
     PyObject *name, PyObject *qualname);
 
-#define PyAsyncGen_CheckExact(op) (Py_TYPE(op) == &PyAsyncGen_Type)
+#define PyAsyncGen_CheckExact(op) Py_IS_TYPE(op, &PyAsyncGen_Type)
 
 PyObject *_PyAsyncGenValueWrapperNew(PyObject *);
 
