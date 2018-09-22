@@ -96,14 +96,14 @@ intern_string_constants(PyObject *tuple)
     return modified;
 }
 
-static int
-code_init(PyCodeObject *co, int argcount, int kwonlyargcount,
-           int nlocals, int stacksize, int flags,
-           PyObject *code, PyObject *consts, PyObject *names,
-           PyObject *varnames, PyObject *freevars, PyObject *cellvars,
-           PyObject *filename, PyObject *name, int firstlineno,
-           PyObject *lnotab)
-{ 
+int
+_PyCode_Init(PyCodeObject *co, int argcount, int kwonlyargcount,
+             int nlocals, int stacksize, int flags,
+             PyObject *code, PyObject *consts, PyObject *names,
+             PyObject *varnames, PyObject *freevars, PyObject *cellvars,
+             PyObject *filename, PyObject *name, int firstlineno,
+             PyObject *lnotab)
+{
     Py_ssize_t *cell2arg = NULL;
     Py_ssize_t i, n_cellvars, n_varnames, total_args;
 
@@ -232,9 +232,9 @@ PyCode_New(int argcount, int kwonlyargcount,
     if (co == NULL) {
         return NULL;
     }
-    if (!code_init(co, argcount, kwonlyargcount, nlocals, stacksize, flags,
-                   code, consts, names,  varnames,  freevars, cellvars,
-                   filename, name, firstlineno,  lnotab)) {
+    if (!_PyCode_Init(co, argcount, kwonlyargcount, nlocals, stacksize, flags,
+                      code, consts, names,  varnames,  freevars, cellvars,
+                      filename, name, firstlineno,  lnotab)) {
         Py_DECREF(co);
         return NULL;
     }
@@ -242,8 +242,7 @@ PyCode_New(int argcount, int kwonlyargcount,
 }
 
 
-extern PyObject * _PyMarshal_UnpackCode(const char *str, Py_ssize_t len);
-
+extern PyObject * _PyMarshal_UnpackCode(PyCodeObject *co);
 
 int
 _PyCode_Unpack(PyCodeObject *co)
@@ -251,39 +250,10 @@ _PyCode_Unpack(PyCodeObject *co)
     if (!co->co_is_packed) {
         return 1; // not packed, nothing to do
     }
+    if (!_PyMarshal_UnpackCode(co)) {
+        return 0;
+    }
     code_n_unpacked++;
-    assert(PyBytes_Check(co->co_packed));
-    PyObject *args = _PyMarshal_UnpackCode(PyBytes_AS_STRING(co->co_packed),
-                                           PyBytes_Size(co->co_packed));
-    if (args == NULL) {
-        return 0;
-    }
-    int argcount;
-    int kwonlyargcount;
-    int nlocals;
-    int stacksize;
-    int flags;
-    PyObject *code;
-    PyObject *consts;
-    PyObject *names;
-    PyObject *varnames;
-    PyObject *freevars = NULL;
-    PyObject *cellvars = NULL;
-    PyObject *filename;
-    PyObject *name;
-    int firstlineno;
-    PyObject *lnotab;
-    if (!PyArg_ParseTuple(args, "iiiiiSOOOOOiSOO", &argcount, &kwonlyargcount,
-                          &nlocals, &stacksize, &flags, &code, &consts, &names,
-                          &varnames, &filename, &name, &firstlineno, &lnotab,
-                          &freevars, &cellvars)) {
-        return 0;
-    }
-    if (!code_init(co, argcount, kwonlyargcount, nlocals, stacksize, flags,
-                   code, consts, names,  varnames,  freevars, cellvars,
-                   filename, name, firstlineno,  lnotab)) {
-        return 0;
-    }
     co->co_is_packed = 0;
     return 1;
 }

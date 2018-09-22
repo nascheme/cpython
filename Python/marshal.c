@@ -997,8 +997,19 @@ r_ref(PyObject *o, int flag, RFILE *p)
     return o;
 }
 
+
 /* Create packed code object, defined in codeobject.c */
 extern PyCodeObject * _PyCode_FromPacked(PyObject *packed_code);
+
+/* Init fields of code object from unpacked data */
+extern int
+_PyCode_Init(PyCodeObject *co, int argcount, int kwonlyargcount,
+             int nlocals, int stacksize, int flags,
+             PyObject *code, PyObject *consts, PyObject *names,
+             PyObject *varnames, PyObject *freevars, PyObject *cellvars,
+             PyObject *filename, PyObject *name, int firstlineno,
+             PyObject *lnotab);
+
 
 static PyObject *
 r_object(RFILE *p)
@@ -1565,12 +1576,14 @@ PyMarshal_ReadObjectFromString(const char *str, Py_ssize_t len)
     return result;
 }
 
-PyObject *
-_PyMarshal_UnpackCode(const char *str, Py_ssize_t len)
+int
+_PyMarshal_UnpackCode(PyCodeObject *co)
 {
     RFILE rf;
+    const char *str = PyBytes_AS_STRING(co->co_packed);
+    size_t len = PyBytes_Size(co->co_packed);
     if (!marshal_init_rfile(&rf, str, len)) {
-        return NULL;
+        return 0;
     }
     RFILE *p = &rf;
     int argcount;
@@ -1588,8 +1601,7 @@ _PyMarshal_UnpackCode(const char *str, Py_ssize_t len)
     PyObject *name = NULL;
     int firstlineno;
     PyObject *lnotab = NULL;
-
-    PyObject *v = NULL;
+    int rv = 0;
 
     /* XXX ignore long->int overflows for now */
     argcount = (int)r_long(p);
@@ -1638,10 +1650,19 @@ _PyMarshal_UnpackCode(const char *str, Py_ssize_t len)
     if (lnotab == NULL)
         goto code_error;
 
+#if 0
     v = Py_BuildValue("iiiiiSOOOOOiSOO", argcount, kwonlyargcount, nlocals,
                        stacksize, flags, code, consts, names, varnames,
                        filename, name, firstlineno, lnotab, freevars,
                        cellvars);
+#endif
+    if (!_PyCode_Init(co, argcount, kwonlyargcount, nlocals, stacksize, flags,
+                      code, consts, names,  varnames,  freevars, cellvars,
+                      filename, name, firstlineno,  lnotab)) {
+        goto code_error;
+    }
+    rv = 1; /* okay */
+
 code_error:
     Py_XDECREF(code);
     Py_XDECREF(consts);
@@ -1652,7 +1673,7 @@ code_error:
     Py_XDECREF(filename);
     Py_XDECREF(name);
     Py_XDECREF(lnotab);
-    return v;
+    return rv;
 }
 
 PyObject *
