@@ -1548,7 +1548,7 @@ PyMarshal_ReadObjectFromFile(FILE *fp)
 }
 
 static int
-marshal_init_rfile(RFILE *rf, const char *str, Py_ssize_t len)
+marshal_rfile_init(RFILE *rf, const char *str, Py_ssize_t len)
 {
     rf->fp = NULL;
     rf->readable = NULL;
@@ -1566,7 +1566,7 @@ PyObject *
 PyMarshal_ReadObjectFromString(const char *str, Py_ssize_t len)
 {
     RFILE rf;
-    if (!marshal_init_rfile(&rf, str, len)) {
+    if (!marshal_rfile_init(&rf, str, len)) {
         return NULL;
     }
     PyObject *result = r_object(&rf);
@@ -1577,12 +1577,12 @@ PyMarshal_ReadObjectFromString(const char *str, Py_ssize_t len)
 }
 
 int
-_PyMarshal_UnpackCode(PyCodeObject *co)
+_PyMarshal_UnpackCode(PyCodeObject *co, PyObject *packed)
 {
     RFILE rf;
-    const char *str = PyBytes_AS_STRING(co->co_packed);
-    size_t len = PyBytes_Size(co->co_packed);
-    if (!marshal_init_rfile(&rf, str, len)) {
+    const char *str = PyBytes_AS_STRING(packed);
+    size_t len = PyBytes_Size(packed);
+    if (!marshal_rfile_init(&rf, str, len)) {
         return 0;
     }
     RFILE *p = &rf;
@@ -1649,13 +1649,6 @@ _PyMarshal_UnpackCode(PyCodeObject *co)
     lnotab = r_object(p);
     if (lnotab == NULL)
         goto code_error;
-
-#if 0
-    v = Py_BuildValue("iiiiiSOOOOOiSOO", argcount, kwonlyargcount, nlocals,
-                       stacksize, flags, code, consts, names, varnames,
-                       filename, name, firstlineno, lnotab, freevars,
-                       cellvars);
-#endif
     if (!_PyCode_Init(co, argcount, kwonlyargcount, nlocals, stacksize, flags,
                       code, consts, names,  varnames,  freevars, cellvars,
                       filename, name, firstlineno,  lnotab)) {
@@ -1664,6 +1657,7 @@ _PyMarshal_UnpackCode(PyCodeObject *co)
     rv = 1; /* okay */
 
 code_error:
+    Py_DECREF(rf.refs);
     Py_XDECREF(code);
     Py_XDECREF(consts);
     Py_XDECREF(names);

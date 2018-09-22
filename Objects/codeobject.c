@@ -242,7 +242,7 @@ PyCode_New(int argcount, int kwonlyargcount,
 }
 
 
-extern PyObject * _PyMarshal_UnpackCode(PyCodeObject *co);
+extern PyObject * _PyMarshal_UnpackCode(PyCodeObject *co, PyObject *packed);
 
 int
 _PyCode_Unpack(PyCodeObject *co)
@@ -250,11 +250,15 @@ _PyCode_Unpack(PyCodeObject *co)
     if (!co->co_is_packed) {
         return 1; // not packed, nothing to do
     }
-    if (!_PyMarshal_UnpackCode(co)) {
-        return 0;
-    }
+    PyObject *packed = co->co_packed;
+    assert(packed != NULL);
     code_n_unpacked++;
     co->co_is_packed = 0;
+    co->co_packed = NULL;
+    if (!_PyMarshal_UnpackCode(co, packed)) {
+        return 0;
+    }
+    Py_DECREF(packed);
     return 1;
 }
 
@@ -507,6 +511,7 @@ code_dealloc(PyCodeObject *co)
     Py_XDECREF(co->co_filename);
     Py_XDECREF(co->co_name);
     Py_XDECREF(co->co_lnotab);
+    Py_XDECREF(co->co_packed);
     if (co->co_cell2arg != NULL)
         PyMem_FREE(co->co_cell2arg);
     if (co->co_zombieframe != NULL)
