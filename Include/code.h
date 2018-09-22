@@ -48,6 +48,9 @@ typedef struct {
        Type is a void* to keep the format private in codeobject.c to force
        people to go through the proper APIs. */
     void *co_extra;
+    /* packed version of code object, will be unpacked when first needed */
+    PyObject *co_packed;
+    int co_is_packed;
 } PyCodeObject;
 
 /* Masks for co_flags above */

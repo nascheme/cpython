@@ -259,6 +259,7 @@ _code_type = type(_write_atomic.__code__)
 #                         this might affected the first line number #32911)
 #     Python 3.8a1  3400 (move frame block handling to compiler #17611)
 #     Python 3.8a1  3401 (add END_ASYNC_FOR #33041)
+#     Python XXXXX  3402 (packed code objects)
 #
 # MAGIC must change whenever the bytecode emitted by the compiler may no
 # longer be understood by older implementations of the eval loop (usually
@@ -267,7 +268,7 @@ _code_type = type(_write_atomic.__code__)
 # Whenever MAGIC_NUMBER is changed, the ranges in the magic_values array
 # in PC/launcher.c must also be updated.
 
-MAGIC_NUMBER = (3401).to_bytes(2, 'little') + b'\r\n'
+MAGIC_NUMBER = (3402).to_bytes(2, 'little') + b'\r\n'
 _RAW_MAGIC_NUMBER = int.from_bytes(MAGIC_NUMBER, 'little')  # For import.c
 
 _PYCACHE = '__pycache__'

@@ -3677,6 +3677,9 @@ too_many_positional(PyCodeObject *co, Py_ssize_t given, Py_ssize_t defcount,
     Py_DECREF(kwonly_sig);
 }
 
+/* defined in codeobject.c */
+int _PyCode_Unpack(PyCodeObject *co);
+
 /* This is gonna seem *real weird*, but if you put some other code between
    PyEval_EvalFrame() and _PyEval_EvalFrameDefault() you will need to adjust
    the test in the if statements in Misc/gdbinit (pystack and pystackv). */
@@ -3691,6 +3694,11 @@ _PyEval_EvalCodeWithName(PyObject *_co, PyObject *globals, PyObject *locals,
            PyObject *name, PyObject *qualname)
 {
     PyCodeObject* co = (PyCodeObject*)_co;
+    if (co->co_is_packed) {
+        if (!_PyCode_Unpack(co)) {
+            return NULL;
+        }
+    }
     PyFrameObject *f;
     PyObject *retval = NULL;
     PyObject **fastlocals, **freevars;

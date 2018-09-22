@@ -5,6 +5,9 @@
 #include "structmember.h"
 #include "internal/pystate.h"
 
+static unsigned int code_n_packed;
+static unsigned int code_n_unpacked;
+
 /* Holder for co_extra information */
 typedef struct {
     Py_ssize_t ce_size;
@@ -93,16 +96,14 @@ intern_string_constants(PyObject *tuple)
     return modified;
 }
 
-
-PyCodeObject *
-PyCode_New(int argcount, int kwonlyargcount,
+static int
+code_init(PyCodeObject *co, int argcount, int kwonlyargcount,
            int nlocals, int stacksize, int flags,
            PyObject *code, PyObject *consts, PyObject *names,
            PyObject *varnames, PyObject *freevars, PyObject *cellvars,
            PyObject *filename, PyObject *name, int firstlineno,
            PyObject *lnotab)
-{
-    PyCodeObject *co;
+{ 
     Py_ssize_t *cell2arg = NULL;
     Py_ssize_t i, n_cellvars, n_varnames, total_args;
 
@@ -118,12 +119,12 @@ PyCode_New(int argcount, int kwonlyargcount,
         filename == NULL || !PyUnicode_Check(filename) ||
         lnotab == NULL || !PyBytes_Check(lnotab)) {
         PyErr_BadInternalCall();
-        return NULL;
+        return 0;
     }
 
     /* Ensure that the filename is a ready Unicode string */
     if (PyUnicode_READY(filename) < 0)
-        return NULL;
+        return 0;
 
     intern_strings(names);
     intern_strings(varnames);
@@ -150,7 +151,7 @@ PyCode_New(int argcount, int kwonlyargcount,
     }
     if (total_args > n_varnames) {
         PyErr_SetString(PyExc_ValueError, "code: varnames is too small");
-        return NULL;
+        return 0;
     }
 
     /* Create mapping between cells and arguments if needed. */
@@ -159,7 +160,7 @@ PyCode_New(int argcount, int kwonlyargcount,
         cell2arg = PyMem_NEW(Py_ssize_t, n_cellvars);
         if (cell2arg == NULL) {
             PyErr_NoMemory();
-            return NULL;
+            return 0;
         }
         /* Find cells which are also arguments. */
         for (i = 0; i < n_cellvars; i++) {
@@ -171,7 +172,7 @@ PyCode_New(int argcount, int kwonlyargcount,
                 int cmp = PyUnicode_Compare(cell, arg);
                 if (cmp == -1 && PyErr_Occurred()) {
                     PyMem_FREE(cell2arg);
-                    return NULL;
+                    return 0;
                 }
                 if (cmp == 0) {
                     cell2arg[i] = j;
@@ -185,12 +186,9 @@ PyCode_New(int argcount, int kwonlyargcount,
             cell2arg = NULL;
         }
     }
-    co = PyObject_NEW(PyCodeObject, &PyCode_Type);
-    if (co == NULL) {
-        if (cell2arg)
-            PyMem_FREE(cell2arg);
-        return NULL;
-    }
+
+    co->co_packed = NULL;
+    co->co_is_packed = 0;
     co->co_argcount = argcount;
     co->co_kwonlyargcount = kwonlyargcount;
     co->co_nlocals = nlocals;
@@ -219,7 +217,75 @@ PyCode_New(int argcount, int kwonlyargcount,
     co->co_zombieframe = NULL;
     co->co_weakreflist = NULL;
     co->co_extra = NULL;
+    return 1;
+}
+
+PyCodeObject *
+PyCode_New(int argcount, int kwonlyargcount,
+           int nlocals, int stacksize, int flags,
+           PyObject *code, PyObject *consts, PyObject *names,
+           PyObject *varnames, PyObject *freevars, PyObject *cellvars,
+           PyObject *filename, PyObject *name, int firstlineno,
+           PyObject *lnotab)
+{
+    PyCodeObject *co = PyObject_NEW(PyCodeObject, &PyCode_Type);
+    if (co == NULL) {
+        return NULL;
+    }
+    if (!code_init(co, argcount, kwonlyargcount, nlocals, stacksize, flags,
+                   code, consts, names,  varnames,  freevars, cellvars,
+                   filename, name, firstlineno,  lnotab)) {
+        Py_DECREF(co);
+        return NULL;
+    }
     return co;
+}
+
+
+extern PyObject * _PyMarshal_UnpackCode(const char *str, Py_ssize_t len);
+
+
+int
+_PyCode_Unpack(PyCodeObject *co)
+{
+    if (!co->co_is_packed) {
+        return 1; // not packed, nothing to do
+    }
+    code_n_unpacked++;
+    assert(PyBytes_Check(co->co_packed));
+    PyObject *args = _PyMarshal_UnpackCode(PyBytes_AS_STRING(co->co_packed),
+                                           PyBytes_Size(co->co_packed));
+    if (args == NULL) {
+        return 0;
+    }
+    int argcount;
+    int kwonlyargcount;
+    int nlocals;
+    int stacksize;
+    int flags;
+    PyObject *code;
+    PyObject *consts;
+    PyObject *names;
+    PyObject *varnames;
+    PyObject *freevars = NULL;
+    PyObject *cellvars = NULL;
+    PyObject *filename;
+    PyObject *name;
+    int firstlineno;
+    PyObject *lnotab;
+    if (!PyArg_ParseTuple(args, "iiiiiSOOOOOiSOO", &argcount, &kwonlyargcount,
+                          &nlocals, &stacksize, &flags, &code, &consts, &names,
+                          &varnames, &filename, &name, &firstlineno, &lnotab,
+                          &freevars, &cellvars)) {
+        return 0;
+    }
+    if (!code_init(co, argcount, kwonlyargcount, nlocals, stacksize, flags,
+                   code, consts, names,  varnames,  freevars, cellvars,
+                   filename, name, firstlineno,  lnotab)) {
+        return 0;
+    }
+    co->co_is_packed = 0;
+    return 1;
 }
 
 PyCodeObject *
@@ -268,6 +334,25 @@ failed:
     Py_XDECREF(funcname_ob);
     Py_XDECREF(filename_ob);
     return result;
+}
+
+PyCodeObject *
+_PyCode_FromPacked(PyObject *packed_code)
+{
+    PyCodeObject *co = PyCode_NewEmpty("", "", 0);
+    if (co == NULL) {
+        return NULL;
+    }
+    co->co_packed = packed_code;
+    co->co_is_packed = 1;
+    code_n_packed++;
+#if 0
+    if (!code_unpack(co)) {
+        Py_DECREF(co);
+        return NULL;
+    }
+#endif
+    return co;
 }
 
 #define OFF(x) offsetof(PyCodeObject, x)

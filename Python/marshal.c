@@ -338,6 +338,8 @@ err:
 static void
 w_complex_object(PyObject *v, char flag, WFILE *p);
 
+static PyObject *marshal_pack_code(PyCodeObject *co);
+
 static void
 w_object(PyObject *v, WFILE *p)
 {
@@ -527,23 +529,10 @@ w_complex_object(PyObject *v, char flag, WFILE *p)
         }
     }
     else if (PyCode_Check(v)) {
-        PyCodeObject *co = (PyCodeObject *)v;
+        /* packed string containing code args */
+        PyObject *s = marshal_pack_code((PyCodeObject *)v);
         W_TYPE(TYPE_CODE, p);
-        w_long(co->co_argcount, p);
-        w_long(co->co_kwonlyargcount, p);
-        w_long(co->co_nlocals, p);
-        w_long(co->co_stacksize, p);
-        w_long(co->co_flags, p);
-        w_object(co->co_code, p);
-        w_object(co->co_consts, p);
-        w_object(co->co_names, p);
-        w_object(co->co_varnames, p);
-        w_object(co->co_freevars, p);
-        w_object(co->co_cellvars, p);
-        w_object(co->co_filename, p);
-        w_object(co->co_name, p);
-        w_long(co->co_firstlineno, p);
-        w_object(co->co_lnotab, p);
+        w_pstring(PyBytes_AS_STRING(s), PyBytes_GET_SIZE(s), p);
     }
     else if (PyObject_CheckBuffer(v)) {
         /* Write unknown bytes-like objects as a bytes object */
@@ -598,6 +587,67 @@ w_clear_refs(WFILE *wf)
         _Py_hashtable_destroy(wf->hashtable);
     }
 }
+
+static PyObject *
+marshal_pack_code(PyCodeObject *co)
+{
+    /* FIXME: this shares a fair bit of code with
+     * PyMarshal_WriteObjectToString, should be refactored */
+    WFILE wf;
+
+    memset(&wf, 0, sizeof(wf));
+    wf.str = PyBytes_FromStringAndSize((char *)NULL, 50);
+    if (wf.str == NULL)
+        return NULL;
+    wf.ptr = wf.buf = PyBytes_AS_STRING((PyBytesObject *)wf.str);
+    wf.end = wf.ptr + PyBytes_Size(wf.str);
+    wf.error = WFERR_OK;
+    wf.version = Py_MARSHAL_VERSION;
+    if (w_init_refs(&wf, Py_MARSHAL_VERSION)) {
+        Py_DECREF(wf.str);
+        return NULL;
+    }
+    WFILE *p = &wf;
+    w_long(co->co_argcount, p);
+    w_long(co->co_kwonlyargcount, p);
+    w_long(co->co_nlocals, p);
+    w_long(co->co_stacksize, p);
+    w_long(co->co_flags, p);
+    w_object(co->co_code, p);
+    w_object(co->co_consts, p);
+    w_object(co->co_names, p);
+    w_object(co->co_varnames, p);
+    w_object(co->co_freevars, p);
+    w_object(co->co_cellvars, p);
+    w_object(co->co_filename, p);
+    w_object(co->co_name, p);
+    w_long(co->co_firstlineno, p);
+    w_object(co->co_lnotab, p);
+    w_clear_refs(&wf);
+    if (wf.str != NULL) {
+        char *base = PyBytes_AS_STRING((PyBytesObject *)wf.str);
+        if (wf.ptr - base > PY_SSIZE_T_MAX) {
+            Py_DECREF(wf.str);
+            PyErr_SetString(PyExc_OverflowError,
+                            "too much marshal data for a bytes object");
+            return NULL;
+        }
+        if (_PyBytes_Resize(&wf.str, (Py_ssize_t)(wf.ptr - base)) < 0)
+            return NULL;
+    }
+    if (wf.error != WFERR_OK) {
+        Py_XDECREF(wf.str);
+        if (wf.error == WFERR_NOMEMORY)
+            PyErr_NoMemory();
+        else
+            PyErr_SetString(PyExc_ValueError,
+              (wf.error==WFERR_UNMARSHALLABLE)?"unmarshallable object"
+               :"object too deeply nested to marshal");
+        return NULL;
+    }
+    return wf.str;
+}
+
 
 /* version currently has no effect for writing ints. */
 void
@@ -946,6 +996,9 @@ r_ref(PyObject *o, int flag, RFILE *p)
     }
     return o;
 }
+
+/* Create packed code object, defined in codeobject.c */
+extern PyCodeObject * _PyCode_FromPacked(PyObject *packed_code);
 
 static PyObject *
 r_object(RFILE *p)
@@ -1320,93 +1373,26 @@ r_object(RFILE *p)
 
     case TYPE_CODE:
         {
-            int argcount;
-            int kwonlyargcount;
-            int nlocals;
-            int stacksize;
-            int flags;
-            PyObject *code = NULL;
-            PyObject *consts = NULL;
-            PyObject *names = NULL;
-            PyObject *varnames = NULL;
-            PyObject *freevars = NULL;
-            PyObject *cellvars = NULL;
-            PyObject *filename = NULL;
-            PyObject *name = NULL;
-            int firstlineno;
-            PyObject *lnotab = NULL;
-
-            idx = r_ref_reserve(flag, p);
-            if (idx < 0)
+            n = r_long(p);
+            if (PyErr_Occurred())
                 break;
-
-            v = NULL;
-
-            /* XXX ignore long->int overflows for now */
-            argcount = (int)r_long(p);
-            if (PyErr_Occurred())
-                goto code_error;
-            kwonlyargcount = (int)r_long(p);
-            if (PyErr_Occurred())
-                goto code_error;
-            nlocals = (int)r_long(p);
-            if (PyErr_Occurred())
-                goto code_error;
-            stacksize = (int)r_long(p);
-            if (PyErr_Occurred())
-                goto code_error;
-            flags = (int)r_long(p);
-            if (PyErr_Occurred())
-                goto code_error;
-            code = r_object(p);
-            if (code == NULL)
-                goto code_error;
-            consts = r_object(p);
-            if (consts == NULL)
-                goto code_error;
-            names = r_object(p);
-            if (names == NULL)
-                goto code_error;
-            varnames = r_object(p);
-            if (varnames == NULL)
-                goto code_error;
-            freevars = r_object(p);
-            if (freevars == NULL)
-                goto code_error;
-            cellvars = r_object(p);
-            if (cellvars == NULL)
-                goto code_error;
-            filename = r_object(p);
-            if (filename == NULL)
-                goto code_error;
-            name = r_object(p);
-            if (name == NULL)
-                goto code_error;
-            firstlineno = (int)r_long(p);
-            if (firstlineno == -1 && PyErr_Occurred())
+            if (n < 0 || n > SIZE32_MAX) {
+                PyErr_SetString(PyExc_ValueError,
+                                "bad marshal data ()");
                 break;
-            lnotab = r_object(p);
-            if (lnotab == NULL)
-                goto code_error;
+            }
+            v = PyBytes_FromStringAndSize((char *)NULL, n);
+            if (v == NULL)
+                break;
+            const char *ptr = r_string(n, p);
+            if (ptr == NULL) {
+                Py_DECREF(v);
+                break;
+            }
+            memcpy(PyBytes_AS_STRING(v), ptr, n);
+            v = (PyObject *) _PyCode_FromPacked(v);
+            //v = r_ref_insert(v, idx, flag, p);
 
-            v = (PyObject *) PyCode_New(
-                            argcount, kwonlyargcount,
-                            nlocals, stacksize, flags,
-                            code, consts, names, varnames,
-                            freevars, cellvars, filename, name,
-                            firstlineno, lnotab);
-            v = r_ref_insert(v, idx, flag, p);
-
-          code_error:
-            Py_XDECREF(code);
-            Py_XDECREF(consts);
-            Py_XDECREF(names);
-            Py_XDECREF(varnames);
-            Py_XDECREF(freevars);
-            Py_XDECREF(cellvars);
-            Py_XDECREF(filename);
-            Py_XDECREF(name);
-            Py_XDECREF(lnotab);
         }
         retval = v;
         break;
@@ -1550,25 +1536,123 @@ PyMarshal_ReadObjectFromFile(FILE *fp)
     return result;
 }
 
+static int
+marshal_init_rfile(RFILE *rf, const char *str, Py_ssize_t len)
+{
+    rf->fp = NULL;
+    rf->readable = NULL;
+    rf->ptr = (char *)str;
+    rf->end = (char *)str + len;
+    rf->buf = NULL;
+    rf->depth = 0;
+    rf->refs = PyList_New(0);
+    if (rf->refs == NULL)
+        return 0;
+    return 1;
+}
+
 PyObject *
 PyMarshal_ReadObjectFromString(const char *str, Py_ssize_t len)
 {
     RFILE rf;
-    PyObject *result;
-    rf.fp = NULL;
-    rf.readable = NULL;
-    rf.ptr = (char *)str;
-    rf.end = (char *)str + len;
-    rf.buf = NULL;
-    rf.depth = 0;
-    rf.refs = PyList_New(0);
-    if (rf.refs == NULL)
+    if (!marshal_init_rfile(&rf, str, len)) {
         return NULL;
-    result = r_object(&rf);
+    }
+    PyObject *result = r_object(&rf);
     Py_DECREF(rf.refs);
     if (rf.buf != NULL)
         PyMem_FREE(rf.buf);
     return result;
+}
+
+PyObject *
+_PyMarshal_UnpackCode(const char *str, Py_ssize_t len)
+{
+    RFILE rf;
+    if (!marshal_init_rfile(&rf, str, len)) {
+        return NULL;
+    }
+    RFILE *p = &rf;
+    int argcount;
+    int kwonlyargcount;
+    int nlocals;
+    int stacksize;
+    int flags;
+    PyObject *code = NULL;
+    PyObject *consts = NULL;
+    PyObject *names = NULL;
+    PyObject *varnames = NULL;
+    PyObject *freevars = NULL;
+    PyObject *cellvars = NULL;
+    PyObject *filename = NULL;
+    PyObject *name = NULL;
+    int firstlineno;
+    PyObject *lnotab = NULL;
+
+    PyObject *v = NULL;
+
+    /* XXX ignore long->int overflows for now */
+    argcount = (int)r_long(p);
+    if (PyErr_Occurred())
+        goto code_error;
+    kwonlyargcount = (int)r_long(p);
+    if (PyErr_Occurred())
+        goto code_error;
+    nlocals = (int)r_long(p);
+    if (PyErr_Occurred())
+        goto code_error;
+    stacksize = (int)r_long(p);
+    if (PyErr_Occurred())
+        goto code_error;
+    flags = (int)r_long(p);
+    if (PyErr_Occurred())
+        goto code_error;
+    code = r_object(p);
+    if (code == NULL)
+        goto code_error;
+    consts = r_object(p);
+    if (consts == NULL)
+        goto code_error;
+    names = r_object(p);
+    if (names == NULL)
+        goto code_error;
+    varnames = r_object(p);
+    if (varnames == NULL)
+        goto code_error;
+    freevars = r_object(p);
+    if (freevars == NULL)
+        goto code_error;
+    cellvars = r_object(p);
+    if (cellvars == NULL)
+        goto code_error;
+    filename = r_object(p);
+    if (filename == NULL)
+        goto code_error;
+    name = r_object(p);
+    if (name == NULL)
+        goto code_error;
+    firstlineno = (int)r_long(p);
+    if (firstlineno == -1 && PyErr_Occurred())
+        goto code_error;
+    lnotab = r_object(p);
+    if (lnotab == NULL)
+        goto code_error;
+
+    v = Py_BuildValue("iiiiiSOOOOOiSOO", argcount, kwonlyargcount, nlocals,
+                       stacksize, flags, code, consts, names, varnames,
+                       filename, name, firstlineno, lnotab, freevars,
+                       cellvars);
+code_error:
+    Py_XDECREF(code);
+    Py_XDECREF(consts);
+    Py_XDECREF(names);
+    Py_XDECREF(varnames);
+    Py_XDECREF(freevars);
+    Py_XDECREF(cellvars);
+    Py_XDECREF(filename);
+    Py_XDECREF(name);
+    Py_XDECREF(lnotab);
+    return v;
 }
 
 PyObject *
