@@ -7,6 +7,26 @@
 #include "code.h"
 #include "structmember.h"
 
+static PyObject *
+func_globals_namespace(PyObject *globals)
+{
+    _Py_IDENTIFIER(__namespace__);
+    PyObject *ns_ref = _PyDict_GetItemId(globals, &PyId___namespace__);
+    if (ns_ref != NULL && PyWeakref_Check(ns_ref)) {
+        /* have a module, return it */
+        PyObject *m = PyWeakref_GetObject(ns_ref);
+        if (m == NULL) {
+            return NULL; /* failed to follow weakref */
+        }
+        if (PyModule_Check(m)) {
+            Py_INCREF(m);
+            return m;
+        }
+    }
+    /* FIXME: create anonynmous module if can't find real one? */
+    return NULL;
+}
+
 PyObject *
 PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname)
 {
@@ -29,6 +49,7 @@ PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname
     op->func_code = code;
     Py_INCREF(globals);
     op->func_globals = globals;
+    op->func_namespace = func_globals_namespace(globals);
     op->func_name = ((PyCodeObject *)code)->co_name;
     Py_INCREF(op->func_name);
     op->func_defaults = NULL; /* No default arguments */
@@ -83,6 +104,9 @@ PyFunction_GetCode(PyObject *op)
     return ((PyFunctionObject *) op) -> func_code;
 }
 
+extern inline PyObject *
+_PyFunction_GetGlobals(PyFunctionObject *f);
+
 PyObject *
 PyFunction_GetGlobals(PyObject *op)
 {
@@ -90,7 +114,15 @@ PyFunction_GetGlobals(PyObject *op)
         PyErr_BadInternalCall();
         return NULL;
     }
-    return ((PyFunctionObject *) op) -> func_globals;
+    return _PyFunction_GetGlobals((PyFunctionObject *)op);
+}
+
+static PyObject *
+func_get_globals(PyFunctionObject *f, void*closure)
+{
+    PyObject *d = _PyFunction_GetGlobals(f);
+    Py_XINCREF(d);
+    return d;
 }
 
 PyObject *
@@ -235,8 +267,6 @@ static PyMemberDef func_memberlist[] = {
     {"__closure__",   T_OBJECT,     OFF(func_closure),
      RESTRICTED|READONLY},
     {"__doc__",       T_OBJECT,     OFF(func_doc), PY_WRITE_RESTRICTED},
-    {"__globals__",   T_OBJECT,     OFF(func_globals),
-     RESTRICTED|READONLY},
     {"__module__",    T_OBJECT,     OFF(func_module), PY_WRITE_RESTRICTED},
     {NULL}  /* Sentinel */
 };
@@ -406,6 +436,7 @@ func_set_annotations(PyFunctionObject *op, PyObject *value)
 
 static PyGetSetDef func_getsetlist[] = {
     {"__code__", (getter)func_get_code, (setter)func_set_code},
+    {"__globals__", (getter)func_get_globals, NULL},
     {"__defaults__", (getter)func_get_defaults,
      (setter)func_set_defaults},
     {"__kwdefaults__", (getter)func_get_kwdefaults,
@@ -531,6 +562,7 @@ func_dealloc(PyFunctionObject *op)
         PyObject_ClearWeakRefs((PyObject *) op);
     Py_DECREF(op->func_code);
     Py_DECREF(op->func_globals);
+    Py_XDECREF(op->func_namespace);
     Py_XDECREF(op->func_module);
     Py_DECREF(op->func_name);
     Py_XDECREF(op->func_defaults);
@@ -555,6 +587,7 @@ func_traverse(PyFunctionObject *f, visitproc visit, void *arg)
 {
     Py_VISIT(f->func_code);
     Py_VISIT(f->func_globals);
+    Py_VISIT(f->func_namespace);
     Py_VISIT(f->func_module);
     Py_VISIT(f->func_defaults);
     Py_VISIT(f->func_kwdefaults);
