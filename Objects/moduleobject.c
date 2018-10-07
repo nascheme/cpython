@@ -55,6 +55,27 @@ PyModuleDef_Init(struct PyModuleDef* def)
 }
 
 static int
+module_add_namespace(PyObject *dict, PyModuleObject *mod)
+{
+    _Py_IDENTIFIER(__namespace__);
+    _Py_Identifier *name = &PyId___namespace__;
+    assert(PyDict_Check(dict));
+    assert(PyModule_Check(mod));
+    if (_PyDict_GetItemId(dict, name) == NULL) {
+        PyObject *ns = PyWeakref_NewRef((PyObject *)mod, NULL);
+        if (ns == NULL) {
+            return 0;
+        }
+        if (_PyDict_SetItemId(dict, name, ns) != 0) {
+            Py_DECREF(ns);
+            return 0;
+        }
+        Py_DECREF(ns);
+    }
+    return 1;
+}
+
+static int
 module_init_dict(PyModuleObject *mod, PyObject *md_dict,
                  PyObject *name, PyObject *doc)
 {
@@ -83,6 +104,8 @@ module_init_dict(PyModuleObject *mod, PyObject *md_dict,
         Py_INCREF(name);
         Py_XSETREF(mod->md_name, name);
     }
+    if (!module_add_namespace(md_dict, mod))
+        return -1;
 
     return 0;
 }
