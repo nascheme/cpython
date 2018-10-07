@@ -3644,7 +3644,7 @@ class TestSignatureDefinitions(unittest.TestCase):
         # Check the signatures we expect to be there
         ns = vars(builtins)
         for name, obj in sorted(ns.items()):
-            if not callable(obj):
+            if not callable(obj) or name == '__namespace__':
                 continue
             # The builtin types haven't been converted to AC yet
             if isinstance(obj, type) and (name not in types_with_signatures):

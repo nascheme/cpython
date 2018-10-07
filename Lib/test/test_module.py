@@ -16,6 +16,13 @@ class BareLoader:
     pass
 
 
+def _mod_ns(m):
+    # Return module namespace, remove implementation detail names
+    ns = dict(m.__dict__)
+    ns.pop('__namespace__', None)
+    return ns
+
+
 class ModuleTests(unittest.TestCase):
     def test_uninitialized(self):
         # An uninitialized module has no __dict__ or __name__,
@@ -54,7 +61,7 @@ class ModuleTests(unittest.TestCase):
         self.assertIs(foo.__loader__, None)
         self.assertIs(foo.__package__, None)
         self.assertIs(foo.__spec__, None)
-        self.assertEqual(foo.__dict__, {"__name__": "foo", "__doc__": None,
+        self.assertEqual(_mod_ns(foo), {"__name__": "foo", "__doc__": None,
                                         "__loader__": None, "__package__": None,
                                         "__spec__": None})
 
@@ -63,7 +70,7 @@ class ModuleTests(unittest.TestCase):
         foo = ModuleType("foo", "foodoc")
         self.assertEqual(foo.__name__, "foo")
         self.assertEqual(foo.__doc__, "foodoc")
-        self.assertEqual(foo.__dict__,
+        self.assertEqual(_mod_ns(foo),
                          {"__name__": "foo", "__doc__": "foodoc",
                           "__loader__": None, "__package__": None,
                           "__spec__": None})
@@ -73,7 +80,7 @@ class ModuleTests(unittest.TestCase):
         foo = ModuleType("foo", "foodoc\u1234")
         self.assertEqual(foo.__name__, "foo")
         self.assertEqual(foo.__doc__, "foodoc\u1234")
-        self.assertEqual(foo.__dict__,
+        self.assertEqual(_mod_ns(foo),
                          {"__name__": "foo", "__doc__": "foodoc\u1234",
                           "__loader__": None, "__package__": None,
                           "__spec__": None})
@@ -87,7 +94,7 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual(foo.__name__, "foo")
         self.assertEqual(foo.__doc__, "foodoc")
         self.assertEqual(foo.bar, 42)
-        self.assertEqual(foo.__dict__,
+        self.assertEqual(_mod_ns(foo),
               {"__name__": "foo", "__doc__": "foodoc", "bar": 42,
                "__loader__": None, "__package__": None, "__spec__": None})
         self.assertTrue(foo.__dict__ is d)

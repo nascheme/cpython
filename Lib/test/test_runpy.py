@@ -23,6 +23,14 @@ from runpy import _run_code, _run_module_code, run_module, run_path
 # See test_cmd_line_script for a test that executes that code path
 
 
+# Used for comparision of module dicts, remove __namespace__ if it exists
+def _clean_ns(obj):
+    if isinstance(obj, dict) and '__namespace__' in obj:
+        obj = obj.copy()
+        del obj['__namespace__']
+    return obj
+
+
 # Set up the test code and expected results
 example_source = """\
 # Check basic code execution
@@ -81,7 +89,9 @@ class CodeExecutionMixin:
         """
         # Avoid side effects
         result_ns = result_ns.copy()
+        result_ns.pop("__namespace__", None)
         expected_ns = expected_ns.copy()
+        expected_ns.pop("__namespace__", None)
         # Impls are permitted to add extra names, so filter them out
         for k in list(result_ns):
             if k.startswith("__") and k.endswith("__"):
@@ -110,8 +120,8 @@ class CodeExecutionMixin:
         # namespace, as the diffs are too hard to debug if anything breaks
         self.assertEqual(set(result_ns), set(expected_ns))
         for k in result_ns:
-            actual = (k, result_ns[k])
-            expected = (k, expected_ns[k])
+            actual = (k, _clean_ns(result_ns[k]))
+            expected = (k, _clean_ns(expected_ns[k]))
             self.assertEqual(actual, expected)
 
     def check_code_execution(self, create_namespace, expected_namespace):
