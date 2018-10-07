@@ -263,6 +263,7 @@ class ReloadTests:
                     loader = ns.pop('__loader__')
                     spec = ns.pop('__spec__')
                     ns.pop('__builtins__', None)  # An implementation detail.
+                    ns.pop('__namespace__', None)  # An implementation detail.
                     self.assertEqual(spec.name, name)
                     self.assertEqual(spec.loader, loader)
                     self.assertEqual(loader.path, path)
@@ -286,6 +287,7 @@ class ReloadTests:
                     loader = ns.pop('__loader__')
                     spec = ns.pop('__spec__')
                     ns.pop('__builtins__', None)  # An implementation detail.
+                    ns.pop('__namespace__', None)  # An implementation detail.
                     self.assertEqual(spec.name, name)
                     self.assertEqual(spec.loader, loader)
                     self.assertIs(reloaded, module)
@@ -316,6 +318,7 @@ class ReloadTests:
                     path = ns.pop('__path__')
                     spec = ns.pop('__spec__')
                     ns.pop('__builtins__', None)  # An implementation detail.
+                    ns.pop('__namespace__', None)  # An implementation detail.
                     self.assertEqual(spec.name, name)
                     self.assertIsNotNone(spec.loader)
                     self.assertIsNotNone(loader)
@@ -345,6 +348,7 @@ class ReloadTests:
                     loader = ns.pop('__loader__')
                     spec = ns.pop('__spec__')
                     ns.pop('__builtins__', None)  # An implementation detail.
+                    ns.pop('__namespace__', None)  # An implementation detail.
                     self.assertEqual(spec.name, name)
                     self.assertEqual(spec.loader, loader)
                     self.assertIs(reloaded, module)
