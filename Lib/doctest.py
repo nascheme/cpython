@@ -1320,6 +1320,11 @@ class DocTestRunner:
             # __patched_linecache_getlines).
             filename = '<doctest %s[%d]>' % (test.name, examplenum)
 
+            if '__namespace__' in test.globs:
+                mod = test.globs['__namespace__']()
+                if mod.__dict__ is not test.globs:
+                    del test.globs['__namespace__']
+
             # Run the example in the given context (globs), and record
             # any exception that gets raised.  (But don't intercept
             # keyboard interrupts.)
