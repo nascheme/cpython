@@ -54,6 +54,27 @@ PyModuleDef_Init(struct PyModuleDef* def)
     return (PyObject*)def;
 }
 
+/* follow mod.__dict__.__namespace__ weakref to find module */
+PyObject *
+_PyModule_Globals_Namespace(PyObject *globals)
+{
+    _Py_IDENTIFIER(__namespace__);
+    PyObject *ns_ref = _PyDict_GetItemId(globals, &PyId___namespace__);
+    if (ns_ref != NULL && PyWeakref_Check(ns_ref)) {
+        /* have a module, return it */
+        PyObject *m = PyWeakref_GetObject(ns_ref);
+        if (m == NULL) {
+            return NULL; /* failed to follow weakref */
+        }
+        if (PyModule_Check(m)) {
+            Py_INCREF(m);
+            return m;
+        }
+    }
+    /* FIXME: create anonynmous module if can't find real one? */
+    return NULL;
+}
+
 static int
 module_add_namespace(PyObject *dict, PyModuleObject *mod)
 {
@@ -493,16 +514,32 @@ PyModule_SetDocString(PyObject *m, const char *doc)
 }
 
 PyObject *
-PyModule_GetDict(PyObject *m)
+_PyModule_GetDict(PyObject *m)
 {
     PyObject *d;
+#if Py_DEBUG
     if (!PyModule_Check(m)) {
         PyErr_BadInternalCall();
         return NULL;
     }
+#endif
     d = ((PyModuleObject *)m) -> md_dict;
     assert(d != NULL);
     return d;
+}
+
+/* type checking version of above */
+PyObject *
+PyModule_GetDict(PyObject *m)
+{
+#ifndef Py_DEBUG
+    /* check is done by _PyModule_GetDict if Py_DEBUG */
+    if (!PyModule_Check(m)) {
+        PyErr_BadInternalCall();
+        return NULL;
+    }
+#endif
+    return _PyModule_GetDict(m);
 }
 
 PyObject*

@@ -21,6 +21,8 @@ PyAPI_FUNC(PyObject *) PyModule_New(
     const char *name            /* UTF-8 encoded string */
     );
 PyAPI_FUNC(PyObject *) PyModule_GetDict(PyObject *);
+PyAPI_FUNC(PyObject *) _PyModule_GetDict(PyObject *);
+//PyAPI_FUNC(PyObject *) PyModule_GetBuiltins(PyObject *);
 #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 >= 0x03030000
 PyAPI_FUNC(PyObject *) PyModule_GetNameObject(PyObject *);
 #endif
@@ -30,6 +32,7 @@ PyAPI_FUNC(PyObject *) PyModule_GetFilenameObject(PyObject *);
 #ifndef Py_LIMITED_API
 PyAPI_FUNC(void) _PyModule_Clear(PyObject *);
 PyAPI_FUNC(void) _PyModule_ClearDict(PyObject *);
+PyAPI_FUNC(PyObject *) _PyModule_Globals_Namespace(PyObject *globals);
 #endif
 PyAPI_FUNC(struct PyModuleDef*) PyModule_GetDef(PyObject*);
 PyAPI_FUNC(void*) PyModule_GetState(PyObject*);

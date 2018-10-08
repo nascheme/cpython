@@ -7,26 +7,6 @@
 #include "code.h"
 #include "structmember.h"
 
-static PyObject *
-func_globals_namespace(PyObject *globals)
-{
-    _Py_IDENTIFIER(__namespace__);
-    PyObject *ns_ref = _PyDict_GetItemId(globals, &PyId___namespace__);
-    if (ns_ref != NULL && PyWeakref_Check(ns_ref)) {
-        /* have a module, return it */
-        PyObject *m = PyWeakref_GetObject(ns_ref);
-        if (m == NULL) {
-            return NULL; /* failed to follow weakref */
-        }
-        if (PyModule_Check(m)) {
-            Py_INCREF(m);
-            return m;
-        }
-    }
-    /* FIXME: create anonynmous module if can't find real one? */
-    return NULL;
-}
-
 PyObject *
 PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname)
 {
@@ -47,7 +27,7 @@ PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname
     op->func_weakreflist = NULL;
     Py_INCREF(code);
     op->func_code = code;
-    op->func_namespace = func_globals_namespace(globals);
+    op->func_namespace = _PyModule_Globals_Namespace(globals);
     if (op->func_namespace == NULL) {
         Py_INCREF(globals);
         op->func_globals = globals;

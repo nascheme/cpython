@@ -501,6 +501,17 @@ _Py_CheckRecursiveCall(const char *where)
     return 0;
 }
 
+static PyObject *
+eval_get_globals(PyFrameObject *f)
+{
+    if (f->f_namespace != NULL) {
+        return _PyModule_GetDict((f)->f_namespace);
+    }
+    return f->f_globals;
+}
+#define GLOBALS(f) eval_get_globals(f)
+//#define BUILTINS(f) PyModule_GetBuiltins(f->f_namespace)
+
 /* Status code for main loop (reason for stack unwind) */
 enum why_code {
         WHY_NOT =       0x0001, /* No error */
@@ -912,7 +923,7 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
 
 
 #ifdef LLTRACE
-    lltrace = _PyDict_GetItemId(f->f_globals, &PyId___ltrace__) != NULL;
+    lltrace = _PyDict_GetItemId(GLOBALS(f), &PyId___ltrace__) != NULL;
 #endif
 
     why = WHY_NOT;
@@ -2035,7 +2046,7 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
             PyObject *name = GETITEM(names, oparg);
             PyObject *v = POP();
             int err;
-            err = PyDict_SetItem(f->f_globals, name, v);
+            err = PyDict_SetItem(GLOBALS(f), name, v);
             Py_DECREF(v);
             if (err != 0)
                 goto error;
@@ -2045,7 +2056,7 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
         TARGET(DELETE_GLOBAL) {
             PyObject *name = GETITEM(names, oparg);
             int err;
-            err = PyDict_DelItem(f->f_globals, name);
+            err = PyDict_DelItem(GLOBALS(f), name);
             if (err != 0) {
                 format_exc_check_arg(
                     PyExc_NameError, NAME_ERROR_MSG, name);
@@ -2076,7 +2087,7 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                 }
             }
             if (v == NULL) {
-                v = PyDict_GetItem(f->f_globals, name);
+                v = PyDict_GetItem(GLOBALS(f), name);
                 Py_XINCREF(v);
                 if (v == NULL) {
                     if (PyDict_CheckExact(f->f_builtins)) {
@@ -2108,10 +2119,10 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
         TARGET(LOAD_GLOBAL) {
             PyObject *name = GETITEM(names, oparg);
             PyObject *v;
-            if (PyDict_CheckExact(f->f_globals)
+            if (PyDict_CheckExact(GLOBALS(f))
                 && PyDict_CheckExact(f->f_builtins))
             {
-                v = _PyDict_LoadGlobal((PyDictObject *)f->f_globals,
+                v = _PyDict_LoadGlobal((PyDictObject *)GLOBALS(f),
                                        (PyDictObject *)f->f_builtins,
                                        name);
                 if (v == NULL) {
@@ -2129,7 +2140,7 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
                 /* Slow-path if globals or builtins is not a dict */
 
                 /* namespace 1: globals */
-                v = PyObject_GetItem(f->f_globals, name);
+                v = PyObject_GetItem(GLOBALS(f), name);
                 if (v == NULL) {
                     if (!PyErr_ExceptionMatches(PyExc_KeyError))
                         goto error;
@@ -3204,7 +3215,7 @@ _PyEval_EvalFrameDefault(PyFrameObject *f, int throwflag)
             PyObject *qualname = POP();
             PyObject *codeobj = POP();
             PyFunctionObject *func = (PyFunctionObject *)
-                PyFunction_NewWithQualName(codeobj, f->f_globals, qualname);
+                PyFunction_NewWithQualName(codeobj, GLOBALS(f), qualname);
 
             Py_DECREF(codeobj);
             Py_DECREF(qualname);
@@ -4442,8 +4453,8 @@ PyEval_GetGlobals(void)
     if (current_frame == NULL)
         return NULL;
 
-    assert(current_frame->f_globals != NULL);
-    return current_frame->f_globals;
+    assert(GLOBALS(current_frame) != NULL);
+    return GLOBALS(current_frame);
 }
 
 PyFrameObject *
@@ -4755,7 +4766,7 @@ import_name(PyFrameObject *f, PyObject *name, PyObject *fromlist, PyObject *leve
         }
         res = PyImport_ImportModuleLevelObject(
                         name,
-                        f->f_globals,
+                        GLOBALS(f),
                         f->f_locals == NULL ? Py_None : f->f_locals,
                         fromlist,
                         ilevel);
@@ -4765,7 +4776,7 @@ import_name(PyFrameObject *f, PyObject *name, PyObject *fromlist, PyObject *leve
     Py_INCREF(import_func);
 
     stack[0] = name;
-    stack[1] = f->f_globals;
+    stack[1] = GLOBALS(f);
     stack[2] = f->f_locals == NULL ? Py_None : f->f_locals;
     stack[3] = fromlist;
     stack[4] = level;

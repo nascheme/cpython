@@ -15,6 +15,7 @@ static PyMemberDef frame_memberlist[] = {
     {"f_code",          T_OBJECT,       OFF(f_code),      READONLY},
     {"f_builtins",      T_OBJECT,       OFF(f_builtins),  READONLY},
     {"f_globals",       T_OBJECT,       OFF(f_globals),   READONLY},
+    {"f_namespace",     T_OBJECT,       OFF(f_namespace), READONLY},
     {"f_lasti",         T_INT,          OFF(f_lasti),     READONLY},
     {"f_trace_lines",   T_BOOL,         OFF(f_trace_lines), 0},
     {"f_trace_opcodes", T_BOOL,         OFF(f_trace_opcodes), 0},
@@ -474,6 +475,7 @@ frame_dealloc(PyFrameObject *f)
     Py_XDECREF(f->f_back);
     Py_DECREF(f->f_builtins);
     Py_DECREF(f->f_globals);
+    Py_XDECREF(f->f_namespace);
     Py_CLEAR(f->f_locals);
     Py_CLEAR(f->f_trace);
 
@@ -502,6 +504,7 @@ frame_traverse(PyFrameObject *f, visitproc visit, void *arg)
     Py_VISIT(f->f_code);
     Py_VISIT(f->f_builtins);
     Py_VISIT(f->f_globals);
+    Py_VISIT(f->f_namespace);
     Py_VISIT(f->f_locals);
     Py_VISIT(f->f_trace);
 
@@ -744,6 +747,7 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
     Py_INCREF(code);
     Py_INCREF(globals);
     f->f_globals = globals;
+    f->f_namespace = _PyModule_Globals_Namespace(globals);
     /* Most functions have CO_NEWLOCALS and CO_OPTIMIZED set. */
     if ((code->co_flags & (CO_NEWLOCALS | CO_OPTIMIZED)) ==
         (CO_NEWLOCALS | CO_OPTIMIZED))

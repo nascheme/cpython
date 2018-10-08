@@ -21,6 +21,7 @@ typedef struct _frame {
     PyObject *f_builtins;       /* builtin symbol table (PyDictObject) */
     PyObject *f_globals;        /* global symbol table (PyDictObject) */
     PyObject *f_locals;         /* local symbol table (any mapping) */
+    PyObject *f_namespace;      /* namespace (for globals and builtins) */
     PyObject **f_valuestack;    /* points after the last local */
     /* Next free slot in f_valuestack.  Frame creation sets to f_valuestack.
        Frame evaluation usually NULLs it, but a frame that yields sets it
