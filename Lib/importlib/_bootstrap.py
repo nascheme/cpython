@@ -824,7 +824,7 @@ class FrozenImporter:
             raise ImportError('{!r} is not a frozen module'.format(name),
                               name=name)
         code = _call_with_frames_removed(_imp.get_frozen_object, name)
-        exec(code, module.__dict__)
+        exec(code, module)
 
     @classmethod
     def load_module(cls, fullname):

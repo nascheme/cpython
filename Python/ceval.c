@@ -2500,7 +2500,7 @@ main_loop:
                     if (lg->globals_ver ==
                             ((PyDictObject *)GLOBALS(f))->ma_version_tag
                         && lg->builtins_ver ==
-                           ((PyDictObject *)f-f_builtins)->ma_version_tag)
+                           ((PyDictObject *)f->f_builtins)->ma_version_tag)
                     {
                         PyObject *ptr = lg->ptr;
                         OPCACHE_STAT_GLOBAL_HIT();
@@ -4078,11 +4078,6 @@ _PyEval_EvalCodeWithName(PyObject *_co, PyObject *ns, PyObject *locals,
         return NULL;
     }
 
-    /* Create the frame */
-    PyObject *ns = _PyModule_Globals_Namespace(globals);
-    if (ns == NULL) {
-        return NULL;
-    }
     f = _PyFrame_New_NoTrack(tstate, co, ns, locals);
     if (f == NULL) {
         return NULL;

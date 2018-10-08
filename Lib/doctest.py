@@ -101,6 +101,7 @@ import pdb
 import re
 import sys
 import traceback
+import types
 import unittest
 from io import StringIO
 from collections import namedtuple
@@ -494,6 +495,21 @@ class Example:
         return hash((self.source, self.want, self.lineno, self.indent,
                      self.exc_msg))
 
+
+def _make_namespace(globs):
+    module_name = globs.get('__name__', '<unnamed doctest module>')
+    namespace = types.ModuleType(module_name)
+    # FIXME: this is ugly but code depends on only __builtin__ being created
+    # by exec().  Delete __loader__, __spec__, etc.
+    md = namespace.__dict__
+    for name in set(md):
+        del md[name]
+    for k, v in globs.items():
+        if k not in {'__namespace__'}:
+            md[k] = v
+    return namespace
+
+
 class DocTest:
     """
     A collection of doctest examples that should be run in a single
@@ -527,7 +543,8 @@ class DocTest:
                "DocTest no longer accepts str; use DocTestParser instead"
         self.examples = examples
         self.docstring = docstring
-        self.globs = globs.copy()
+        self.namespace = _make_namespace(globs)
+        self.globs = self.namespace.__dict__
         self.name = name
         self.filename = filename
         self.lineno = lineno
@@ -1320,10 +1337,10 @@ class DocTestRunner:
             # __patched_linecache_getlines).
             filename = '<doctest %s[%d]>' % (test.name, examplenum)
 
-            if '__namespace__' in test.globs:
-                mod = test.globs['__namespace__']()
-                if mod.__dict__ is not test.globs:
-                    del test.globs['__namespace__']
+            if hasattr(test, 'namespace'):
+                namespace = test.namespace
+            else:
+                namespace = test.globs # will be wrapped in module by exec()
 
             # Run the example in the given context (globs), and record
             # any exception that gets raised.  (But don't intercept
@@ -1331,7 +1348,7 @@ class DocTestRunner:
             try:
                 # Don't blink!  This is where the user's code gets run.
                 exec(compile(example.source, filename, "single",
-                             compileflags, 1), test.globs)
+                             compileflags, 1), namespace)
                 self.debugger.set_continue() # ==== Example Finished ====
                 exception = None
             except KeyboardInterrupt:

@@ -25,6 +25,7 @@ import heapq as _heapq
 from _weakref import proxy as _proxy
 from itertools import repeat as _repeat, chain as _chain, starmap as _starmap
 from reprlib import recursive_repr as _recursive_repr
+import types as _types
 
 try:
     from _collections import deque
@@ -389,10 +390,11 @@ def namedtuple(typename, field_names, *, rename=False, defaults=None, module=Non
     # Create all the named tuple methods to be added to the class namespace
 
     s = f'def __new__(_cls, {arg_list}): return _tuple_new(_cls, ({arg_list}))'
-    namespace = {'_tuple_new': tuple_new, '__name__': f'namedtuple_{typename}'}
+    namespace = _types.ModuleType(f'namedtuple_{typename}')
+    namespace._tuple_new = tuple_new
     # Note: exec() has the side-effect of interning the field names
     exec(s, namespace)
-    __new__ = namespace['__new__']
+    __new__ = namespace.__new__
     __new__.__doc__ = f'Create new instance of {typename}({arg_list})'
     if defaults is not None:
         __new__.__defaults__ = defaults
