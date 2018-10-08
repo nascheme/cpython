@@ -484,7 +484,6 @@ frame_dealloc(PyFrameObject *f)
 
     Py_XDECREF(f->f_back);
     Py_DECREF(f->f_builtins);
-    Py_XDECREF(f->f_globals);
     Py_XDECREF(f->f_namespace);
     Py_CLEAR(f->f_locals);
     Py_CLEAR(f->f_trace);
@@ -513,7 +512,6 @@ frame_traverse(PyFrameObject *f, visitproc visit, void *arg)
     Py_VISIT(f->f_back);
     Py_VISIT(f->f_code);
     Py_VISIT(f->f_builtins);
-    Py_VISIT(f->f_globals);
     Py_VISIT(f->f_namespace);
     Py_VISIT(f->f_locals);
     Py_VISIT(f->f_trace);
@@ -782,7 +780,6 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
         Py_DECREF(f);
         return NULL;
     }
-    f->f_globals = NULL; // FIXME: remove
     /* Most functions have CO_NEWLOCALS and CO_OPTIMIZED set. */
     if ((code->co_flags & (CO_NEWLOCALS | CO_OPTIMIZED)) ==
         (CO_NEWLOCALS | CO_OPTIMIZED))

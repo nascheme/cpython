@@ -21,7 +21,6 @@ extern "C" {
 typedef struct {
     PyObject_HEAD
     PyObject *func_code;        /* A code object, the __code__ attribute */
-    PyObject *func_globals;     /* A dictionary (other mappings won't do) */
     PyObject *func_namespace;	/* Global namespace (e.g. module) */
     PyObject *func_defaults;    /* NULL or a tuple */
     PyObject *func_kwdefaults;  /* NULL or a dict */
@@ -101,10 +100,8 @@ PyAPI_FUNC(PyObject *) PyStaticMethod_New(PyObject *);
 static inline PyObject *
 _PyFunction_GetGlobals(PyFunctionObject *f)
 {
-    if (f->func_namespace != NULL) {
-        return PyModule_GetDict(f->func_namespace);
-    }
-    return f->func_globals;
+    assert(f->func_namespace != NULL);
+    return PyModule_GetDict(f->func_namespace);
 }
 #endif
 
