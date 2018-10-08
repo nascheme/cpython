@@ -366,7 +366,7 @@ class Pdb(bdb.Bdb, cmd.Cmd):
     def default(self, line):
         if line[:1] == '!': line = line[1:]
         locals = self.curframe_locals
-        globals = self.curframe.f_globals
+        namespace = self.curframe.f_namespace
         try:
             code = compile(line + '\n', '<stdin>', 'single')
             save_stdout = sys.stdout
@@ -376,7 +376,7 @@ class Pdb(bdb.Bdb, cmd.Cmd):
                 sys.stdin = self.stdin
                 sys.stdout = self.stdout
                 sys.displayhook = self.displayhook
-                exec(code, globals, locals)
+                exec(code, namespace, locals)
             finally:
                 sys.stdout = save_stdout
                 sys.stdin = save_stdin
@@ -651,7 +651,7 @@ class Pdb(bdb.Bdb, cmd.Cmd):
             except ValueError:
                 try:
                     func = eval(arg,
-                                self.curframe.f_globals,
+                                self.curframe.f_namespace,
                                 self.curframe_locals)
                 except:
                     func = arg
@@ -1158,7 +1158,7 @@ class Pdb(bdb.Bdb, cmd.Cmd):
 
     def _getval(self, arg):
         try:
-            return eval(arg, self.curframe.f_globals, self.curframe_locals)
+            return eval(arg, self.curframe.f_namespace, self.curframe_locals)
         except:
             exc_info = sys.exc_info()[:2]
             self.error(traceback.format_exception_only(*exc_info)[-1].strip())
@@ -1167,9 +1167,10 @@ class Pdb(bdb.Bdb, cmd.Cmd):
     def _getval_except(self, arg, frame=None):
         try:
             if frame is None:
-                return eval(arg, self.curframe.f_globals, self.curframe_locals)
+                return eval(arg, self.curframe.f_namespace,
+                            self.curframe_locals)
             else:
-                return eval(arg, frame.f_globals, frame.f_locals)
+                return eval(arg, frame.f_namespace, frame.f_locals)
         except:
             exc_info = sys.exc_info()[:2]
             err = traceback.format_exception_only(*exc_info)[-1].strip()

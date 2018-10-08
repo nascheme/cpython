@@ -576,15 +576,17 @@ class Bdb:
         """
         if globals is None:
             import __main__
-            globals = __main__.__dict__
+            namespace = __main__
+        else:
+            namespace = sys._getnamespace(globals)
         if locals is None:
-            locals = globals
+            locals = namespace.__dict__
         self.reset()
         if isinstance(cmd, str):
             cmd = compile(cmd, "<string>", "exec")
         sys.settrace(self.trace_dispatch)
         try:
-            exec(cmd, globals, locals)
+            exec(cmd, namespace, locals)
         except BdbQuit:
             pass
         finally:
@@ -598,13 +600,15 @@ class Bdb:
         """
         if globals is None:
             import __main__
-            globals = __main__.__dict__
+            namespace = __main__
+        else:
+            namespace = sys._getnamespace(globals)
         if locals is None:
-            locals = globals
+            locals = namespace.__dict__
         self.reset()
         sys.settrace(self.trace_dispatch)
         try:
-            return eval(expr, globals, locals)
+            return eval(expr, namespace, locals)
         except BdbQuit:
             pass
         finally:
@@ -836,7 +840,7 @@ def effective(file, line, frame):
             # Ignore count applies only to those bpt hits where the
             # condition evaluates to true.
             try:
-                val = eval(b.cond, frame.f_globals, frame.f_locals)
+                val = eval(b.cond, frame.f_namespace, frame.f_locals)
                 if val:
                     if b.ignore > 0:
                         b.ignore -= 1
