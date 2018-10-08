@@ -805,7 +805,7 @@ PyFrameObject*
 PyFrame_New(PyThreadState *tstate, PyCodeObject *code,
             PyObject *globals, PyObject *locals)
 {
-    PyObject *ns = _PyModule_Globals_Namespace(globals);
+    PyObject *ns = _PyModule_Globals_Namespace(globals, 0);
     if (ns == NULL) {
         return NULL;
     }

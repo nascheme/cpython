@@ -44,6 +44,7 @@ PyAPI_FUNC(PyObject *) _PyEval_GetAsyncGenFinalizer(void);
 struct _frame; /* Avoid including frameobject.h */
 
 PyAPI_FUNC(PyObject *) PyEval_GetBuiltins(void);
+PyAPI_FUNC(PyObject *) PyEval_GetNamespace(void);
 PyAPI_FUNC(PyObject *) PyEval_GetGlobals(void);
 PyAPI_FUNC(PyObject *) PyEval_GetLocals(void);
 PyAPI_FUNC(struct _frame *) PyEval_GetFrame(void);

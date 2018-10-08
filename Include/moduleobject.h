@@ -32,7 +32,8 @@ PyAPI_FUNC(PyObject *) PyModule_GetFilenameObject(PyObject *);
 #ifndef Py_LIMITED_API
 PyAPI_FUNC(void) _PyModule_Clear(PyObject *);
 PyAPI_FUNC(void) _PyModule_ClearDict(PyObject *);
-PyAPI_FUNC(PyObject *) _PyModule_Globals_Namespace(PyObject *globals);
+PyAPI_FUNC(PyObject *) _PyModule_Globals_Namespace(PyObject *globals,
+                                                   int add_ns_ref);
 #endif
 PyAPI_FUNC(struct PyModuleDef*) PyModule_GetDef(PyObject*);
 PyAPI_FUNC(void*) PyModule_GetState(PyObject*);
