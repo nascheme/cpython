@@ -199,9 +199,10 @@ module_make_anonymous(PyObject *globals)
     return m;
 }
 
-/* get namespace (module) for globals dict, returns new reference */
+/* get namespace (module) for globals dict, returns new reference.  If
+ * add_ns_ref is true, add __namespace__ weakref. */
 PyObject *
-_PyModule_Globals_Namespace(PyObject *globals)
+_PyModule_Globals_Namespace(PyObject *globals, int add_ns_ref)
 {
     PyObject *m = module_globals_namespace(globals);
     if (m != NULL) {
@@ -209,11 +210,17 @@ _PyModule_Globals_Namespace(PyObject *globals)
     }
     m = module_make_anonymous(globals);
 #if 0
-    if (m != NULL) {
-        fprintf(stderr, "make anonynmous module %s\n",
+    if (!add_ns_ref && m != NULL) {
+        fprintf(stderr, "new mod %s\n",
                 PyUnicode_AsUTF8(((PyModuleObject *)m)->md_name));
     }
 #endif
+    if (add_ns_ref && m != NULL) {
+        if (!module_add_namespace(PyModule_GetDict(m), m)) {
+            Py_DECREF(m);
+            return NULL;
+        }
+    }
     return m;
 }
 

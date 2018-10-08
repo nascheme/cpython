@@ -4345,7 +4345,7 @@ PyEval_EvalCodeEx(PyObject *_co, PyObject *globals, PyObject *locals,
     }
     else {
         /* expensive backwards compatible case, find/make module */
-        ns = _PyModule_Globals_Namespace(globals);
+        ns = _PyModule_Globals_Namespace(globals, 0);
         if (ns == NULL) {
             return NULL;
         }
@@ -4868,6 +4868,15 @@ PyEval_GetLocals(void)
 
     assert(current_frame->f_locals != NULL);
     return current_frame->f_locals;
+}
+
+PyObject *
+PyEval_GetNamespace(void)
+{
+    PyFrameObject *current_frame = PyEval_GetFrame();
+    if (current_frame == NULL)
+        return NULL;
+    return current_frame->f_namespace;
 }
 
 PyObject *

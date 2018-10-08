@@ -27,7 +27,7 @@ PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname
         return NULL;
 
     op->func_weakreflist = NULL;
-    op->func_namespace = _PyModule_Globals_Namespace(globals);
+    op->func_namespace = _PyModule_Globals_Namespace(globals, 0);
     if (op->func_namespace == NULL) {
         return NULL;
     }
