@@ -255,7 +255,7 @@ PyObject_Call(PyObject *callable, PyObject *args, PyObject *kwargs)
 
 static PyObject* _Py_HOT_FUNCTION
 function_code_fastcall(PyCodeObject *co, PyObject *const *args, Py_ssize_t nargs,
-                       PyObject *globals)
+                       PyObject *ns)
 {
     PyFrameObject *f;
     PyThreadState *tstate = PyThreadState_GET();
@@ -263,16 +263,12 @@ function_code_fastcall(PyCodeObject *co, PyObject *const *args, Py_ssize_t nargs
     Py_ssize_t i;
     PyObject *result;
 
-    assert(globals != NULL);
+    assert(ns != NULL);
     /* XXX Perhaps we should create a specialized
        _PyFrame_New_NoTrack() that doesn't take locals, but does
        take builtins without sanity checking them.
        */
     assert(tstate != NULL);
-    PyObject *ns = _PyModule_Globals_Namespace(globals);
-    if (ns == NULL) {
-        return NULL;
-    }
     f = _PyFrame_New_NoTrack(tstate, co, ns, NULL);
     if (f == NULL) {
         return NULL;
@@ -304,7 +300,7 @@ _PyFunction_FastCallDict(PyObject *func, PyObject *const *args, Py_ssize_t nargs
                          PyObject *kwargs)
 {
     PyCodeObject *co = (PyCodeObject *)PyFunction_GET_CODE(func);
-    PyObject *globals = PyFunction_GET_GLOBALS(func);
+    PyObject *ns = PyFunction_GET_NAMESPACE(func);
     PyObject *argdefs = PyFunction_GET_DEFAULTS(func);
     PyObject *kwdefs, *closure, *name, *qualname;
     PyObject *kwtuple, **k;
@@ -323,7 +319,7 @@ _PyFunction_FastCallDict(PyObject *func, PyObject *const *args, Py_ssize_t nargs
     {
         /* Fast paths */
         if (argdefs == NULL && co->co_argcount == nargs) {
-            return function_code_fastcall(co, args, nargs, globals);
+            return function_code_fastcall(co, args, nargs, ns);
         }
         else if (nargs == 0 && argdefs != NULL
                  && co->co_argcount == PyTuple_GET_SIZE(argdefs)) {
@@ -331,7 +327,7 @@ _PyFunction_FastCallDict(PyObject *func, PyObject *const *args, Py_ssize_t nargs
                a default value: use default values as arguments .*/
             args = &PyTuple_GET_ITEM(argdefs, 0);
             return function_code_fastcall(co, args, PyTuple_GET_SIZE(argdefs),
-                                          globals);
+                                          ns);
         }
     }
 
@@ -377,7 +373,7 @@ _PyFunction_FastCallDict(PyObject *func, PyObject *const *args, Py_ssize_t nargs
         nd = 0;
     }
 
-    result = _PyEval_EvalCodeWithName((PyObject*)co, globals, (PyObject *)NULL,
+    result = _PyEval_EvalCodeWithName((PyObject*)co, ns, (PyObject *)NULL,
                                       args, nargs,
                                       k, k != NULL ? k + 1 : NULL, nk, 2,
                                       d, nd, kwdefs,
@@ -391,7 +387,7 @@ _PyFunction_FastCallKeywords(PyObject *func, PyObject *const *stack,
                              Py_ssize_t nargs, PyObject *kwnames)
 {
     PyCodeObject *co = (PyCodeObject *)PyFunction_GET_CODE(func);
-    PyObject *globals = PyFunction_GET_GLOBALS(func);
+    PyObject *ns = PyFunction_GET_NAMESPACE(func);
     PyObject *argdefs = PyFunction_GET_DEFAULTS(func);
     PyObject *kwdefs, *closure, *name, *qualname;
     PyObject **d;
@@ -409,7 +405,7 @@ _PyFunction_FastCallKeywords(PyObject *func, PyObject *const *stack,
         (co->co_flags & ~PyCF_MASK) == (CO_OPTIMIZED | CO_NEWLOCALS | CO_NOFREE))
     {
         if (argdefs == NULL && co->co_argcount == nargs) {
-            return function_code_fastcall(co, stack, nargs, globals);
+            return function_code_fastcall(co, stack, nargs, ns);
         }
         else if (nargs == 0 && argdefs != NULL
                  && co->co_argcount == PyTuple_GET_SIZE(argdefs)) {
@@ -417,7 +413,7 @@ _PyFunction_FastCallKeywords(PyObject *func, PyObject *const *stack,
                a default value: use default values as arguments .*/
             stack = &PyTuple_GET_ITEM(argdefs, 0);
             return function_code_fastcall(co, stack, PyTuple_GET_SIZE(argdefs),
-                                          globals);
+                                          ns);
         }
     }
 
@@ -434,7 +430,7 @@ _PyFunction_FastCallKeywords(PyObject *func, PyObject *const *stack,
         d = NULL;
         nd = 0;
     }
-    return _PyEval_EvalCodeWithName((PyObject*)co, globals, (PyObject *)NULL,
+    return _PyEval_EvalCodeWithName((PyObject*)co, ns, (PyObject *)NULL,
                                     stack, nargs,
                                     nkwargs ? &PyTuple_GET_ITEM(kwnames, 0) : NULL,
                                     stack + nargs,

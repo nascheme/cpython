@@ -770,6 +770,7 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
     f->f_back = back;
     Py_INCREF(code);
     f->f_namespace = ns;
+    Py_INCREF(ns);
     /* Most functions have CO_NEWLOCALS and CO_OPTIMIZED set. */
     if ((code->co_flags & (CO_NEWLOCALS | CO_OPTIMIZED)) ==
         (CO_NEWLOCALS | CO_OPTIMIZED))

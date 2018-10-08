@@ -88,6 +88,9 @@ PyFunction_GetCode(PyObject *op)
 extern inline PyObject *
 _PyFunction_GetGlobals(PyFunctionObject *f);
 
+extern inline PyObject *
+_PyFunction_GetNamespace(PyFunctionObject *f);
+
 PyObject *
 PyFunction_GetGlobals(PyObject *op)
 {

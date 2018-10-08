@@ -3670,7 +3670,7 @@ too_many_positional(PyCodeObject *co, Py_ssize_t given, Py_ssize_t defcount,
    the test in the if statements in Misc/gdbinit (pystack and pystackv). */
 
 PyObject *
-_PyEval_EvalCodeWithName(PyObject *_co, PyObject *globals, PyObject *locals,
+_PyEval_EvalCodeWithName(PyObject *_co, PyObject *ns, PyObject *locals,
            PyObject *const *args, Py_ssize_t argcount,
            PyObject *const *kwnames, PyObject *const *kwargs,
            Py_ssize_t kwcount, int kwstep,
@@ -3688,19 +3688,15 @@ _PyEval_EvalCodeWithName(PyObject *_co, PyObject *globals, PyObject *locals,
     Py_ssize_t i, n;
     PyObject *kwdict;
 
-    if (globals == NULL) {
+    if (ns == NULL) {
         PyErr_SetString(PyExc_SystemError,
-                        "PyEval_EvalCodeEx: NULL globals");
+                        "PyEval_EvalCodeEx: NULL namespace");
         return NULL;
     }
 
     /* Create the frame */
     tstate = PyThreadState_GET();
     assert(tstate != NULL);
-    PyObject *ns = _PyModule_Globals_Namespace(globals);
-    if (ns == NULL) {
-        return NULL;
-    }
     f = _PyFrame_New_NoTrack(tstate, co, ns, locals);
     if (f == NULL) {
         return NULL;
@@ -3969,13 +3965,19 @@ PyEval_EvalCodeEx(PyObject *_co, PyObject *globals, PyObject *locals,
                   PyObject *const *defs, int defcount,
                   PyObject *kwdefs, PyObject *closure)
 {
-    return _PyEval_EvalCodeWithName(_co, globals, locals,
-                                    args, argcount,
-                                    kws, kws != NULL ? kws + 1 : NULL,
-                                    kwcount, 2,
-                                    defs, defcount,
-                                    kwdefs, closure,
-                                    NULL, NULL);
+    PyObject *ns = _PyModule_Globals_Namespace(globals);
+    if (ns == NULL) {
+        return NULL;
+    }
+    PyObject *rv = _PyEval_EvalCodeWithName(_co, ns, locals,
+                                            args, argcount,
+                                            kws, kws != NULL ? kws + 1 : NULL,
+                                            kwcount, 2,
+                                            defs, defcount,
+                                            kwdefs, closure,
+                                            NULL, NULL);
+    Py_DECREF(ns);
+    return rv;
 }
 
 static PyObject *

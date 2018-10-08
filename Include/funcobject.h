@@ -76,6 +76,8 @@ PyAPI_FUNC(PyObject *) _PyFunction_FastCallKeywords(
    done, so use with care. */
 #define PyFunction_GET_CODE(func) \
         (((PyFunctionObject *)func) -> func_code)
+#define PyFunction_GET_NAMESPACE(func) \
+        (_PyFunction_GetNamespace((PyFunctionObject *)func))
 #define PyFunction_GET_GLOBALS(func) \
         (_PyFunction_GetGlobals((PyFunctionObject *)func))
 #define PyFunction_GET_MODULE(func) \
@@ -102,6 +104,13 @@ _PyFunction_GetGlobals(PyFunctionObject *f)
 {
     assert(f->func_namespace != NULL);
     return PyModule_GetDict(f->func_namespace);
+}
+
+static inline PyObject *
+_PyFunction_GetNamespace(PyFunctionObject *f)
+{
+    assert(f->func_namespace != NULL);
+    return f->func_namespace;
 }
 #endif
 
