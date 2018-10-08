@@ -883,7 +883,12 @@ class PyFrameObjectPtr(PyObjectPtr):
         if self.is_optimized_out():
             return ()
 
-        pyop_globals = self.pyop_field('f_globals')
+        pyop_ns = self.pyop_field('f_namespace')
+        if pyop_ns.is_null():
+            pyop_globals = self.pyop_field('f_globals')
+        else:
+            # FIXME: deref pyop_ns -> md_dict
+            return ()
         return pyop_globals.iteritems()
 
     def iter_builtins(self):
