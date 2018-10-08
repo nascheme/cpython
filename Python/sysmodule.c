@@ -1653,6 +1653,22 @@ sys_getrefcount_impl(PyObject *module, PyObject *object)
     return object->ob_refcnt;
 }
 
+PyDoc_STRVAR(getnamespace_doc,
+"_getnamespace(object) -> object\n\
+\n\
+Return the namespace (module) for object, create if there isn't one.");
+
+static PyObject *
+sys_getnamespace(PyObject *self, PyObject *arg)
+{
+    if (!PyDict_Check(arg)) {
+        PyErr_Format(PyExc_TypeError,
+                        "require dict, got %.400s", arg->ob_type->tp_name);
+        return NULL;
+    }
+    return _PyModule_Globals_Namespace(arg, 1);
+}
+
 #ifdef Py_REF_DEBUG
 /*[clinic input]
 sys.gettotalrefcount -> Py_ssize_t
@@ -1926,6 +1942,7 @@ static PyMethodDef sys_methods[] = {
     {"getsizeof",   (PyCFunction)(void(*)(void))sys_getsizeof,
      METH_VARARGS | METH_KEYWORDS, getsizeof_doc},
     SYS__GETFRAME_METHODDEF
+    {"_getnamespace", sys_getnamespace, METH_O, getnamespace_doc},
     SYS_GETWINDOWSVERSION_METHODDEF
     SYS__ENABLELEGACYWINDOWSFSENCODING_METHODDEF
     SYS_INTERN_METHODDEF
