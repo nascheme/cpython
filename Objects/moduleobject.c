@@ -216,7 +216,7 @@ _PyModule_Globals_Namespace(PyObject *globals, int add_ns_ref)
     }
 #endif
     if (add_ns_ref && m != NULL) {
-        if (!module_add_namespace(PyModule_GetDict(m), m)) {
+        if (!module_add_namespace(PyModule_GetDict(m), (PyModuleObject *)m)) {
             Py_DECREF(m);
             return NULL;
         }
