@@ -651,22 +651,10 @@ int _PyFrame_Init()
     return 1;
 }
 
-PyFrameObject* _Py_HOT_FUNCTION
-_PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
-                     PyObject *globals, PyObject *locals)
+static PyObject *
+frame_find_builtins(PyFrameObject *back, PyObject *globals)
 {
-    PyFrameObject *back = tstate->frame;
-    PyFrameObject *f;
     PyObject *builtins;
-    Py_ssize_t i;
-
-#ifdef Py_DEBUG
-    if (code == NULL || globals == NULL || !PyDict_Check(globals) ||
-        (locals != NULL && !PyMapping_Check(locals))) {
-        PyErr_BadInternalCall();
-        return NULL;
-    }
-#endif
     if (back == NULL || back->f_globals != globals) {
         builtins = _PyDict_GetItemId(globals, &PyId___builtins__);
         if (builtins) {
@@ -695,6 +683,26 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
         assert(builtins != NULL);
         Py_INCREF(builtins);
     }
+    return builtins;
+}
+
+PyFrameObject* _Py_HOT_FUNCTION
+_PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
+                     PyObject *globals, PyObject *locals)
+{
+    PyFrameObject *back = tstate->frame;
+    PyFrameObject *f;
+    PyObject *builtins;
+    Py_ssize_t i;
+
+#ifdef Py_DEBUG
+    if (code == NULL || globals == NULL || !PyDict_Check(globals) ||
+        (locals != NULL && !PyMapping_Check(locals))) {
+        PyErr_BadInternalCall();
+        return NULL;
+    }
+#endif
+    builtins = frame_find_builtins(back, globals);
     if (code->co_zombieframe != NULL) {
         f = code->co_zombieframe;
         code->co_zombieframe = NULL;
