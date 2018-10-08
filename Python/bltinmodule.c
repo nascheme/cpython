@@ -893,21 +893,24 @@ builtin_eval_impl(PyObject *module, PyObject *source, PyObject *globals,
 {
     PyObject *result, *source_copy;
     const char *str;
+    PyObject *ns = globals;
 
     if (locals != Py_None && !PyMapping_Check(locals)) {
         PyErr_SetString(PyExc_TypeError, "locals must be a mapping");
         return NULL;
     }
-    if (globals != Py_None &&
-            !PyDict_Check(globals) &&
-            !PyModule_Check(globals)) {
+    if (PyModule_Check(ns)) {
+        globals = PyModule_GetDict(ns);
+    }
+    if (globals != Py_None && !PyDict_Check(globals)) {
         PyErr_SetString(PyExc_TypeError, PyMapping_Check(globals) ?
             "globals must be a real dict; try eval(expr, {}, mapping)"
             : "globals must be a dict");
         return NULL;
     }
     if (globals == Py_None) {
-        globals = PyEval_GetGlobals();
+        ns = PyEval_GetNamespace();
+        globals = PyModule_GetDict(ns);
         if (locals == Py_None) {
             locals = PyEval_GetLocals();
             if (locals == NULL)
@@ -916,9 +919,6 @@ builtin_eval_impl(PyObject *module, PyObject *source, PyObject *globals,
     }
     else if (locals == Py_None) {
         locals = globals;
-        if (PyModule_Check(globals)) {
-            locals = PyModule_GetDict(globals);
-        }
     }
 
     if (globals == NULL || locals == NULL) {
@@ -948,7 +948,7 @@ builtin_eval_impl(PyObject *module, PyObject *source, PyObject *globals,
                 "code object passed to eval() may not contain free variables");
             return NULL;
         }
-        return PyEval_EvalCode(source, globals, locals);
+        return PyEval_EvalCode(source, ns, locals);
     }
 
     PyCompilerFlags cf = _PyCompilerFlags_INIT;
@@ -961,7 +961,7 @@ builtin_eval_impl(PyObject *module, PyObject *source, PyObject *globals,
         str++;
 
     (void)PyEval_MergeCompilerFlags(&cf);
-    result = PyRun_StringFlags(str, Py_eval_input, globals, locals, &cf);
+    result = PyRun_StringFlags(str, Py_eval_input, ns, locals, &cf);
     Py_XDECREF(source_copy);
     return result;
 }
@@ -989,9 +989,15 @@ builtin_exec_impl(PyObject *module, PyObject *source, PyObject *globals,
 /*[clinic end generated code: output=3c90efc6ab68ef5d input=01ca3e1c01692829]*/
 {
     PyObject *v;
+    PyObject *ns = globals;
+
+    if (PyModule_Check(ns)) {
+        globals = PyModule_GetDict(ns);
+    }
 
     if (globals == Py_None) {
-        globals = PyEval_GetGlobals();
+        ns = PyEval_GetNamespace();
+        globals = PyModule_GetDict(ns);
         if (locals == Py_None) {
             locals = PyEval_GetLocals();
             if (locals == NULL)
@@ -1005,12 +1011,9 @@ builtin_exec_impl(PyObject *module, PyObject *source, PyObject *globals,
     }
     else if (locals == Py_None) {
         locals = globals;
-        if (PyModule_Check(locals)) {
-            locals = PyModule_GetDict(locals);
-        }
     }
 
-    if (!PyDict_Check(globals) && !PyModule_Check(globals)) {
+    if (!PyDict_Check(globals)) {
         PyErr_Format(PyExc_TypeError, "exec() globals must be a dict, not %.100s",
                      globals->ob_type->tp_name);
         return NULL;
@@ -1021,8 +1024,7 @@ builtin_exec_impl(PyObject *module, PyObject *source, PyObject *globals,
             locals->ob_type->tp_name);
         return NULL;
     }
-    if (PyDict_Check(globals) &&
-        _PyDict_GetItemIdWithError(globals, &PyId___builtins__) == NULL) {
+    if (_PyDict_GetItemIdWithError(globals, &PyId___builtins__) == NULL) {
         if (_PyDict_SetItemId(globals, &PyId___builtins__,
                               PyEval_GetBuiltins()) != 0)
             return NULL;
@@ -1042,7 +1044,7 @@ builtin_exec_impl(PyObject *module, PyObject *source, PyObject *globals,
                 "contain free variables");
             return NULL;
         }
-        v = PyEval_EvalCode(source, globals, locals);
+        v = PyEval_EvalCode(source, ns, locals);
     }
     else {
         PyObject *source_copy;
@@ -1058,7 +1060,7 @@ builtin_exec_impl(PyObject *module, PyObject *source, PyObject *globals,
             v = PyRun_StringFlags(str, Py_file_input, globals,
                                   locals, &cf);
         else
-            v = PyRun_String(str, Py_file_input, globals, locals);
+            v = PyRun_String(str, Py_file_input, ns, locals);
         Py_XDECREF(source_copy);
     }
     if (v == NULL)
