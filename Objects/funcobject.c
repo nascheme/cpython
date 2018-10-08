@@ -33,7 +33,6 @@ PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname
     }
     Py_INCREF(code);
     op->func_code = code;
-    op->func_globals = NULL; // FIXME: remove
     op->func_name = ((PyCodeObject *)code)->co_name;
     Py_INCREF(op->func_name);
     op->func_defaults = NULL; /* No default arguments */
@@ -587,7 +586,6 @@ static int
 func_clear(PyFunctionObject *op)
 {
     Py_CLEAR(op->func_code);
-    Py_CLEAR(op->func_globals);
     Py_CLEAR(op->func_namespace);
     Py_CLEAR(op->func_module);
     Py_CLEAR(op->func_name);
@@ -623,7 +621,6 @@ static int
 func_traverse(PyFunctionObject *f, visitproc visit, void *arg)
 {
     Py_VISIT(f->func_code);
-    Py_VISIT(f->func_globals);
     Py_VISIT(f->func_namespace);
     Py_VISIT(f->func_module);
     Py_VISIT(f->func_defaults);
