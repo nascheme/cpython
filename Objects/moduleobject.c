@@ -55,8 +55,8 @@ PyModuleDef_Init(struct PyModuleDef* def)
 }
 
 /* follow mod.__dict__.__namespace__ weakref to find module */
-PyObject *
-_PyModule_Globals_Namespace(PyObject *globals)
+static PyObject *
+module_globals_namespace(PyObject *globals)
 {
     _Py_IDENTIFIER(__namespace__);
     PyObject *ns_ref = _PyDict_GetItemId(globals, &PyId___namespace__);
@@ -132,8 +132,8 @@ module_init_dict(PyModuleObject *mod, PyObject *md_dict,
 }
 
 
-PyObject *
-PyModule_NewObject(PyObject *name)
+static PyObject *
+module_new_with_dict(PyObject *name, PyObject *dict, int add_ns)
 {
     PyModuleObject *m;
     m = PyObject_GC_New(PyModuleObject, &PyModule_Type);
@@ -143,15 +143,78 @@ PyModule_NewObject(PyObject *name)
     m->md_state = NULL;
     m->md_weaklist = NULL;
     m->md_name = NULL;
-    m->md_dict = PyDict_New();
-    if (module_init_dict(m, m->md_dict, name, NULL) != 0)
-        goto fail;
+    m->md_dict = dict;
+    if (add_ns) {
+        if (module_init_dict(m, m->md_dict, name, NULL) != 0)
+            goto fail;
+    }
+    else {
+        if (PyUnicode_CheckExact(name)) {
+            m->md_name = name;
+            Py_INCREF(name);
+        }
+    }
     PyObject_GC_Track(m);
     return (PyObject *)m;
 
  fail:
     Py_DECREF(m);
     return NULL;
+}
+
+PyObject *
+PyModule_NewObject(PyObject *name)
+{
+    PyObject *m;
+    PyObject *dict = PyDict_New();
+    if (dict == NULL)
+        return NULL;
+    m = module_new_with_dict(name, dict, 1);
+    if (m == NULL) {
+        Py_DECREF(dict);
+    }
+    return m;
+}
+
+/* create module object from 'globals' dict */
+static PyObject *
+module_make_anonymous(PyObject *globals)
+{
+    /* create a new anonymous module */
+    _Py_IDENTIFIER(__name__);
+    PyObject *name = _PyDict_GetItemId(globals, &PyId___name__);
+    if (name == NULL) {
+        name = PyUnicode_InternFromString("<anonymous module>");
+        if (name == NULL)
+            return NULL;
+    }
+    else {
+        Py_INCREF(name);
+    }
+    PyObject *m = module_new_with_dict(name, globals, 0);
+    Py_DECREF(name);
+    if (m != NULL) {
+        Py_INCREF(globals);
+    }
+    return m;
+}
+
+/* get namespace (module) for globals dict, returns new reference */
+PyObject *
+_PyModule_Globals_Namespace(PyObject *globals)
+{
+    PyObject *m = module_globals_namespace(globals);
+    if (m != NULL) {
+        return m;
+    }
+    m = module_make_anonymous(globals);
+#if 0
+    if (m != NULL) {
+        fprintf(stderr, "make anonynmous module %s\n",
+                PyUnicode_AsUTF8(((PyModuleObject *)m)->md_name));
+    }
+#endif
+    return m;
 }
 
 PyObject *
