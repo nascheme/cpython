@@ -691,12 +691,8 @@ setup_context(Py_ssize_t stack_level, PyObject **filename, int *lineno,
         *lineno = 1;
     }
     else {
-        if (f->f_namespace) {
-            globals = PyModule_GetDict(f->f_namespace);
-        }
-        else {
-            globals = f->f_globals;
-        }
+        assert(f->f_namespace != NULL);
+        globals = PyModule_GetDict(f->f_namespace);
         *lineno = PyFrame_GetLineNumber(f);
     }
 

@@ -504,10 +504,8 @@ _Py_CheckRecursiveCall(const char *where)
 static PyObject *
 eval_get_globals(PyFrameObject *f)
 {
-    if (f->f_namespace != NULL) {
-        return _PyModule_GetDict((f)->f_namespace);
-    }
-    return f->f_globals;
+    assert(f->f_namespace != NULL);
+    return _PyModule_GetDict((f)->f_namespace);
 }
 #define GLOBALS(f) eval_get_globals(f)
 //#define BUILTINS(f) PyModule_GetBuiltins(f->f_namespace)

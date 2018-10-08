@@ -34,12 +34,8 @@ static PyObject *
 frame_getglobals(PyFrameObject *f, void *closure)
 {
     PyObject *d;
-    if (f->f_namespace != NULL) {
-        d = PyModule_GetDict(f->f_namespace);
-    }
-    else {
-        d = f->f_globals;
-    }
+    assert(f->f_namespace != NULL);
+    d = PyModule_GetDict(f->f_namespace);
     Py_XINCREF(d);
     return d;
 }
@@ -668,10 +664,8 @@ int _PyFrame_Init()
 static PyObject *
 frame_get_globals(PyFrameObject *f)
 {
-    if (f->f_namespace != NULL) {
-        return _PyModule_GetDict((f)->f_namespace);
-    }
-    return f->f_globals;
+    assert(f->f_namespace != NULL);
+    return _PyModule_GetDict((f)->f_namespace);
 }
 
 static PyObject *
@@ -785,12 +779,10 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
     Py_INCREF(code);
     f->f_namespace = _PyModule_Globals_Namespace(globals);
     if (f->f_namespace == NULL) {
-        Py_INCREF(globals);
-        f->f_globals = globals;
+        Py_DECREF(f);
+        return NULL;
     }
-    else {
-        f->f_globals = NULL;
-    }
+    f->f_globals = NULL; // FIXME: remove
     /* Most functions have CO_NEWLOCALS and CO_OPTIMIZED set. */
     if ((code->co_flags & (CO_NEWLOCALS | CO_OPTIMIZED)) ==
         (CO_NEWLOCALS | CO_OPTIMIZED))

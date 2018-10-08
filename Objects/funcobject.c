@@ -25,16 +25,13 @@ PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname
         return NULL;
 
     op->func_weakreflist = NULL;
-    Py_INCREF(code);
-    op->func_code = code;
     op->func_namespace = _PyModule_Globals_Namespace(globals);
     if (op->func_namespace == NULL) {
-        Py_INCREF(globals);
-        op->func_globals = globals;
+        return NULL;
     }
-    else {
-        op->func_globals = NULL;
-    }
+    Py_INCREF(code);
+    op->func_code = code;
+    op->func_globals = NULL; // FIXME: remove
     op->func_name = ((PyCodeObject *)code)->co_name;
     Py_INCREF(op->func_name);
     op->func_defaults = NULL; /* No default arguments */
