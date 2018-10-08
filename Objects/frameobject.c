@@ -14,7 +14,6 @@ static PyMemberDef frame_memberlist[] = {
     {"f_back",          T_OBJECT,       OFF(f_back),      READONLY},
     {"f_code",          T_OBJECT,       OFF(f_code),      READONLY},
     {"f_builtins",      T_OBJECT,       OFF(f_builtins),  READONLY},
-    {"f_globals",       T_OBJECT,       OFF(f_globals),   READONLY},
     {"f_namespace",     T_OBJECT,       OFF(f_namespace), READONLY},
     {"f_lasti",         T_INT,          OFF(f_lasti),     READONLY},
     {"f_trace_lines",   T_BOOL,         OFF(f_trace_lines), 0},
@@ -29,6 +28,20 @@ frame_getlocals(PyFrameObject *f, void *closure)
         return NULL;
     Py_INCREF(f->f_locals);
     return f->f_locals;
+}
+
+static PyObject *
+frame_getglobals(PyFrameObject *f, void *closure)
+{
+    PyObject *d;
+    if (f->f_namespace != NULL) {
+        d = PyModule_GetDict(f->f_namespace);
+    }
+    else {
+        d = f->f_globals;
+    }
+    Py_XINCREF(d);
+    return d;
 }
 
 int
@@ -398,6 +411,7 @@ frame_settrace(PyFrameObject *f, PyObject* v, void *closure)
 
 static PyGetSetDef frame_getsetlist[] = {
     {"f_locals",        (getter)frame_getlocals, NULL, NULL},
+    {"f_globals",       (getter)frame_getglobals, NULL, NULL},
     {"f_lineno",        (getter)frame_getlineno,
                     (setter)frame_setlineno, NULL},
     {"f_trace",         (getter)frame_gettrace, (setter)frame_settrace, NULL},
@@ -474,7 +488,7 @@ frame_dealloc(PyFrameObject *f)
 
     Py_XDECREF(f->f_back);
     Py_DECREF(f->f_builtins);
-    Py_DECREF(f->f_globals);
+    Py_XDECREF(f->f_globals);
     Py_XDECREF(f->f_namespace);
     Py_CLEAR(f->f_locals);
     Py_CLEAR(f->f_trace);
@@ -652,10 +666,26 @@ int _PyFrame_Init()
 }
 
 static PyObject *
+frame_get_globals(PyFrameObject *f)
+{
+    if (f->f_namespace != NULL) {
+        return _PyModule_GetDict((f)->f_namespace);
+    }
+    return f->f_globals;
+}
+
+static PyObject *
 frame_find_builtins(PyFrameObject *back, PyObject *globals)
 {
     PyObject *builtins;
-    if (back == NULL || back->f_globals != globals) {
+    PyObject *back_globals;
+    if (back != NULL) {
+        back_globals = frame_get_globals(back);
+    }
+    else {
+        back_globals = NULL;
+    }
+    if (back_globals != globals) {
         builtins = _PyDict_GetItemId(globals, &PyId___builtins__);
         if (builtins) {
             if (PyModule_Check(builtins)) {
@@ -753,9 +783,14 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
     Py_XINCREF(back);
     f->f_back = back;
     Py_INCREF(code);
-    Py_INCREF(globals);
-    f->f_globals = globals;
     f->f_namespace = _PyModule_Globals_Namespace(globals);
+    if (f->f_namespace == NULL) {
+        Py_INCREF(globals);
+        f->f_globals = globals;
+    }
+    else {
+        f->f_globals = NULL;
+    }
     /* Most functions have CO_NEWLOCALS and CO_OPTIMIZED set. */
     if ((code->co_flags & (CO_NEWLOCALS | CO_OPTIMIZED)) ==
         (CO_NEWLOCALS | CO_OPTIMIZED))
