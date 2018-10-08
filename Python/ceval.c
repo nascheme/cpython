@@ -3582,7 +3582,7 @@ main_loop:
             PyObject *qualname = POP();
             PyObject *codeobj = POP();
             PyFunctionObject *func = (PyFunctionObject *)
-                PyFunction_NewWithQualName(codeobj, GLOBALS(f), qualname);
+                PyFunction_NewWithQualName(codeobj, f->f_namespace, qualname);
 
             Py_DECREF(codeobj);
             Py_DECREF(qualname);

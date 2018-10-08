@@ -26,11 +26,18 @@ PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname
     if (op == NULL)
         return NULL;
 
-    op->func_weakreflist = NULL;
-    op->func_namespace = _PyModule_Globals_Namespace(globals, 0);
-    if (op->func_namespace == NULL) {
-        return NULL;
+    PyObject *namespace;
+    if (PyModule_Check(globals)) {
+        namespace = globals;
+        Py_INCREF(namespace);
+        globals = PyModule_GetDict(namespace);
     }
+    else {
+        namespace = _PyModule_Globals_Namespace(globals, 0);
+    }
+
+    op->func_namespace = namespace;
+    op->func_weakreflist = NULL;
     Py_INCREF(code);
     op->func_code = code;
     op->func_name = ((PyCodeObject *)code)->co_name;
