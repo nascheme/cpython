@@ -3965,9 +3965,18 @@ PyEval_EvalCodeEx(PyObject *_co, PyObject *globals, PyObject *locals,
                   PyObject *const *defs, int defcount,
                   PyObject *kwdefs, PyObject *closure)
 {
-    PyObject *ns = _PyModule_Globals_Namespace(globals);
-    if (ns == NULL) {
-        return NULL;
+    int cleanup = 0;
+    PyObject *ns;
+    if (PyModule_Check(globals)) {
+        ns = globals;
+    }
+    else {
+        /* expensive backwards compatible case, find/make module */
+        ns = _PyModule_Globals_Namespace(globals);
+        if (ns == NULL) {
+            return NULL;
+        }
+        cleanup = 1;
     }
     PyObject *rv = _PyEval_EvalCodeWithName(_co, ns, locals,
                                             args, argcount,
@@ -3976,7 +3985,9 @@ PyEval_EvalCodeEx(PyObject *_co, PyObject *globals, PyObject *locals,
                                             defs, defcount,
                                             kwdefs, closure,
                                             NULL, NULL);
-    Py_DECREF(ns);
+    if (cleanup) {
+        Py_DECREF(ns);
+    }
     return rv;
 }
 

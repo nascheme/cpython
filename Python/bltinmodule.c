@@ -959,7 +959,9 @@ builtin_eval_impl(PyObject *module, PyObject *source, PyObject *globals,
         PyErr_SetString(PyExc_TypeError, "locals must be a mapping");
         return NULL;
     }
-    if (globals != Py_None && !PyDict_Check(globals)) {
+    if (globals != Py_None &&
+            !PyDict_Check(globals) &&
+            !PyModule_Check(globals)) {
         PyErr_SetString(PyExc_TypeError, PyMapping_Check(globals) ?
             "globals must be a real dict; try eval(expr, {}, mapping)"
             : "globals must be a dict");
@@ -973,8 +975,12 @@ builtin_eval_impl(PyObject *module, PyObject *source, PyObject *globals,
                 return NULL;
         }
     }
-    else if (locals == Py_None)
+    else if (locals == Py_None) {
         locals = globals;
+        if (PyModule_Check(globals)) {
+            locals = PyModule_GetDict(globals);
+        }
+    }
 
     if (globals == NULL || locals == NULL) {
         PyErr_SetString(PyExc_TypeError,
@@ -983,7 +989,8 @@ builtin_eval_impl(PyObject *module, PyObject *source, PyObject *globals,
         return NULL;
     }
 
-    if (_PyDict_GetItemId(globals, &PyId___builtins__) == NULL) {
+    if (PyDict_Check(globals) &&
+        _PyDict_GetItemId(globals, &PyId___builtins__) == NULL) {
         if (_PyDict_SetItemId(globals, &PyId___builtins__,
                               PyEval_GetBuiltins()) != 0)
             return NULL;
@@ -1049,10 +1056,14 @@ builtin_exec_impl(PyObject *module, PyObject *source, PyObject *globals,
             return NULL;
         }
     }
-    else if (locals == Py_None)
+    else if (locals == Py_None) {
         locals = globals;
+        if (PyModule_Check(locals)) {
+            locals = PyModule_GetDict(locals);
+        }
+    }
 
-    if (!PyDict_Check(globals)) {
+    if (!PyDict_Check(globals) && !PyModule_Check(globals)) {
         PyErr_Format(PyExc_TypeError, "exec() globals must be a dict, not %.100s",
                      globals->ob_type->tp_name);
         return NULL;
@@ -1063,7 +1074,8 @@ builtin_exec_impl(PyObject *module, PyObject *source, PyObject *globals,
             locals->ob_type->tp_name);
         return NULL;
     }
-    if (_PyDict_GetItemId(globals, &PyId___builtins__) == NULL) {
+    if (PyDict_Check(globals) &&
+        _PyDict_GetItemId(globals, &PyId___builtins__) == NULL) {
         if (_PyDict_SetItemId(globals, &PyId___builtins__,
                               PyEval_GetBuiltins()) != 0)
             return NULL;
