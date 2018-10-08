@@ -944,7 +944,7 @@ error:
 }
 
 static PyObject *
-module_dict_for_exec(PyObject *name)
+module_for_exec(PyObject *name)
 {
     _Py_IDENTIFIER(__builtins__);
     PyObject *m, *d = NULL;
@@ -965,15 +965,15 @@ module_dict_for_exec(PyObject *name)
         }
     }
 
-    return d;  /* Return a borrowed reference. */
+    return m;  /* Return a borrowed reference. */
 }
 
 static PyObject *
-exec_code_in_module(PyObject *name, PyObject *module_dict, PyObject *code_object)
+exec_code_in_module(PyObject *name, PyObject *mod, PyObject *code_object)
 {
     PyObject *v, *m;
 
-    v = PyEval_EvalCode(code_object, module_dict, module_dict);
+    v = PyEval_EvalCode(code_object, mod, PyModule_GetDict(mod));
     if (v == NULL) {
         remove_module(name);
         return NULL;
@@ -994,12 +994,12 @@ PyObject*
 PyImport_ExecCodeModuleObject(PyObject *name, PyObject *co, PyObject *pathname,
                               PyObject *cpathname)
 {
-    PyObject *d, *external, *res;
+    PyObject *m, *external, *res;
     PyInterpreterState *interp = _PyInterpreterState_GET_UNSAFE();
     _Py_IDENTIFIER(_fix_up_module);
 
-    d = module_dict_for_exec(name);
-    if (d == NULL) {
+    m = module_for_exec(name);
+    if (m == NULL) {
         return NULL;
     }
 
@@ -1011,11 +1011,12 @@ PyImport_ExecCodeModuleObject(PyObject *name, PyObject *co, PyObject *pathname,
         return NULL;
     res = _PyObject_CallMethodIdObjArgs(external,
                                         &PyId__fix_up_module,
-                                        d, name, pathname, cpathname, NULL);
+                                        PyModule_GetDict(m), name, pathname,
+                                        cpathname, NULL);
     Py_DECREF(external);
     if (res != NULL) {
         Py_DECREF(res);
-        res = exec_code_in_module(name, d, co);
+        res = exec_code_in_module(name, m, co);
     }
     return res;
 }
@@ -1373,11 +1374,11 @@ PyImport_ImportFrozenModuleObject(PyObject *name)
         if (err != 0)
             goto err_return;
     }
-    d = module_dict_for_exec(name);
-    if (d == NULL) {
+    m = module_for_exec(name);
+    if (m == NULL) {
         goto err_return;
     }
-    m = exec_code_in_module(name, d, co);
+    m = exec_code_in_module(name, m, co);
     if (m == NULL)
         goto err_return;
     Py_DECREF(co);
