@@ -660,24 +660,18 @@ int _PyFrame_Init()
 }
 
 static PyObject *
-frame_get_globals(PyFrameObject *f)
-{
-    assert(f->f_namespace != NULL);
-    return _PyModule_GetDict((f)->f_namespace);
-}
-
-static PyObject *
-frame_find_builtins(PyFrameObject *back, PyObject *globals)
+frame_find_builtins(PyFrameObject *back, PyObject *ns)
 {
     PyObject *builtins;
-    PyObject *back_globals;
+    PyObject *back_ns;
     if (back != NULL) {
-        back_globals = frame_get_globals(back);
+        back_ns = back->f_namespace;
     }
     else {
-        back_globals = NULL;
+        back_ns = NULL;
     }
-    if (back_globals != globals) {
+    if (back_ns != ns) {
+        PyObject *globals = _PyModule_GetDict(ns);
         builtins = _PyDict_GetItemId(globals, &PyId___builtins__);
         if (builtins) {
             if (PyModule_Check(builtins)) {
@@ -699,7 +693,7 @@ frame_find_builtins(PyFrameObject *back, PyObject *globals)
 
     }
     else {
-        /* If we share the globals, we share the builtins.
+        /* If we share the namespace, we share the builtins.
            Save a lookup and a call. */
         builtins = back->f_builtins;
         assert(builtins != NULL);
@@ -710,7 +704,7 @@ frame_find_builtins(PyFrameObject *back, PyObject *globals)
 
 PyFrameObject* _Py_HOT_FUNCTION
 _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
-                     PyObject *globals, PyObject *locals)
+                     PyObject *ns, PyObject *locals)
 {
     PyFrameObject *back = tstate->frame;
     PyFrameObject *f;
@@ -718,13 +712,13 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
     Py_ssize_t i;
 
 #ifdef Py_DEBUG
-    if (code == NULL || globals == NULL || !PyDict_Check(globals) ||
+    if (code == NULL || ns == NULL || !PyModule_Check(ns) ||
         (locals != NULL && !PyMapping_Check(locals))) {
         PyErr_BadInternalCall();
         return NULL;
     }
 #endif
-    builtins = frame_find_builtins(back, globals);
+    builtins = frame_find_builtins(back, ns);
     if (code->co_zombieframe != NULL) {
         f = code->co_zombieframe;
         code->co_zombieframe = NULL;
@@ -775,11 +769,7 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
     Py_XINCREF(back);
     f->f_back = back;
     Py_INCREF(code);
-    f->f_namespace = _PyModule_Globals_Namespace(globals);
-    if (f->f_namespace == NULL) {
-        Py_DECREF(f);
-        return NULL;
-    }
+    f->f_namespace = ns;
     /* Most functions have CO_NEWLOCALS and CO_OPTIMIZED set. */
     if ((code->co_flags & (CO_NEWLOCALS | CO_OPTIMIZED)) ==
         (CO_NEWLOCALS | CO_OPTIMIZED))
@@ -794,7 +784,7 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
     }
     else {
         if (locals == NULL)
-            locals = globals;
+            locals = _PyModule_GetDict(ns);
         Py_INCREF(locals);
         f->f_locals = locals;
     }
@@ -814,7 +804,11 @@ PyFrameObject*
 PyFrame_New(PyThreadState *tstate, PyCodeObject *code,
             PyObject *globals, PyObject *locals)
 {
-    PyFrameObject *f = _PyFrame_New_NoTrack(tstate, code, globals, locals);
+    PyObject *ns = _PyModule_Globals_Namespace(globals);
+    if (ns == NULL) {
+        return NULL;
+    }
+    PyFrameObject *f = _PyFrame_New_NoTrack(tstate, code, ns, locals);
     if (f)
         _PyObject_GC_TRACK(f);
     return f;

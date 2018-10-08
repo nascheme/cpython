@@ -269,7 +269,11 @@ function_code_fastcall(PyCodeObject *co, PyObject *const *args, Py_ssize_t nargs
        take builtins without sanity checking them.
        */
     assert(tstate != NULL);
-    f = _PyFrame_New_NoTrack(tstate, co, globals, NULL);
+    PyObject *ns = _PyModule_Globals_Namespace(globals);
+    if (ns == NULL) {
+        return NULL;
+    }
+    f = _PyFrame_New_NoTrack(tstate, co, ns, NULL);
     if (f == NULL) {
         return NULL;
     }

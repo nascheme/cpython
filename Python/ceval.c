@@ -3697,7 +3697,11 @@ _PyEval_EvalCodeWithName(PyObject *_co, PyObject *globals, PyObject *locals,
     /* Create the frame */
     tstate = PyThreadState_GET();
     assert(tstate != NULL);
-    f = _PyFrame_New_NoTrack(tstate, co, globals, locals);
+    PyObject *ns = _PyModule_Globals_Namespace(globals);
+    if (ns == NULL) {
+        return NULL;
+    }
+    f = _PyFrame_New_NoTrack(tstate, co, ns, locals);
     if (f == NULL) {
         return NULL;
     }
