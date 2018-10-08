@@ -47,9 +47,14 @@ PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname
     op->func_weakreflist = NULL;
     Py_INCREF(code);
     op->func_code = code;
-    Py_INCREF(globals);
-    op->func_globals = globals;
     op->func_namespace = func_globals_namespace(globals);
+    if (op->func_namespace == NULL) {
+        Py_INCREF(globals);
+        op->func_globals = globals;
+    }
+    else {
+        op->func_globals = NULL;
+    }
     op->func_name = ((PyCodeObject *)code)->co_name;
     Py_INCREF(op->func_name);
     op->func_defaults = NULL; /* No default arguments */
@@ -561,7 +566,7 @@ func_dealloc(PyFunctionObject *op)
     if (op->func_weakreflist != NULL)
         PyObject_ClearWeakRefs((PyObject *) op);
     Py_DECREF(op->func_code);
-    Py_DECREF(op->func_globals);
+    Py_XDECREF(op->func_globals);
     Py_XDECREF(op->func_namespace);
     Py_XDECREF(op->func_module);
     Py_DECREF(op->func_name);
