@@ -14,7 +14,6 @@
 static PyMemberDef frame_memberlist[] = {
     {"f_back",          T_OBJECT,       OFF(f_back),      READONLY},
     {"f_code",          T_OBJECT,       OFF(f_code),      READONLY},
-    {"f_builtins",      T_OBJECT,       OFF(f_builtins),  READONLY},
     {"f_namespace",     T_OBJECT,       OFF(f_namespace), READONLY},
     {"f_lasti",         T_INT,          OFF(f_lasti),     READONLY},
     {"f_trace_lines",   T_BOOL,         OFF(f_trace_lines), 0},
@@ -37,6 +36,16 @@ frame_getglobals(PyFrameObject *f, void *closure)
     PyObject *d;
     assert(f->f_namespace != NULL);
     d = PyModule_GetDict(f->f_namespace);
+    Py_XINCREF(d);
+    return d;
+}
+
+static PyObject *
+frame_getbuiltins(PyFrameObject *f, void *closure)
+{
+    PyObject *d;
+    assert(f->f_namespace != NULL);
+    d = _PyModule_GetBuiltins(f->f_namespace);
     Py_XINCREF(d);
     return d;
 }
@@ -372,6 +381,7 @@ frame_settrace(PyFrameObject *f, PyObject* v, void *closure)
 static PyGetSetDef frame_getsetlist[] = {
     {"f_locals",        (getter)frame_getlocals, NULL, NULL},
     {"f_globals",       (getter)frame_getglobals, NULL, NULL},
+    {"f_builtins",      (getter)frame_getbuiltins, NULL, NULL},
     {"f_lineno",        (getter)frame_getlineno,
                     (setter)frame_setlineno, NULL},
     {"f_trace",         (getter)frame_gettrace, (setter)frame_settrace, NULL},
@@ -447,7 +457,6 @@ frame_dealloc(PyFrameObject *f)
     }
 
     Py_XDECREF(f->f_back);
-    Py_DECREF(f->f_builtins);
     Py_XDECREF(f->f_namespace);
     Py_CLEAR(f->f_locals);
     Py_CLEAR(f->f_trace);
@@ -475,7 +484,6 @@ frame_traverse(PyFrameObject *f, visitproc visit, void *arg)
 
     Py_VISIT(f->f_back);
     Py_VISIT(f->f_code);
-    Py_VISIT(f->f_builtins);
     Py_VISIT(f->f_namespace);
     Py_VISIT(f->f_locals);
     Py_VISIT(f->f_trace);
@@ -614,61 +622,12 @@ PyTypeObject PyFrame_Type = {
     0,                                          /* tp_dict */
 };
 
-_Py_IDENTIFIER(__builtins__);
-
-static PyObject *
-frame_find_builtins(PyFrameObject *back, PyObject *ns)
-{
-    PyObject *builtins;
-    PyObject *back_ns;
-    if (back != NULL) {
-        back_ns = back->f_namespace;
-    }
-    else {
-        back_ns = NULL;
-    }
-    if (back_ns != ns) {
-        PyObject *globals = _PyModule_GetDict(ns);
-        builtins = _PyDict_GetItemId(globals, &PyId___builtins__);
-        if (builtins) {
-            if (PyModule_Check(builtins)) {
-                builtins = PyModule_GetDict(builtins);
-                assert(builtins != NULL);
-            }
-        }
-        if (builtins == NULL) {
-            if (PyErr_Occurred()) {
-                return NULL;
-            }
-            /* No builtins!              Make up a minimal one
-               Give them 'None', at least. */
-            builtins = PyDict_New();
-            if (builtins == NULL ||
-                PyDict_SetItemString(
-                    builtins, "None", Py_None) < 0)
-                return NULL;
-        }
-        else
-            Py_INCREF(builtins);
-
-    }
-    else {
-        /* If we share the namespace, we share the builtins.
-           Save a lookup and a call. */
-        builtins = back->f_builtins;
-        assert(builtins != NULL);
-        Py_INCREF(builtins);
-    }
-    return builtins;
-}
-
 PyFrameObject* _Py_HOT_FUNCTION
 _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
                      PyObject *ns, PyObject *locals)
 {
     PyFrameObject *back = tstate->frame;
     PyFrameObject *f;
-    PyObject *builtins;
     Py_ssize_t i;
 
 #ifdef Py_DEBUG
@@ -678,7 +637,6 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
         return NULL;
     }
 #endif
-    builtins = frame_find_builtins(back, ns);
     if (code->co_zombieframe != NULL) {
         f = code->co_zombieframe;
         code->co_zombieframe = NULL;
@@ -695,7 +653,6 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
             f = PyObject_GC_NewVar(PyFrameObject, &PyFrame_Type,
             extras);
             if (f == NULL) {
-                Py_DECREF(builtins);
                 return NULL;
             }
         }
@@ -708,7 +665,6 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
                 PyFrameObject *new_f = PyObject_GC_Resize(PyFrameObject, f, extras);
                 if (new_f == NULL) {
                     PyObject_GC_Del(f);
-                    Py_DECREF(builtins);
                     return NULL;
                 }
                 f = new_f;
@@ -725,7 +681,6 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
         f->f_trace = NULL;
     }
     f->f_stacktop = f->f_valuestack;
-    f->f_builtins = builtins;
     Py_XINCREF(back);
     f->f_back = back;
     Py_INCREF(code);

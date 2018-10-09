@@ -14,6 +14,7 @@ typedef struct {
     void *md_state;
     PyObject *md_weaklist;
     PyObject *md_name;  /* for logging purposes after md_dict is cleared */
+    PyObject *md_builtins;
 } PyModuleObject;
 
 static PyMemberDef module_members[] = {
@@ -52,6 +53,30 @@ PyModuleDef_Init(struct PyModuleDef* def)
         def->m_base.m_index = max_module_number;
     }
     return (PyObject*)def;
+}
+
+static PyObject *
+module_find_builtins(PyObject *d)
+{
+    PyObject *b = PyDict_GetItemString(d, "__builtins__");
+    if (b != NULL) {
+        Py_INCREF(b);
+        return b;
+    }
+    b = PyEval_GetBuiltins();
+    if (b != NULL) {
+        Py_INCREF(b);
+        return b;
+    }
+    PyInterpreterState *interp = PyThreadState_GET()->interp;
+    if (interp->builtins) {
+        return PyImport_ImportModuleLevel("builtins", NULL, NULL, NULL, 0);
+    }
+    else {
+        //fprintf(stderr, "no builtins, making dummy one\n");
+        /* No builtins! Make up a minimal one. */
+        return PyDict_New();
+    }
 }
 
 /* follow mod.__dict__.__namespace__ weakref to find module */
@@ -97,7 +122,7 @@ module_add_namespace(PyObject *dict, PyModuleObject *mod)
 }
 
 static int
-module_init_dict(PyModuleObject *mod, PyObject *md_dict,
+module_init_dict(PyModuleObject *mod, PyObject *md_dict, PyObject *builtins,
                  PyObject *name, PyObject *doc)
 {
     _Py_IDENTIFIER(__name__);
@@ -121,6 +146,11 @@ module_init_dict(PyModuleObject *mod, PyObject *md_dict,
         return -1;
     if (_PyDict_SetItemId(md_dict, &PyId___spec__, Py_None) != 0)
         return -1;
+#if 0
+    _Py_IDENTIFIER(__builtins__);
+    if (_PyDict_SetItemId(md_dict, &PyId___builtins__, builtins) != 0)
+        return -1;
+#endif
     if (PyUnicode_CheckExact(name)) {
         Py_INCREF(name);
         Py_XSETREF(mod->md_name, name);
@@ -144,8 +174,11 @@ module_new_with_dict(PyObject *name, PyObject *dict, int add_ns)
     m->md_weaklist = NULL;
     m->md_name = NULL;
     m->md_dict = dict;
+    m->md_builtins = module_find_builtins(dict);
+    if (m->md_builtins == NULL)
+        goto fail;
     if (add_ns) {
-        if (module_init_dict(m, m->md_dict, name, NULL) != 0)
+        if (module_init_dict(m, m->md_dict, m->md_builtins, name, NULL) != 0)
             goto fail;
     }
     else {
@@ -598,6 +631,21 @@ _PyModule_GetDict(PyObject *m)
     return d;
 }
 
+PyObject *
+_PyModule_GetBuiltins(PyObject *m)
+{
+    PyObject *d;
+#if Py_DEBUG
+    if (!PyModule_Check(m)) {
+        PyErr_BadInternalCall();
+        return NULL;
+    }
+#endif
+    d = ((PyModuleObject *)m) -> md_builtins;
+    assert(d != NULL);
+    return d;
+}
+
 /* type checking version of above */
 PyObject *
 PyModule_GetDict(PyObject *m)
@@ -799,7 +847,12 @@ module___init___impl(PyModuleObject *self, PyObject *name, PyObject *doc)
             return -1;
         self->md_dict = dict;
     }
-    if (module_init_dict(self, dict, name, doc) < 0)
+    if (self->md_builtins == NULL) {
+        self->md_builtins = module_find_builtins(dict);
+        if (self->md_builtins == NULL)
+            return -1;
+    }
+    if (module_init_dict(self, dict, self->md_builtins, name, doc) < 0)
         return -1;
     return 0;
 }
@@ -819,6 +872,7 @@ module_dealloc(PyModuleObject *m)
         m->md_def->m_free(m);
     Py_XDECREF(m->md_dict);
     Py_XDECREF(m->md_name);
+    Py_XDECREF(m->md_builtins);
     if (m->md_state != NULL)
         PyMem_FREE(m->md_state);
     Py_TYPE(m)->tp_free((PyObject *)m);
@@ -953,9 +1007,21 @@ module_dir(PyObject *self, PyObject *args)
     return result;
 }
 
+static PyObject *
+module_getbuiltins(PyModuleObject *m, void *closure)
+{
+    Py_INCREF(m->md_builtins);
+    return m->md_builtins;
+}
+
 static PyMethodDef module_methods[] = {
     {"__dir__", module_dir, METH_NOARGS,
      PyDoc_STR("__dir__() -> list\nspecialized dir() implementation")},
+    {0}
+};
+
+static PyGetSetDef module_getsetlist[] = {
+    {"_mod_builtins",        (getter)module_getbuiltins, NULL, NULL},
     {0}
 };
 
@@ -990,7 +1056,7 @@ PyTypeObject PyModule_Type = {
     0,                                          /* tp_iternext */
     module_methods,                             /* tp_methods */
     module_members,                             /* tp_members */
-    0,                                          /* tp_getset */
+    module_getsetlist,                          /* tp_getset */
     0,                                          /* tp_base */
     0,                                          /* tp_dict */
     0,                                          /* tp_descr_get */

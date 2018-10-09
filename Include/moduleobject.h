@@ -22,7 +22,7 @@ PyAPI_FUNC(PyObject *) PyModule_New(
     );
 PyAPI_FUNC(PyObject *) PyModule_GetDict(PyObject *);
 PyAPI_FUNC(PyObject *) _PyModule_GetDict(PyObject *);
-//PyAPI_FUNC(PyObject *) PyModule_GetBuiltins(PyObject *);
+PyAPI_FUNC(PyObject *) _PyModule_GetBuiltins(PyObject *);
 #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 >= 0x03030000
 PyAPI_FUNC(PyObject *) PyModule_GetNameObject(PyObject *);
 #endif

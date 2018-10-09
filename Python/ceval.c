@@ -706,14 +706,8 @@ _Py_CheckRecursiveCall(const char *where)
     return 0;
 }
 
-static PyObject *
-eval_get_globals(PyFrameObject *f)
-{
-    assert(f->f_namespace != NULL);
-    return _PyModule_GetDict((f)->f_namespace);
-}
-#define GLOBALS(f) eval_get_globals(f)
-//#define BUILTINS(f) PyModule_GetBuiltins(f->f_namespace)
+#define GLOBALS(f) _PyModule_GetDict((f)->f_namespace)
+#define BUILTINS(f) _PyModule_GetBuiltins((f)->f_namespace)
 
 
 static int do_raise(PyThreadState *tstate, PyObject *exc, PyObject *cause);
@@ -2260,8 +2254,9 @@ main_loop:
             _Py_IDENTIFIER(__build_class__);
 
             PyObject *bc;
-            if (PyDict_CheckExact(f->f_builtins)) {
-                bc = _PyDict_GetItemIdWithError(f->f_builtins, &PyId___build_class__);
+            PyObject *builtins = BUILTINS(f);
+            if (PyDict_CheckExact(builtins)) {
+                bc = _PyDict_GetItemIdWithError(builtins, &PyId___build_class__);
                 if (bc == NULL) {
                     if (!_PyErr_Occurred(tstate)) {
                         _PyErr_SetString(tstate, PyExc_NameError,
@@ -2275,7 +2270,7 @@ main_loop:
                 PyObject *build_class_str = _PyUnicode_FromId(&PyId___build_class__);
                 if (build_class_str == NULL)
                     goto error;
-                bc = PyObject_GetItem(f->f_builtins, build_class_str);
+                bc = PyObject_GetItem(builtins, build_class_str);
                 if (bc == NULL) {
                     if (_PyErr_ExceptionMatches(tstate, PyExc_KeyError))
                         _PyErr_SetString(tstate, PyExc_NameError,
@@ -2458,8 +2453,9 @@ main_loop:
                     goto error;
                 }
                 else {
-                    if (PyDict_CheckExact(f->f_builtins)) {
-                        v = PyDict_GetItemWithError(f->f_builtins, name);
+                    PyObject *builtins = BUILTINS(f);
+                    if (PyDict_CheckExact(builtins)) {
+                        v = PyDict_GetItemWithError(builtins, name);
                         if (v == NULL) {
                             if (!_PyErr_Occurred(tstate)) {
                                 format_exc_check_arg(
@@ -2471,7 +2467,7 @@ main_loop:
                         Py_INCREF(v);
                     }
                     else {
-                        v = PyObject_GetItem(f->f_builtins, name);
+                        v = PyObject_GetItem(builtins, name);
                         if (v == NULL) {
                             if (_PyErr_ExceptionMatches(tstate, PyExc_KeyError)) {
                                 format_exc_check_arg(
@@ -2490,8 +2486,9 @@ main_loop:
         case TARGET(LOAD_GLOBAL): {
             PyObject *name;
             PyObject *v;
+            PyObject *builtins = BUILTINS(f);
             if (PyDict_CheckExact(GLOBALS(f))
-                && PyDict_CheckExact(f->f_builtins))
+                && PyDict_CheckExact(builtins))
             {
                 OPCACHE_CHECK();
                 if (co_opcache != NULL && co_opcache->optimized > 0) {
@@ -2513,7 +2510,7 @@ main_loop:
 
                 name = GETITEM(names, oparg);
                 v = _PyDict_LoadGlobal((PyDictObject *)GLOBALS(f),
-                                       (PyDictObject *)f->f_builtins,
+                                       (PyDictObject *)builtins,
                                        name);
                 if (v == NULL) {
                     if (!_PyErr_OCCURRED()) {
@@ -2558,7 +2555,7 @@ main_loop:
                     _PyErr_Clear(tstate);
 
                     /* namespace 2: builtins */
-                    v = PyObject_GetItem(f->f_builtins, name);
+                    v = PyObject_GetItem(builtins, name);
                     if (v == NULL) {
                         if (_PyErr_ExceptionMatches(tstate, PyExc_KeyError)) {
                             format_exc_check_arg(
@@ -4829,7 +4826,7 @@ PyEval_GetBuiltins(void)
     if (current_frame == NULL)
         return tstate->interp->builtins;
     else
-        return current_frame->f_builtins;
+        return BUILTINS(current_frame);
 }
 
 /* Convenience function to get a builtin from its name */
@@ -5181,7 +5178,7 @@ import_name(PyThreadState *tstate, PyFrameObject *f,
     PyObject *import_func, *res;
     PyObject* stack[5];
 
-    import_func = _PyDict_GetItemIdWithError(f->f_builtins, &PyId___import__);
+    import_func = _PyDict_GetItemIdWithError(BUILTINS(f), &PyId___import__);
     if (import_func == NULL) {
         if (!_PyErr_Occurred(tstate)) {
             _PyErr_SetString(tstate, PyExc_ImportError, "__import__ not found");
