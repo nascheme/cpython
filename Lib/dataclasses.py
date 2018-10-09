@@ -389,7 +389,12 @@ def _create_fn(name, args, body, *, globals=None, locals=None,
     # Compute the text of the entire function.
     txt = f'def {name}({args}){return_annotation}:\n{body}'
 
-    exec(txt, globals, locals)
+    if globals is not None:
+        namespace = types.ModuleType('dataclasses mod')
+        namespace.__dict__.update(globals)
+    else:
+        namespace = None
+    exec(txt, namespace, locals)
     return locals[name]
 
 
