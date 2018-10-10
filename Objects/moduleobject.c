@@ -60,23 +60,25 @@ module_find_builtins(PyObject *d)
 {
     PyObject *b = PyDict_GetItemString(d, "__builtins__");
     if (b != NULL) {
+        if (PyModule_Check(b)) {
+            b = PyModule_GetDict(b);
+            assert(b != NULL);
+        }
         Py_INCREF(b);
         return b;
     }
     b = PyEval_GetBuiltins();
     if (b != NULL) {
+        assert(PyDict_Check(b));
         Py_INCREF(b);
         return b;
     }
-    PyInterpreterState *interp = PyThreadState_GET()->interp;
-    if (interp->builtins) {
-        return PyImport_ImportModuleLevel("builtins", NULL, NULL, NULL, 0);
-    }
-    else {
-        //fprintf(stderr, "no builtins, making dummy one\n");
-        /* No builtins! Make up a minimal one. */
-        return PyDict_New();
-    }
+    /* No builtins! Make up a minimal one. Give them 'None', at least. */
+    b = PyDict_New();
+    if (b == NULL ||
+        PyDict_SetItemString(b, "None", Py_None) < 0)
+        return NULL;
+    return b;
 }
 
 /* follow mod.__dict__.__namespace__ weakref to find module */
@@ -175,6 +177,7 @@ module_new_with_dict(PyObject *name, PyObject *dict, int add_ns)
     m->md_name = NULL;
     m->md_dict = dict;
     m->md_builtins = module_find_builtins(dict);
+    assert(!PyModule_Check(m->md_builtins));
     if (m->md_builtins == NULL)
         goto fail;
     if (add_ns) {
