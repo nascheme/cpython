@@ -58,6 +58,13 @@ as ((sem_t *)-1).
     #define SEM_FAILED ((sem_t *)-1)
 #endif
 
+
+/*[clinic input]
+module _posixshmem
+[clinic start generated code]*/
+/*[clinic end generated code: output=da39a3ee5e6b4b0d input=a416734e49164bf8]*/
+
+
 /* POSIX says that a mode_t "shall be an integer type". To avoid the need
 for a specific get_mode function for each type, I'll just stuff the mode into
 a long and mention it in the Xxx_members list for each type.
@@ -648,12 +655,95 @@ posixshmem_unlink_shared_memory(PyObject *self, PyObject *args) {
 }
 
 
+#ifdef HAVE_SHM_OPEN
+/*[clinic input]
+_posixshmem.shm_open -> int
+    path: unicode
+    flags: int
+    mode: int = 0o777
+
+# "shm_open(path, flags, mode=0o777)\n\n\
+
+Open a shared memory object.  Returns a file descriptor (integer).
+
+[clinic start generated code]*/
+
+static int
+_posixshmem_shm_open_impl(PyObject *module, PyObject *path, int flags,
+                          int mode)
+/*[clinic end generated code: output=8d110171a4fa20df input=e83b58fa802fac25]*/
+{
+    int fd;
+    int async_err = 0;
+    const char *name = PyUnicode_AsUTF8(path);
+    if (name == NULL) {
+        return -1;
+    }
+    do {
+        Py_BEGIN_ALLOW_THREADS
+        fd = shm_open(name, flags, mode);
+        Py_END_ALLOW_THREADS
+    } while (fd < 0 && errno == EINTR && !(async_err = PyErr_CheckSignals()));
+
+    if (fd < 0) {
+        if (!async_err)
+            PyErr_SetFromErrnoWithFilenameObject(PyExc_OSError, path);
+        return -1;
+    }
+
+    return fd;
+}
+#endif /* HAVE_SHM_OPEN */
+
+#ifdef HAVE_SHM_UNLINK
+/*[clinic input]
+_posixshmem.shm_unlink
+    path: unicode
+
+Remove a shared memory object (similar to unlink()).
+
+Remove a shared memory object name, and, once all processes  have  unmapped
+the object, de-allocates and destroys the contents of the associated memory
+region.
+
+[clinic start generated code]*/
+
+static PyObject *
+_posixshmem_shm_unlink_impl(PyObject *module, PyObject *path)
+/*[clinic end generated code: output=42f8b23d134b9ff5 input=8dc0f87143e3b300]*/
+{
+    int rv;
+    int async_err = 0;
+    const char *name = PyUnicode_AsUTF8(path);
+    if (name == NULL) {
+        return NULL;
+    }
+    do {
+        Py_BEGIN_ALLOW_THREADS
+        rv = shm_unlink(name);
+        Py_END_ALLOW_THREADS
+    } while (rv < 0 && errno == EINTR && !(async_err = PyErr_CheckSignals()));
+
+    if (rv < 0) {
+        if (!async_err)
+            PyErr_SetFromErrnoWithFilenameObject(PyExc_OSError, path);
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
+#endif /* HAVE_SHM_UNLINK */
+
+#include "clinic/posixshmem.c.h"
+
 static PyMethodDef module_methods[ ] = {
     {   "unlink_shared_memory",
         (PyCFunction)posixshmem_unlink_shared_memory,
         METH_VARARGS,
         "Unlink shared memory"
     },
+    _POSIXSHMEM_SHM_OPEN_METHODDEF
+    _POSIXSHMEM_SHM_UNLINK_METHODDEF
     {NULL} /* Sentinel */
 };
 
