@@ -81,9 +81,11 @@ if os.name == "nt":
 
 class WindowsNamedSharedMemory:
 
-    def __init__(self, name, flags=None, mode=384, size=0, read_only=False):
+    def __init__(self, name=None, flags=None, mode=384, size=0, read_only=False):
         if name is None:
             name = _make_filename()
+            if flags is None:
+                flags = O_CREX
 
         if size == 0:
             # Attempt to dynamically determine the existing named shared
@@ -132,25 +134,26 @@ class WindowsNamedSharedMemory:
 
 
 # FreeBSD (and perhaps other BSDs) limit names to 14 characters.
-_POSIX_SAFE_NAME_LENGTH = 14
+_SHM_SAFE_NAME_LENGTH = 14
 
-# shared object name prefix, should start with /
-_POSIX_NAME_PREFIX = '/pym_'
+# shared object name prefix
+_SHM_NAME_PREFIX = 'pym_'
 
 
 def _make_filename():
     """Create a random filename for the shared memory object.
     """
     # number of random bytes to use for name
-    nbytes = (_POSIX_SAFE_NAME_LENGTH - len(_POSIX_NAME_PREFIX)) // 2
-    assert nbytes >= 2, '_POSIX_NAME_PREFIX too long'
-    name = _POSIX_NAME_PREFIX + secrets.token_hex(nbytes)
-    assert len(name) <= _POSIX_SAFE_NAME_LENGTH
+    nbytes = (_SHM_SAFE_NAME_LENGTH - len(_SHM_NAME_PREFIX) - 1) // 2
+    assert nbytes >= 2, '_SHM_NAME_PREFIX too long'
+    name = _SHM_NAME_PREFIX + secrets.token_hex(nbytes)
+    assert len(name) <= _SHM_SAFE_NAME_LENGTH
     return name
 
 
 class PosixSharedMemory:
 
+    # defaults so close() and unlink() can run without errors
     fd = -1
     name = None
     _absname = None
@@ -158,41 +161,45 @@ class PosixSharedMemory:
     buf = None
 
     def __init__(self, name, flags=0, mode=384, size=0, read_only=False):
-        if name is None:
-            if not flags:
-                flags = os.O_CREAT | os.O_EXCL
-            elif not flags & O_EXCL:
-                raise ValueError("'name' can only be None if O_EXCL is set")
         if flags & O_EXCL and not flags & O_CREAT:
             raise ValueError("O_EXCL must be combined with O_CREAT")
         flags |= os.O_RDONLY if read_only else os.O_RDWR
         self.flags = flags
         self.mode = mode
-        assert size >= 0, repr(size)
+        if not size >= 0:
+            raise ValueError("'size' must be a positive integer")
         self.size = size
-        if name is not None:
+        if name is None:
+            self._open_retry()
+        else:
             self.name = name
             if not name.startswith('/'):
                 name = '/' + name
             self.fd = _posixshmem.shm_open(name, flags, mode=mode)
             self._absname = name
-        else:
-            self._open_retry()
         if self.size:
             os.ftruncate(self.fd, self.size)
         self._mmap = mmap.mmap(self.fd, self.size)
         self.buf = memoryview(self._mmap)
 
     def _open_retry(self):
-        # generate a random name, retry if it exists
+        # generate a random name, open, retry if it exists
+        if not self.flags:
+            self.flags |= os.O_CREAT | os.O_EXCL
+        elif not self.flags & O_EXCL:
+            raise ValueError("'name' can only be None if O_EXCL is set")
         while True:
             name = _make_filename()
+            # shm_open suggests that for portable use, name should start with
+            # a forward slash
+            absname = '/' + name
             try:
-                self.fd = _posixshmem.shm_open(name, self.flags,
+                self.fd = _posixshmem.shm_open(absname, self.flags,
                                                mode=self.mode)
             except FileExistsError:
                 continue
-            self.name = self._absname = name
+            self.name = name
+            self._absname = absname
             break
 
     def __repr__(self):
