@@ -81,20 +81,17 @@ if os.name == "nt":
 
 class WindowsNamedSharedMemory:
 
-    def __init__(self, name=None, flags=None, mode=384, size=0, read_only=False):
+    def __init__(self, name, flags=None, mode=384, size=0, read_only=False):
         if name is None:
             name = _make_filename()
-            if flags is None:
-                flags = O_CREX
 
         if size == 0:
             # Attempt to dynamically determine the existing named shared
             # memory block's size which is likely a multiple of mmap.PAGESIZE.
             try:
                 h_map = kernel32.OpenFileMappingW(FILE_MAP_READ, False, name)
-            except OSError as ose:
-                # FIXME: should we just raise ose?
-                raise FileExistsError(name)
+            except OSError:
+                raise FileNotFoundError(name)
             try:
                 p_buf = kernel32.MapViewOfFile(h_map, FILE_MAP_READ, 0, 0, 0)
             finally:
@@ -137,14 +134,17 @@ class WindowsNamedSharedMemory:
 _SHM_SAFE_NAME_LENGTH = 14
 
 # shared object name prefix
-_SHM_NAME_PREFIX = 'pym_'
+if os.name == "nt":
+    _SHM_NAME_PREFIX = 'wnsm_'
+else:
+    _SHM_NAME_PREFIX = '/psm_'
 
 
 def _make_filename():
     """Create a random filename for the shared memory object.
     """
     # number of random bytes to use for name
-    nbytes = (_SHM_SAFE_NAME_LENGTH - len(_SHM_NAME_PREFIX) - 1) // 2
+    nbytes = (_SHM_SAFE_NAME_LENGTH - len(_SHM_NAME_PREFIX)) // 2
     assert nbytes >= 2, '_SHM_NAME_PREFIX too long'
     name = _SHM_NAME_PREFIX + secrets.token_hex(nbytes)
     assert len(name) <= _SHM_SAFE_NAME_LENGTH
@@ -156,13 +156,18 @@ class PosixSharedMemory:
     # defaults so close() and unlink() can run without errors
     fd = -1
     name = None
-    _absname = None
     _mmap = None
     buf = None
 
-    def __init__(self, name, flags=0, mode=384, size=0, read_only=False):
+    def __init__(self, name, flags=None, mode=384, size=0, read_only=False):
+        if name and (flags is None):
+            flags = 0
+        else:
+            flags = O_CREX if flags is None else flags
         if flags & O_EXCL and not flags & O_CREAT:
             raise ValueError("O_EXCL must be combined with O_CREAT")
+        if name is None and not flags & O_EXCL:
+            raise ValueError("'name' can only be None if O_EXCL is set")
         flags |= os.O_RDONLY if read_only else os.O_RDWR
         self.flags = flags
         self.mode = mode
@@ -173,41 +178,34 @@ class PosixSharedMemory:
             self._open_retry()
         else:
             self.name = name
-            if not name.startswith('/'):
-                name = '/' + name
             self.fd = _posixshmem.shm_open(name, flags, mode=mode)
-            self._absname = name
         if self.size:
-            os.ftruncate(self.fd, self.size)
+            try:
+                os.ftruncate(self.fd, self.size)
+            except OSError:
+                self.unlink()
+                raise
         self._mmap = mmap.mmap(self.fd, self.size)
         self.buf = memoryview(self._mmap)
 
     def _open_retry(self):
         # generate a random name, open, retry if it exists
-        if not self.flags:
-            self.flags |= os.O_CREAT | os.O_EXCL
-        elif not self.flags & O_EXCL:
-            raise ValueError("'name' can only be None if O_EXCL is set")
         while True:
             name = _make_filename()
-            # shm_open suggests that for portable use, name should start with
-            # a forward slash
-            absname = '/' + name
             try:
-                self.fd = _posixshmem.shm_open(absname, self.flags,
+                self.fd = _posixshmem.shm_open(name, self.flags,
                                                mode=self.mode)
             except FileExistsError:
                 continue
             self.name = name
-            self._absname = absname
             break
 
     def __repr__(self):
         return f'{self.__class__.__name__}({self.name!r}, size={self.size})'
 
     def unlink(self):
-        if self._absname:
-            _posixshmem.shm_unlink(self._absname)
+        if self.name:
+            _posixshmem.shm_unlink(self.name)
 
     def close(self):
         if self.buf is not None:
@@ -227,10 +225,14 @@ class PosixSharedMemory:
             pass
 
 
-if os.name == 'nt':
-    SharedMemory = WindowsNamedSharedMemory
-else:
-    SharedMemory = PosixSharedMemory
+class SharedMemory:
+
+    def __new__(cls, *args, **kwargs):
+        if os.name == 'nt':
+            cls = WindowsNamedSharedMemory
+        else:
+            cls = PosixSharedMemory
+        return cls(*args, **kwargs)
 
 
 def shareable_wrap(
