@@ -1697,6 +1697,12 @@ PyObject _Py_NotImplementedStruct = {
 void
 _Py_ReadyTypes(void)
 {
+    _Py_EXACT_TYPES[_Py_TYPE_UNICODE] = &PyUnicode_Type;
+    _Py_EXACT_TYPES[_Py_TYPE_DICT] = &PyDict_Type;
+    _Py_EXACT_TYPES[_Py_TYPE_LONG] = &PyLong_Type;
+    _Py_EXACT_TYPES[_Py_TYPE_FLOAT] = &PyFloat_Type;
+    _Py_EXACT_TYPES[_Py_TYPE_LIST] = &PyList_Type;
+    _Py_EXACT_TYPES[_Py_TYPE_TUPLE] = &PyTuple_Type;
     if (PyType_Ready(&PyBaseObject_Type) < 0)
         Py_FatalError("Can't initialize object type");
 
@@ -2196,6 +2202,8 @@ extern inline PyTypeObject * _Py_TYPE(const PyObject *ob);
 extern inline Py_ssize_t _Py_REFCNT(const PyObject *ob);
 extern inline void _Py_INCREF(PyObject *op);
 extern inline void _Py_DECREF(PyObject *op);
+extern inline int _PyObject_IS_GC(PyObject *op);
+extern inline int _Py_IS_EXACT_TYPE(PyObject *op, int type_id);
 #endif
 
 #ifdef __cplusplus

@@ -13,7 +13,7 @@ PyAPI_DATA(PyTypeObject) PyLong_Type;
 
 #define PyLong_Check(op) \
         PyType_FastSubclass(Py_TYPE(op), Py_TPFLAGS_LONG_SUBCLASS)
-#define PyLong_CheckExact(op) (Py_TYPE(op) == &PyLong_Type)
+#define PyLong_CheckExact(op) _Py_IS_EXACT_TYPE(op, _Py_TYPE_LONG)
 
 PyAPI_FUNC(PyObject *) PyLong_FromLong(long);
 PyAPI_FUNC(PyObject *) PyLong_FromUnsignedLong(unsigned long);

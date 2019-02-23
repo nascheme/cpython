@@ -660,6 +660,31 @@ _Py_IS_TYPE(PyObject *op, PyTypeObject *tp)
 
 #endif /* !WITH_TAGGED_POINTERS */
 
+enum {
+    _Py_TYPE_UNICODE = 0,
+    _Py_TYPE_DICT,
+    _Py_TYPE_LONG,
+    _Py_TYPE_FLOAT,
+    _Py_TYPE_LIST,
+    _Py_TYPE_TUPLE,
+    _Py_TYPE_LAST,
+} _Py_TYPE_IDS;
+
+// table of type pointers, more cache friendly to keep together
+PyObject *_Py_EXACT_TYPES[_Py_TYPE_LAST];
+
+static inline int
+_Py_IS_EXACT_TYPE(PyObject *op, int type_id)
+{
+#ifdef WITH_TAGGED_POINTERS
+    if (_Py_IS_TAGGED(op)) {
+        return type_id == _Py_TYPE_LONG;
+    }
+#endif
+    assert(type_id >= 0 && type_id < _Py_TYPE_LAST);
+    return ((PyObject *)op->ob_type) == _Py_EXACT_TYPES[type_id];
+}
+
 #define Py_SIZE(ob) (((PyVarObject*)(ob))->ob_size)
 #define Py_SET_TYPE(ob, tp) (((PyObject*)(ob))->ob_type = (tp))
 #define Py_SET_REFCNT(ob, n) (((PyObject*)(ob))->ob_refcnt = (n))
