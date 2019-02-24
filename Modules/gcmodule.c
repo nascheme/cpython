@@ -1905,8 +1905,12 @@ PyObject *
 _PyObject_GC_New(PyTypeObject *tp)
 {
     PyObject *op = _PyObject_GC_Malloc(_PyObject_SIZE(tp));
-    if (op != NULL)
+    if (op != NULL) {
         op = PyObject_INIT(op, tp);
+        ssize_t p = (ssize_t)tp;
+        p |= 1; // set low order bit, flags as GC object
+        Py_SET_TYPE(op, (PyTypeObject *)p);
+    }
     return op;
 }
 
@@ -1922,8 +1926,12 @@ _PyObject_GC_NewVar(PyTypeObject *tp, Py_ssize_t nitems)
     }
     size = _PyObject_VAR_SIZE(tp, nitems);
     op = (PyVarObject *) _PyObject_GC_Malloc(size);
-    if (op != NULL)
+    if (op != NULL) {
         op = PyObject_INIT_VAR(op, tp, nitems);
+        ssize_t p = (ssize_t)tp;
+        p |= 1; // set low order bit, flags as GC object
+        Py_SET_TYPE(op, (PyObject *)p);
+    }
     return op;
 }
 

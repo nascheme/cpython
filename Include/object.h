@@ -604,7 +604,8 @@ PyAPI_FUNC(PyObject *) PyObject_Dir(PyObject *);
 inline PyTypeObject *
 _Py_TYPE(const PyObject *ob)
 {
-    return ob->ob_type;
+    ssize_t p = (ssize_t)ob->ob_type;
+    return (PyTypeObject *)(p & (~1));
 }
 
 inline Py_ssize_t
