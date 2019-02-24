@@ -114,9 +114,6 @@ typedef struct {
     Py_ssize_t ob_size; /* Number of items in variable part */
 } PyVarObject;
 
-#define Py_REFCNT(ob)           (((PyObject*)(ob))->ob_refcnt)
-#define Py_TP(ob)               ((ob)->ob_type)
-#define Py_TYPE(ob)             (Py_TP((PyObject*)(ob)))
 #define Py_SIZE(ob)             (((PyVarObject*)(ob))->ob_size)
 #define Py_SET_TP(ob, tp)       ((ob)->ob_type = (tp))
 #define Py_SET_TYPE(ob, tp)     (Py_SET_TP((PyObject *)(ob), (tp)))
@@ -621,13 +618,9 @@ _Py_REFCNT(const PyObject *ob)
 static inline int
 _Py_IS_TYPE(PyObject *op, PyTypeObject *tp)
 {
-    return op->ob_type == tp;
+    return _Py_TYPE(op) == tp;
 }
 #define Py_IS_TYPE(op, tp) (_Py_IS_TYPE((PyObject *)op, tp))
-
-#define Py_SIZE(ob) (((PyVarObject*)(ob))->ob_size)
-#define Py_SET_TYPE(ob, tp) (((PyObject*)(ob))->ob_type = (tp))
-#define Py_SET_REFCNT(ob, n) (((PyObject*)(ob))->ob_refcnt = (n))
 
 /* Helpers for printing recursive container types */
 PyAPI_FUNC(int) Py_ReprEnter(PyObject *);
