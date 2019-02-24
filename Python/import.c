@@ -41,7 +41,43 @@ module _imp
 
 #include "clinic/import.c.h"
 
+/* PYTHONPACKAGE (.pypkg) file */
+PyObject *pkg_index;
+FILE *pkg_fp;
+
 /* Initialize things */
+
+static void
+import_pypkg_init(void)
+{
+    const char *pkg_path = getenv("PYTHONPACKAGE");
+    if (pkg_path) {
+        pkg_fp = fopen(pkg_path, "r+");
+        if (pkg_fp == NULL) {
+            return;
+        }
+        PyObject *offset = PyMarshal_ReadObjectFromFile(pkg_fp);
+        assert(offset != NULL);
+        assert(PyLong_CheckExact(offset));
+        fseek(pkg_fp, PyLong_AsSsize_t(offset), SEEK_SET);
+        pkg_index = PyMarshal_ReadObjectFromFile(pkg_fp);
+        assert(pkg_index);
+        assert(PyDict_CheckExact(pkg_index));
+    }
+}
+
+static void
+import_pypkg_fini(void)
+{
+    if (pkg_index) {
+        Py_DECREF(pkg_index);
+        pkg_index = NULL;
+        fclose(pkg_fp);
+    }
+}
+
+
+
 
 _PyInitError
 _PyImport_Init(PyInterpreterState *interp)
@@ -50,6 +86,7 @@ _PyImport_Init(PyInterpreterState *interp)
     if (interp->builtins_copy == NULL) {
         return _Py_INIT_ERR("Can't backup builtins dict");
     }
+    import_pypkg_init();
     return _Py_INIT_OK();
 }
 
@@ -286,6 +323,7 @@ _PyImport_Fini(void)
         PyThread_free_lock(import_lock);
         import_lock = NULL;
     }
+    import_pypkg_fini();
 }
 
 void
@@ -1299,39 +1337,13 @@ is_frozen_package(PyObject *name)
 }
 
 
-/* Initialize a frozen module.
-   Return 1 for success, 0 if the module is not found, and -1 with
-   an exception set if the initialization failed.
-   This function is also used from frozenmain.c */
-
-int
-PyImport_ImportFrozenModuleObject(PyObject *name)
+static int
+import_from_code(PyObject *name, int ispackage, PyObject *co)
 {
-    const struct _frozen *p;
-    PyObject *co, *m, *d;
-    int ispackage;
-    int size;
-
-    p = find_frozen(name);
-
-    if (p == NULL)
-        return 0;
-    if (p->code == NULL) {
-        PyErr_Format(PyExc_ImportError,
-                     "Excluded frozen object named %R",
-                     name);
-        return -1;
-    }
-    size = p->size;
-    ispackage = (size < 0);
-    if (ispackage)
-        size = -size;
-    co = PyMarshal_ReadObjectFromString((const char *)p->code, size);
-    if (co == NULL)
-        return -1;
+    PyObject *m, *d;
     if (!PyCode_Check(co)) {
         PyErr_Format(PyExc_TypeError,
-                     "frozen object %R is not a code object",
+                     "object %R is not a code object",
                      name);
         goto err_return;
     }
@@ -1365,6 +1377,69 @@ PyImport_ImportFrozenModuleObject(PyObject *name)
 err_return:
     Py_DECREF(co);
     return -1;
+}
+
+static PyObject *
+import_pypkg_find_load(PyObject *abs_name)
+{
+    PyObject *module = NULL;
+    if (pkg_index) {
+        PyObject *offset = PyDict_GetItem(pkg_index, abs_name);
+        if (offset) {
+            ssize_t n = PyLong_AsSsize_t(offset);
+            //n += 16; // skip pyc header
+            fseek(pkg_fp, n, SEEK_SET);
+            PyObject *flags = PyMarshal_ReadObjectFromFile(pkg_fp);
+            assert(flags != NULL);
+            int ispackage = PyObject_IsTrue(flags);
+            Py_DECREF(flags);
+            PyObject *co = PyMarshal_ReadObjectFromFile(pkg_fp);
+            assert(co != NULL);
+            int ret = import_from_code(abs_name, ispackage, co);
+            if (ret < 0)
+                return NULL;
+            module = PyImport_AddModuleObject(abs_name);
+            /*
+            fprintf(stderr, "pypkg find_and_load %s\n", PyUnicode_AsUTF8(abs_name));
+            */
+            Py_XINCREF(module);
+        }
+    }
+    return module;
+}
+
+
+/* Initialize a frozen module.
+   Return 1 for success, 0 if the module is not found, and -1 with
+   an exception set if the initialization failed.
+   This function is also used from frozenmain.c */
+
+int
+PyImport_ImportFrozenModuleObject(PyObject *name)
+{
+    const struct _frozen *p;
+    PyObject *co;
+    int ispackage;
+    int size;
+
+    p = find_frozen(name);
+
+    if (p == NULL)
+        return 0;
+    if (p->code == NULL) {
+        PyErr_Format(PyExc_ImportError,
+                     "Excluded frozen object named %R",
+                     name);
+        return -1;
+    }
+    size = p->size;
+    ispackage = (size < 0);
+    if (ispackage)
+        size = -size;
+    co = PyMarshal_ReadObjectFromString((const char *)p->code, size);
+    if (co == NULL)
+        return -1;
+    return import_from_code(name, ispackage, co);
 }
 
 int
@@ -1649,9 +1724,14 @@ import_find_and_load(PyObject *abs_name)
     if (PyDTrace_IMPORT_FIND_LOAD_START_ENABLED())
         PyDTrace_IMPORT_FIND_LOAD_START(PyUnicode_AsUTF8(abs_name));
 
-    mod = _PyObject_CallMethodIdObjArgs(interp->importlib,
-                                        &PyId__find_and_load, abs_name,
-                                        interp->import_func, NULL);
+    if (pkg_index) {
+        mod = import_pypkg_find_load(abs_name);
+    }
+    if (mod == NULL) {
+        mod = _PyObject_CallMethodIdObjArgs(interp->importlib,
+                                            &PyId__find_and_load, abs_name,
+                                            interp->import_func, NULL);
+    }
 
     if (PyDTrace_IMPORT_FIND_LOAD_DONE_ENABLED())
         PyDTrace_IMPORT_FIND_LOAD_DONE(PyUnicode_AsUTF8(abs_name),
