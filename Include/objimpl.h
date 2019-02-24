@@ -241,8 +241,11 @@ PyAPI_FUNC(Py_ssize_t) _PyGC_CollectIfEnabled(void);
 
 /* Test if an object has a GC head */
 #ifndef Py_LIMITED_API
+/*
 #define PyObject_IS_GC(o) (PyType_IS_GC(Py_TYPE(o)) && \
     (Py_TYPE(o)->tp_is_gc == NULL || Py_TYPE(o)->tp_is_gc(o)))
+    */
+#define PyObject_IS_GC(op) _PyGC_Get_TypeTag(op)
 #endif
 
 PyAPI_FUNC(PyVarObject *) _PyObject_GC_Resize(PyVarObject *, Py_ssize_t);
@@ -313,7 +316,26 @@ extern PyGC_Head *_PyGC_generation0;
     _PyGCHead_SET_PREV(g, last); \
     _PyGCHead_SET_NEXT(g, _PyGC_generation0); \
     _PyGC_generation0->_gc_prev = (uintptr_t)g; \
+    _PyGC_Assert_Tag((PyObject *)o); \
     } while (0);
+
+static inline void _PyGC_Set_TypeTag(PyObject *o)
+{
+    ssize_t p = (ssize_t)o->ob_type;
+    p |= 1; // set low order bit, flags as GC object
+    Py_SET_TYPE(o, (PyTypeObject *)p);
+}
+
+static inline int _PyGC_Get_TypeTag(PyObject *o)
+{
+    ssize_t p = (ssize_t)o->ob_type;
+    return p & 1;
+}
+
+static inline void _PyGC_Assert_Tag(PyObject *o)
+{
+    assert(_PyGC_Get_TypeTag(o));
+}
 
 /* Tell the GC to stop tracking this object.
  *

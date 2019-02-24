@@ -374,6 +374,7 @@ visit_decref(PyObject *op, void *data)
 {
     assert(op != NULL);
     if (PyObject_IS_GC(op)) {
+        assert(_PyGC_Get_TypeTag(op));
         PyGC_Head *gc = AS_GC(op);
         /* We're only interested in gc_refs for objects in the
          * generation being collected, which can be recognized
@@ -382,6 +383,9 @@ visit_decref(PyObject *op, void *data)
         if (gc_is_collecting(gc)) {
             gc_decref(gc);
         }
+    }
+    else {
+        assert(!_PyGC_Get_TypeTag(op));
     }
     return 0;
 }
@@ -1907,9 +1911,7 @@ _PyObject_GC_New(PyTypeObject *tp)
     PyObject *op = _PyObject_GC_Malloc(_PyObject_SIZE(tp));
     if (op != NULL) {
         op = PyObject_INIT(op, tp);
-        ssize_t p = (ssize_t)tp;
-        p |= 1; // set low order bit, flags as GC object
-        Py_SET_TYPE(op, (PyTypeObject *)p);
+        _PyGC_Set_TypeTag(op);
     }
     return op;
 }
@@ -1928,9 +1930,7 @@ _PyObject_GC_NewVar(PyTypeObject *tp, Py_ssize_t nitems)
     op = (PyVarObject *) _PyObject_GC_Malloc(size);
     if (op != NULL) {
         op = PyObject_INIT_VAR(op, tp, nitems);
-        ssize_t p = (ssize_t)tp;
-        p |= 1; // set low order bit, flags as GC object
-        Py_SET_TYPE(op, (PyObject *)p);
+        _PyGC_Set_TypeTag(op);
     }
     return op;
 }

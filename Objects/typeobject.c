@@ -984,8 +984,11 @@ PyType_GenericAlloc(PyTypeObject *type, Py_ssize_t nitems)
     else
         (void) PyObject_INIT_VAR((PyVarObject *)obj, type, nitems);
 
-    if (PyType_IS_GC(type))
+
+    if (PyType_IS_GC(type)) {
+        _PyGC_Set_TypeTag((PyObject*)obj);
         _PyObject_GC_TRACK(obj);
+    }
     return obj;
 }
 

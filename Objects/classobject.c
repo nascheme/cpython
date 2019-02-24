@@ -56,6 +56,7 @@ PyMethod_New(PyObject *func, PyObject *self)
     if (im != NULL) {
         free_list = (PyMethodObject *)(im->im_self);
         (void)PyObject_INIT(im, &PyMethod_Type);
+        _PyGC_Set_TypeTag((PyObject*)im);
         numfree--;
     }
     else {

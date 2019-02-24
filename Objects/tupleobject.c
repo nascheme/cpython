@@ -104,6 +104,7 @@ PyTuple_New(Py_ssize_t size)
         Py_SIZE(op) = size;
         Py_SET_TYPE(op, &PyTuple_Type);
 #endif
+        _PyGC_Set_TypeTag((PyObject*)op);
         _Py_NewReference((PyObject *)op);
     }
     else
