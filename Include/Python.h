@@ -60,6 +60,13 @@
  */
 #include <assert.h>
 
+/* libgc doesn't appear to have a config.h for these defines, so assume
+ * GC_THREADS support is enabled.
+ */
+#define GC_THREADS 1
+/* Include gc.h for its intercepts of thread functions. */
+#include <gc/gc.h>
+
 #include "pyport.h"
 #include "pymacro.h"
 

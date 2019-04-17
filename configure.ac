@@ -3479,7 +3479,7 @@ AC_ARG_WITH(pymalloc,
 
 if test -z "$with_pymalloc"
 then
-    with_pymalloc="yes"
+    with_pymalloc="no"
 fi
 if test "$with_pymalloc" != "no"
 then
@@ -4395,6 +4395,23 @@ then LIBC=$withval
 else AC_MSG_ERROR([proper usage is --with-libc=STRING])
 fi],
 [AC_MSG_RESULT(default LIBC="$LIBC")])
+
+# check for --with-libgc=...
+AC_SUBST(LIBGC)
+LIBGC="-lgc"
+AC_MSG_CHECKING(for --with-libgc=STRING)
+AC_ARG_WITH(libgc,
+            AS_HELP_STRING([--with-libgc=STRING], [BDW GC library]),
+[
+if test "$withval" = no
+then LIBGC=
+     AC_MSG_RESULT(force LIBGC empty)
+elif test "$withval" != yes
+then LIBGC=$withval
+     AC_MSG_RESULT(set LIBGC="$withval")
+else AC_MSG_ERROR([proper usage is --with-libgc=STRING])
+fi],
+[AC_MSG_RESULT(default LIBGC="$LIBGC")])
 
 # **************************************
 # * Check for gcc x64 inline assembler *

@@ -281,13 +281,13 @@ hashtable_new(size_t key_size, size_t data_size,
 static void*
 raw_malloc(size_t size)
 {
-    return allocators.raw.malloc(allocators.raw.ctx, size);
+    return malloc(size);
 }
 
 static void
 raw_free(void *ptr)
 {
-    allocators.raw.free(allocators.raw.ctx, ptr);
+    free(ptr);
 }
 
 

@@ -1,5 +1,6 @@
 #include "Python.h"
 #include "pycore_pymem.h"
+#include "gc/gc.h"
 
 #include <stdbool.h>
 
@@ -96,7 +97,7 @@ _PyMem_RawMalloc(void *ctx, size_t size)
        To solve these problems, allocate an extra byte. */
     if (size == 0)
         size = 1;
-    return malloc(size);
+    return GC_MALLOC(size);
 }
 
 static void *
@@ -110,7 +111,7 @@ _PyMem_RawCalloc(void *ctx, size_t nelem, size_t elsize)
         nelem = 1;
         elsize = 1;
     }
-    return calloc(nelem, elsize);
+    return GC_MALLOC(nelem * elsize);
 }
 
 static void *
@@ -118,13 +119,13 @@ _PyMem_RawRealloc(void *ctx, void *ptr, size_t size)
 {
     if (size == 0)
         size = 1;
-    return realloc(ptr, size);
+    return GC_REALLOC(ptr, size);
 }
 
 static void
 _PyMem_RawFree(void *ctx, void *ptr)
 {
-    free(ptr);
+    /* GC_FREE(ptr); */
 }
 
 
