@@ -636,6 +636,7 @@ LIBPYTHON
 EXT_SUFFIX
 ALT_SOABI
 SOABI
+LIBGC
 LIBC
 LIBM
 HAVE_GETHOSTBYNAME
@@ -783,6 +784,7 @@ infodir
 docdir
 oldincludedir
 includedir
+runstatedir
 localstatedir
 sharedstatedir
 sysconfdir
@@ -839,6 +841,7 @@ with_valgrind
 with_dtrace
 with_libm
 with_libc
+with_libgc
 enable_big_digits
 with_platlibdir
 with_computed_gotos
@@ -898,6 +901,7 @@ datadir='${datarootdir}'
 sysconfdir='${prefix}/etc'
 sharedstatedir='${prefix}/com'
 localstatedir='${prefix}/var'
+runstatedir='${localstatedir}/run'
 includedir='${prefix}/include'
 oldincludedir='/usr/include'
 docdir='${datarootdir}/doc/${PACKAGE_TARNAME}'
@@ -1150,6 +1154,15 @@ do
   | -silent | --silent | --silen | --sile | --sil)
     silent=yes ;;
 
+  -runstatedir | --runstatedir | --runstatedi | --runstated \
+  | --runstate | --runstat | --runsta | --runst | --runs \
+  | --run | --ru | --r)
+    ac_prev=runstatedir ;;
+  -runstatedir=* | --runstatedir=* | --runstatedi=* | --runstated=* \
+  | --runstate=* | --runstat=* | --runsta=* | --runst=* | --runs=* \
+  | --run=* | --ru=* | --r=*)
+    runstatedir=$ac_optarg ;;
+
   -sbindir | --sbindir | --sbindi | --sbind | --sbin | --sbi | --sb)
     ac_prev=sbindir ;;
   -sbindir=* | --sbindir=* | --sbindi=* | --sbind=* | --sbin=* \
@@ -1287,7 +1300,7 @@ fi
 for ac_var in	exec_prefix prefix bindir sbindir libexecdir datarootdir \
 		datadir sysconfdir sharedstatedir localstatedir includedir \
 		oldincludedir docdir infodir htmldir dvidir pdfdir psdir \
-		libdir localedir mandir
+		libdir localedir mandir runstatedir
 do
   eval ac_val=\$$ac_var
   # Remove trailing slashes.
@@ -1440,6 +1453,7 @@ Fine tuning of the installation directories:
   --sysconfdir=DIR        read-only single-machine data [PREFIX/etc]
   --sharedstatedir=DIR    modifiable architecture-independent data [PREFIX/com]
   --localstatedir=DIR     modifiable single-machine data [PREFIX/var]
+  --runstatedir=DIR       modifiable per-process data [LOCALSTATEDIR/run]
   --libdir=DIR            object code libraries [EPREFIX/lib]
   --includedir=DIR        C header files [PREFIX/include]
   --oldincludedir=DIR     C header files for non-gcc [/usr/include]
@@ -1561,6 +1575,7 @@ Optional Packages:
                           system-dependent)
   --with-libc=STRING      override libc C library to STRING (default is
                           system-dependent)
+  --with-libgc=STRING     BDW GC library
   --with-platlibdir=DIRNAME
                           Python library directory name (default is "lib")
   --with-computed-gotos   enable computed gotos in evaluation loop (enabled by
@@ -11371,7 +11386,7 @@ fi
 
 if test -z "$with_pymalloc"
 then
-    with_pymalloc="yes"
+    with_pymalloc="no"
 fi
 if test "$with_pymalloc" != "no"
 then
@@ -14309,6 +14324,31 @@ fi
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: default LIBC=\"$LIBC\"" >&5
 $as_echo "default LIBC=\"$LIBC\"" >&6; }
+fi
+
+
+# check for --with-libgc=...
+
+LIBGC="-lgc"
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for --with-libgc=STRING" >&5
+$as_echo_n "checking for --with-libgc=STRING... " >&6; }
+
+# Check whether --with-libgc was given.
+if test "${with_libgc+set}" = set; then :
+  withval=$with_libgc;
+if test "$withval" = no
+then LIBGC=
+     { $as_echo "$as_me:${as_lineno-$LINENO}: result: force LIBGC empty" >&5
+$as_echo "force LIBGC empty" >&6; }
+elif test "$withval" != yes
+then LIBGC=$withval
+     { $as_echo "$as_me:${as_lineno-$LINENO}: result: set LIBGC=\"$withval\"" >&5
+$as_echo "set LIBGC=\"$withval\"" >&6; }
+else as_fn_error $? "proper usage is --with-libgc=STRING" "$LINENO" 5
+fi
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: default LIBGC=\"$LIBGC\"" >&5
+$as_echo "default LIBGC=\"$LIBGC\"" >&6; }
 fi
 
 
