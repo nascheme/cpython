@@ -387,6 +387,7 @@ OBJECT_OBJS=	\
 		Objects/bytesobject.o \
 		Objects/call.o \
 		Objects/capsule.o \
+		Objects/proxyobject.o \
 		Objects/cellobject.o \
 		Objects/classobject.o \
 		Objects/codeobject.o \
@@ -400,6 +401,8 @@ OBJECT_OBJS=	\
 		Objects/floatobject.o \
 		Objects/frameobject.o \
 		Objects/funcobject.o \
+		Objects/gcobject.o \
+		Objects/gcproxyobject.o \
 		Objects/interpreteridobject.o \
 		Objects/iterobject.o \
 		Objects/listobject.o \
@@ -984,6 +987,7 @@ PYTHON_HEADERS= \
 		$(srcdir)/Include/compile.h \
 		$(srcdir)/Include/complexobject.h \
 		$(srcdir)/Include/context.h \
+		$(srcdir)/Include/cpython/gcobject.h \
 		$(srcdir)/Include/descrobject.h \
 		$(srcdir)/Include/dictobject.h \
 		$(srcdir)/Include/dynamic_annotations.h \
@@ -995,6 +999,7 @@ PYTHON_HEADERS= \
 		$(srcdir)/Include/floatobject.h \
 		$(srcdir)/Include/frameobject.h \
 		$(srcdir)/Include/funcobject.h \
+		$(srcdir)/Include/gcobject.h \
 		$(srcdir)/Include/genobject.h \
 		$(srcdir)/Include/import.h \
 		$(srcdir)/Include/interpreteridobject.h \

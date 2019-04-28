@@ -1,0 +1,53 @@
+
+Initial draft of a design to migrate CPython's API from refcounting to
+libgc (BDW libgc, aka Boehm GC) or something more advanced.
+
+Using refcounting in Python has a number of consequences: prompt cleanup and
+predictable finalisation (both in the absense of reference cycles only);
+storing refcount in every object (pointer-sized, since that's the
+theoretical maximum number of references); the need for a lock protecting
+access to the refcount (which is all the time); the need for a separate
+reference cycle detector (the 'gc' module).
+
+Switching to mark-sweep (the simplest GC to switch to) means we can,
+theoretically, get rid of the GIL, the separate cycle detector (it'd be part
+of the GC) and the refcount word in each object.
+
+A few basic notes on non-refcount GC:
+
+Instead of an explicit refcount to indicate that something is still in use,
+mark-sweep relies on discovering references by scanning memory. This means
+the GC library needs to know about all memory that could potentially hold
+pointers to GC-tracked objects. BDW GC is conservative mark-sweep, meaning
+that it does not require complete knowledge of all pointers to an object,
+and it does not need to know which bits of memory are *actually* pointers.
+Mis-identifying a word in memory (say, the contents of a string) as a
+pointer keeps an unused object alive, but does not otherwise affect the
+program. Failing to find all pointers to a live object is also fine, as long
+as at least one (non-cyclic) pointer to an object is found. BDW GC does have
+the ability to annotate memory as not containing pointers (GC_MALLOC_ATOMIC,
+GC_MALLOC_EXPLICITLY_TYPED), which can be used to mitigate mis-identifying
+pointers. Because mark-sweep doesn't move objects, it has the same
+fragmentation problems as plain refcounting.
+
+(More advanced algorithms (like mark-compact or semispace-copying
+collectors) do much better with fragmentation, but require that objects be
+moved, which means updating all pointers. There are some mitigation
+techniques available -- like leaving a forwarding pointer in the old
+location -- but as long as there are any references to the old address, the
+object can't be deallocated.)
+
+There is a distinction (at least with BDW GC) between allocations that are
+tracked, and allocated memory that's scanned for pointers. Tracking
+allocations (or 'objects', albeit not necessarily *Python* objects) means
+keeping track of references to the allocations, and deallocating them when
+there are none. The libgc library will track all allocations made through
+any of its allocation functions (GC_MALLOC and such). If memory does not
+need to be tracked, it's not strictly speaking necessary to allocate it
+through libgc. All memory that can contain pointers to tracked memory,
+however, should be scanned. If there's memory containing pointers that's not
+scanned, those pointers will not keep objects from being deallocated. With
+libgc, by default only tracked allocations are scanned, but it is possible
+to add other memory regions to be scanned (so-called 'roots').
+
+
