@@ -33,16 +33,18 @@ static inline void _PyObject_GC_TRACK_impl(const char *filename, int lineno,
                           filename, lineno, "_PyObject_GC_TRACK");
 
     PyGC_Head *gc = _Py_AS_GC(op);
+#if 0
     _PyObject_ASSERT_FROM(op,
                           (gc->_gc_prev & _PyGC_PREV_MASK_COLLECTING) == 0,
                           "object is in generation which is garbage collected",
                           filename, lineno, "_PyObject_GC_TRACK");
+#endif
 
     PyGC_Head *last = (PyGC_Head*)(_PyRuntime.gc.generation0->_gc_prev);
     _PyGCHead_SET_NEXT(last, gc);
     _PyGCHead_SET_PREV(gc, last);
     _PyGCHead_SET_NEXT(gc, _PyRuntime.gc.generation0);
-    _PyRuntime.gc.generation0->_gc_prev = (uintptr_t)gc;
+    _PyRuntime.gc.generation0->_gc_prev = gc;
 }
 
 #define _PyObject_GC_TRACK(op) \
@@ -70,7 +72,7 @@ static inline void _PyObject_GC_UNTRACK_impl(const char *filename, int lineno,
     _PyGCHead_SET_NEXT(prev, next);
     _PyGCHead_SET_PREV(next, prev);
     gc->_gc_next = 0;
-    gc->_gc_prev &= _PyGC_PREV_MASK_FINALIZED;
+    gc->_gc_prev = 0;
 }
 
 #define _PyObject_GC_UNTRACK(op) \

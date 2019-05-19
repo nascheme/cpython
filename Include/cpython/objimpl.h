@@ -43,14 +43,18 @@ PyAPI_FUNC(Py_ssize_t) _PyGC_CollectIfEnabled(void);
      && (Py_TYPE(o)->tp_is_gc == NULL || Py_TYPE(o)->tp_is_gc(o)))
 
 /* GC information is stored BEFORE the object structure. */
-typedef struct {
+typedef struct _gc_head {
     // Pointer to next object in the list.
     // 0 means the object is not tracked
-    uintptr_t _gc_next;
+    struct _gc_head *_gc_next;
 
     // Pointer to previous object in the list.
     // Lowest two bits are used for flags documented later.
-    uintptr_t _gc_prev;
+    struct _gc_head *_gc_prev;
+    Py_ssize_t _gc_refs;
+    unsigned char gc_color;
+    unsigned char gc_flags;
+    unsigned char gc_gen;
 } PyGC_Head;
 
 #define _Py_AS_GC(o) ((PyGC_Head *)(o)-1)
@@ -65,37 +69,37 @@ typedef struct {
         (!PyTuple_CheckExact(obj) || _PyObject_GC_IS_TRACKED(obj)))
 
 
-/* Bit flags for _gc_prev */
-/* Bit 0 is set when tp_finalize is called */
-#define _PyGC_PREV_MASK_FINALIZED  (1)
-/* Bit 1 is set when the object is in generation which is GCed currently. */
-#define _PyGC_PREV_MASK_COLLECTING (2)
-/* The (N-2) most significant bits contain the real address. */
-#define _PyGC_PREV_SHIFT           (2)
-#define _PyGC_PREV_MASK            (((uintptr_t) -1) << _PyGC_PREV_SHIFT)
-
 // Lowest bit of _gc_next is used for flags only in GC.
 // But it is always 0 for normal code.
 #define _PyGCHead_NEXT(g)        ((PyGC_Head*)(g)->_gc_next)
-#define _PyGCHead_SET_NEXT(g, p) ((g)->_gc_next = (uintptr_t)(p))
+#define _PyGCHead_SET_NEXT(g, p) ((g)->_gc_next = (p))
 
-// Lowest two bits of _gc_prev is used for _PyGC_PREV_MASK_* flags.
-#define _PyGCHead_PREV(g) ((PyGC_Head*)((g)->_gc_prev & _PyGC_PREV_MASK))
-#define _PyGCHead_SET_PREV(g, p) do { \
-    assert(((uintptr_t)p & ~_PyGC_PREV_MASK) == 0); \
-    (g)->_gc_prev = ((g)->_gc_prev & ~_PyGC_PREV_MASK) \
-        | ((uintptr_t)(p)); \
-    } while (0)
+#define _PyGCHead_PREV(g)        ((PyGC_Head*)(g)->_gc_prev)
+#define _PyGCHead_SET_PREV(g, p) ((g)->_gc_prev = (PyGC_Head*)(p))
 
-#define _PyGCHead_FINALIZED(g) \
-    (((g)->_gc_prev & _PyGC_PREV_MASK_FINALIZED) != 0)
-#define _PyGCHead_SET_FINALIZED(g) \
-    ((g)->_gc_prev |= _PyGC_PREV_MASK_FINALIZED)
+
+#define GC_FLAG_HEAP (1<<0)
+#define GC_FLAG_FINIALIZER_REACHABLE (1<<1)
+/* reachable from legacy finalizer, cannot be collected */
+#define GC_FLAG_LEGACY_FINIALIZER_REACHABLE (1<<2)
+/* we think this is garbage, could be revived by finalizers */
+#define GC_FLAG_GARBAGE (1<<3)
+/* set when the object is in generation which is GCed currently. */
+// No objects in interpreter have this flag after GC ends.
+#define GC_FLAG_COLLECTING (1<<4)
+/* set when tp_finalize is called */
+#define GC_FLAG_FINALIZED  (1<<5)
+#define GC_FLAG_UNREACHABLE (1<<6)
+#define GC_FLAG_REACHABLE (1<<7)
+
+#define _PyGC_SET_FLAG(g, v) ((g)->gc_flags |= v)
+#define _PyGC_CLEAR_FLAG(g, v) ((g)->gc_flags &= ~(v))
+#define _PyGC_HAVE_FLAG(g, v) ((g)->gc_flags & v)
 
 #define _PyGC_FINALIZED(o) \
-    _PyGCHead_FINALIZED(_Py_AS_GC(o))
+    _PyGC_HAVE_FLAG(_Py_AS_GC(o), GC_FLAG_FINALIZED)
 #define _PyGC_SET_FINALIZED(o) \
-    _PyGCHead_SET_FINALIZED(_Py_AS_GC(o))
+    _PyGC_SET_FLAG(_Py_AS_GC(o), GC_FLAG_FINALIZED)
 
 
 PyAPI_FUNC(PyObject *) _PyObject_GC_Malloc(size_t size);

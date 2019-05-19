@@ -31,6 +31,7 @@
 #include "frameobject.h"        /* for PyFrame_ClearFreeList */
 #include "pydtrace.h"
 #include "pytime.h"             /* for _PyTime_GetMonotonicClock() */
+#include <stdbool.h>
 
 /*[clinic input]
 module gc
@@ -42,73 +43,84 @@ module gc
 #define GC_NEXT _PyGCHead_NEXT
 #define GC_PREV _PyGCHead_PREV
 
-// update_refs() set this bit for all objects in current generation.
-// subtract_refs() and move_unreachable() uses this to distinguish
-// visited object is in GCing or not.
-//
-// move_unreachable() removes this flag from reachable objects.
-// Only unreachable objects have this flag.
-//
-// No objects in interpreter have this flag after GC ends.
-#define PREV_MASK_COLLECTING   _PyGC_PREV_MASK_COLLECTING
-
-// Lowest bit of _gc_next is used for UNREACHABLE flag.
-//
-// This flag represents the object is in unreachable list in move_unreachable()
-//
-// Although this flag is used only in move_unreachable(), move_unreachable()
-// doesn't clear this flag to skip unnecessary iteration.
-// move_legacy_finalizers() removes this flag instead.
-// Between them, unreachable list is not normal list and we can not use
-// most gc_list_* functions for it.
-#define NEXT_MASK_UNREACHABLE  (1)
-
 /* Get an object's GC head */
 #define AS_GC(o) ((PyGC_Head *)(o)-1)
 
 /* Get the object given the GC head */
 #define FROM_GC(g) ((PyObject *)(((PyGC_Head *)g)+1))
 
-static inline int
-gc_is_collecting(PyGC_Head *g)
+/* Queue to avoid stack overflow when marking reachable objects */
+#define MARK_QUEUE_SIZE 100
+
+struct mark_state {
+    PyGC_Head *reachable;
+    int generation;
+    //PyObject *queue[MARK_QUEUE_SIZE];
+    int queue_depth;
+    int aborted; /* true if queue depth would have been exceeded, restart */
+    bool finalizers; /* we are marking finalizers */
+    PyObject *ref; /* for verbose debugging */
+};
+
+typedef struct _gc_runtime_state gc_state_t;
+
+#define COLOR_BLACK 'B' // alive
+#define COLOR_GREY  'G' // alive but needs traverse
+#define COLOR_WHITE 'W' // dead (or potentially dead before traversal)
+
+#define GET_COLOR(g) ((g)->gc_color)
+#define SET_COLOR(g, v) ((g)->gc_color = v)
+
+#define IS_BLACK(g) (GET_COLOR(g) == COLOR_BLACK)
+#define IS_GREY(g) (GET_COLOR(g) == COLOR_GREY)
+#define IS_WHITE(g) (GET_COLOR(g) == COLOR_WHITE)
+
+#define SET_GEN(g, v) ((g)->gc_gen = v)
+#define GET_GEN(g) ((g)->gc_gen)
+
+bool debug_verbose;
+
+static void
+dump_obj(PyObject *op)
 {
-    return (g->_gc_prev & PREV_MASK_COLLECTING) != 0;
+    PyObject *repr = NULL, *bytes = NULL;
+    repr = PyObject_Repr(op);
+    if (!repr || !(bytes = PyUnicode_EncodeFSDefault(repr)))
+        PyErr_WriteUnraisable(op);
+    else {
+        PySys_WriteStderr("%s\n", PyBytes_AS_STRING(bytes));
+    }
+    Py_XDECREF(repr);
+    Py_XDECREF(bytes);
 }
 
-static inline void
-gc_clear_collecting(PyGC_Head *g)
+static inline int
+gc_is_finalized(PyGC_Head *g)
 {
-    g->_gc_prev &= ~PREV_MASK_COLLECTING;
+    return _PyGC_HAVE_FLAG(g, GC_FLAG_FINALIZED);
 }
 
 static inline Py_ssize_t
 gc_get_refs(PyGC_Head *g)
 {
-    return (Py_ssize_t)(g->_gc_prev >> _PyGC_PREV_SHIFT);
+    return g->_gc_refs;
 }
 
 static inline void
 gc_set_refs(PyGC_Head *g, Py_ssize_t refs)
 {
-    g->_gc_prev = (g->_gc_prev & ~_PyGC_PREV_MASK)
-        | ((uintptr_t)(refs) << _PyGC_PREV_SHIFT);
-}
-
-static inline void
-gc_reset_refs(PyGC_Head *g, Py_ssize_t refs)
-{
-    g->_gc_prev = (g->_gc_prev & _PyGC_PREV_MASK_FINALIZED)
-        | PREV_MASK_COLLECTING
-        | ((uintptr_t)(refs) << _PyGC_PREV_SHIFT);
+    g->_gc_refs = refs;
 }
 
 static inline void
 gc_decref(PyGC_Head *g)
 {
+    if (g->_gc_refs == 0)
+        return;
     _PyObject_ASSERT_WITH_MSG(FROM_GC(g),
                               gc_get_refs(g) > 0,
                               "refcount is too small");
-    g->_gc_prev -= 1 << _PyGC_PREV_SHIFT;
+    g->_gc_refs -= 1;
 }
 
 /* Python string to use if unhandled exception occurs */
@@ -119,31 +131,33 @@ static PyObject *gc_str = NULL;
 #define DEBUG_COLLECTABLE       (1<<1) /* print collectable objects */
 #define DEBUG_UNCOLLECTABLE     (1<<2) /* print uncollectable objects */
 #define DEBUG_SAVEALL           (1<<5) /* save all garbage in gc.garbage */
+#define DEBUG_VERBOSE           (1<<6) /* verbose debuggin output */
 #define DEBUG_LEAK              DEBUG_COLLECTABLE | \
                 DEBUG_UNCOLLECTABLE | \
                 DEBUG_SAVEALL
 
 #define GEN_HEAD(state, n) (&(state)->generations[n].head)
+#define HEAD(state) (&(state)->generations[0].head)
 
 void
-_PyGC_Initialize(struct _gc_runtime_state *state)
+_PyGC_Initialize(gc_state_t *state)
 {
     state->enabled = 1; /* automatic collection enabled? */
 
 #define _GEN_HEAD(n) GEN_HEAD(state, n)
     struct gc_generation generations[NUM_GENERATIONS] = {
         /* PyGC_Head,                                    threshold,    count */
-        {{(uintptr_t)_GEN_HEAD(0), (uintptr_t)_GEN_HEAD(0)},   700,        0},
-        {{(uintptr_t)_GEN_HEAD(1), (uintptr_t)_GEN_HEAD(1)},   10,         0},
-        {{(uintptr_t)_GEN_HEAD(2), (uintptr_t)_GEN_HEAD(2)},   10,         0},
+        {{_GEN_HEAD(0), _GEN_HEAD(0)},   700,        0},
+        {{_GEN_HEAD(1), _GEN_HEAD(1)},   10,         0},
+        {{_GEN_HEAD(2), _GEN_HEAD(2)},   10,         0},
     };
     for (int i = 0; i < NUM_GENERATIONS; i++) {
         state->generations[i] = generations[i];
     };
     state->generation0 = GEN_HEAD(state, 0);
     struct gc_generation permanent_generation = {
-          {(uintptr_t)&state->permanent_generation.head,
-           (uintptr_t)&state->permanent_generation.head}, 0, 0
+          {&state->permanent_generation.head,
+           &state->permanent_generation.head}, 0, 0
     };
     state->permanent_generation = permanent_generation;
 }
@@ -152,51 +166,25 @@ _PyGC_Initialize(struct _gc_runtime_state *state)
 _gc_prev values
 ---------------
 
-Between collections, _gc_prev is used for doubly linked list.
-
-Lowest two bits of _gc_prev are used for flags.
-PREV_MASK_COLLECTING is used only while collecting and cleared before GC ends
-or _PyObject_GC_UNTRACK() is called.
-
-During a collection, _gc_prev is temporary used for gc_refs, and the gc list
-is singly linked until _gc_prev is restored.
+    used for doubly linked list
 
 gc_refs
+-------
     At the start of a collection, update_refs() copies the true refcount
     to gc_refs, for each object in the generation being collected.
     subtract_refs() then adjusts gc_refs so that it equals the number of
     times an object is referenced directly from outside the generation
     being collected.
 
-PREV_MASK_COLLECTING
-    Objects in generation being collected are marked PREV_MASK_COLLECTING in
-    update_refs().
-
-
 _gc_next values
 ---------------
 
-_gc_next takes these values:
+    0
+        The object is not tracked
 
-0
-    The object is not tracked
+    != 0
+        Pointer to the next object in the GC list.
 
-!= 0
-    Pointer to the next object in the GC list.
-    Additionally, lowest bit is used temporary for
-    NEXT_MASK_UNREACHABLE flag described below.
-
-NEXT_MASK_UNREACHABLE
-    move_unreachable() then moves objects not reachable (whether directly or
-    indirectly) from outside the generation into an "unreachable" set and
-    set this flag.
-
-    Objects that are found to be reachable have gc_refs set to 1.
-    When this flag is set for the reachable object, the object must be in
-    "unreachable" set.
-    The flag is unset and the object is moved back to "reachable" set.
-
-    move_legacy_finalizers() will remove this flag from "unreachable" set.
 */
 
 /*** list functions ***/
@@ -206,16 +194,17 @@ gc_list_init(PyGC_Head *list)
 {
     // List header must not have flags.
     // We can assign pointer by simple cast.
-    list->_gc_prev = (uintptr_t)list;
-    list->_gc_next = (uintptr_t)list;
+    list->_gc_prev = list;
+    list->_gc_next = list;
 }
 
 static inline int
 gc_list_is_empty(PyGC_Head *list)
 {
-    return (list->_gc_next == (uintptr_t)list);
+    return (list->_gc_next == list);
 }
 
+#if 0
 /* Append `node` to `list`. */
 static inline void
 gc_list_append(PyGC_Head *node, PyGC_Head *list)
@@ -228,8 +217,9 @@ gc_list_append(PyGC_Head *node, PyGC_Head *list)
 
     // node <-> list
     _PyGCHead_SET_NEXT(node, list);
-    list->_gc_prev = (uintptr_t)node;
+    list->_gc_prev = node;
 }
+#endif
 
 /* Remove `node` from the gc list it's currently in. */
 static inline void
@@ -244,6 +234,7 @@ gc_list_remove(PyGC_Head *node)
     node->_gc_next = 0; /* object is not currently tracked */
 }
 
+#if 0
 /* Move `node` from the gc list it's currently in (which is not explicitly
  * named here) to the end of `list`.  This is semantically the same as
  * gc_list_remove(node) followed by gc_list_append(node, list).
@@ -262,9 +253,10 @@ gc_list_move(PyGC_Head *node, PyGC_Head *list)
     PyGC_Head *to_prev = (PyGC_Head*)list->_gc_prev;
     _PyGCHead_SET_PREV(node, to_prev);
     _PyGCHead_SET_NEXT(to_prev, node);
-    list->_gc_prev = (uintptr_t)node;
+    list->_gc_prev = node;
     _PyGCHead_SET_NEXT(node, list);
 }
+#endif
 
 /* append list `from` onto list `to`; `from` becomes an empty list */
 static void
@@ -302,10 +294,13 @@ gc_list_size(PyGC_Head *list)
  * Return 0 if all OK, < 0 if error (out of memory for list).
  */
 static int
-append_objects(PyObject *py_list, PyGC_Head *gc_list)
+append_objects(PyObject *py_list, PyGC_Head *gc_list, int generation)
 {
     PyGC_Head *gc;
     for (gc = GC_NEXT(gc_list); gc != gc_list; gc = GC_NEXT(gc)) {
+        if (generation != -1 && GET_GEN(gc) != generation) {
+            continue;
+        }
         PyObject *op = FROM_GC(gc);
         if (op != py_list) {
             if (PyList_Append(py_list, op)) {
@@ -316,39 +311,26 @@ append_objects(PyObject *py_list, PyGC_Head *gc_list)
     return 0;
 }
 
-#if GC_DEBUG
-// validate_list checks list consistency.  And it works as document
-// describing when expected_mask is set / unset.
-static void
-validate_list(PyGC_Head *head, uintptr_t expected_mask)
-{
-    PyGC_Head *prev = head;
-    PyGC_Head *gc = GC_NEXT(head);
-    while (gc != head) {
-        assert(GC_NEXT(gc) != NULL);
-        assert(GC_PREV(gc) == prev);
-        assert((gc->_gc_prev & PREV_MASK_COLLECTING) == expected_mask);
-        prev = gc;
-        gc = GC_NEXT(gc);
-    }
-    assert(prev == GC_PREV(head));
-}
-#else
-#define validate_list(x,y) do{}while(0)
-#endif
-
 /*** end of list stuff ***/
 
 
-/* Set all gc_refs = ob_refcnt.  After this, gc_refs is > 0 and
- * PREV_MASK_COLLECTING bit is set for all objects in containers.
- */
+/* For collected generation, set all gc_refs = ob_refcnt.  Set color to
+ * white. */
 static void
-update_refs(PyGC_Head *containers)
+update_refs(gc_state_t *state, int generation)
 {
-    PyGC_Head *gc = GC_NEXT(containers);
-    for (; gc != containers; gc = GC_NEXT(gc)) {
-        gc_reset_refs(gc, Py_REFCNT(FROM_GC(gc)));
+    PyGC_Head *head = HEAD(state);
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        if (GET_GEN(gc) > generation) {
+            // FIXME: should not be unneeded?
+            if (!IS_BLACK(gc)) {
+                SET_COLOR(gc, COLOR_BLACK);
+            }
+            continue;
+        }
+        _PyGC_CLEAR_FLAG(gc, GC_FLAG_FINIALIZER_REACHABLE);
+        SET_COLOR(gc, COLOR_WHITE);
+        gc_set_refs(gc, Py_REFCNT(FROM_GC(gc)));
         /* Python's cyclic gc should never see an incoming refcount
          * of 0:  if something decref'ed to 0, it should have been
          * deallocated immediately at that time.
@@ -378,11 +360,14 @@ visit_decref(PyObject *op, void *data)
     assert(op != NULL);
     if (PyObject_IS_GC(op)) {
         PyGC_Head *gc = AS_GC(op);
-        /* We're only interested in gc_refs for objects in the
-         * generation being collected, which can be recognized
-         * because only they have positive gc_refs.
-         */
-        if (gc_is_collecting(gc)) {
+        // We're only interested in gc_refs for white objects
+        if (gc->_gc_next != 0 && IS_WHITE(gc)) {
+            gc_state_t *state = (gc_state_t *)data;
+            if (state && state->debug & DEBUG_VERBOSE) {
+                long n = gc_get_refs(gc);
+                fprintf(stderr, "visit_decref %p %ld->%ld ", FROM_GC(gc), n, n-1);
+                dump_obj(FROM_GC(gc));
+            }
             gc_decref(gc);
         }
     }
@@ -395,158 +380,176 @@ visit_decref(PyObject *op, void *data)
  * reachable from outside containers, and so can't be collected.
  */
 static void
-subtract_refs(PyGC_Head *containers)
+subtract_refs(gc_state_t *state, int generation)
 {
     traverseproc traverse;
-    PyGC_Head *gc = GC_NEXT(containers);
-    for (; gc != containers; gc = GC_NEXT(gc)) {
+    PyGC_Head *gc = GC_NEXT(HEAD(state));
+    for (; gc != HEAD(state); gc = GC_NEXT(gc)) {
+        if (!IS_WHITE(gc)) {
+            continue;
+        }
+        if (state && state->debug & DEBUG_VERBOSE) {
+            fprintf(stderr, "subtract gen=%d ", GET_GEN(gc));
+            dump_obj(FROM_GC(gc));
+        }
         traverse = Py_TYPE(FROM_GC(gc))->tp_traverse;
         (void) traverse(FROM_GC(gc),
                        (visitproc)visit_decref,
-                       NULL);
+                       (void*)(state));
     }
 }
 
-/* A traversal callback for move_unreachable. */
+/* A traversal callback for mark_reachable. */
 static int
-visit_reachable(PyObject *op, PyGC_Head *reachable)
+visit_reachable(PyObject *op, struct mark_state *state)
 {
+    PyGC_Head *gc = AS_GC(op);
+
     if (!PyObject_IS_GC(op)) {
         return 0;
     }
 
-    PyGC_Head *gc = AS_GC(op);
-    const Py_ssize_t gc_refs = gc_get_refs(gc);
-
-    // Ignore untracked objects and objects in other generation.
-    if (gc->_gc_next == 0 || !gc_is_collecting(gc)) {
+    // Ignore untracked objects
+    if (gc->_gc_next == 0) {
         return 0;
     }
 
-    if (gc->_gc_next & NEXT_MASK_UNREACHABLE) {
-        /* This had gc_refs = 0 when move_unreachable got
-         * to it, but turns out it's reachable after all.
-         * Move it back to move_unreachable's 'young' list,
-         * and move_unreachable will eventually get to it
-         * again.
-         */
-        // Manually unlink gc from unreachable list because
-        PyGC_Head *prev = GC_PREV(gc);
-        PyGC_Head *next = (PyGC_Head*)(gc->_gc_next & ~NEXT_MASK_UNREACHABLE);
-        _PyObject_ASSERT(FROM_GC(prev),
-                         prev->_gc_next & NEXT_MASK_UNREACHABLE);
-        _PyObject_ASSERT(FROM_GC(next),
-                         next->_gc_next & NEXT_MASK_UNREACHABLE);
-        prev->_gc_next = gc->_gc_next;  // copy NEXT_MASK_UNREACHABLE
-        _PyGCHead_SET_PREV(next, prev);
+    assert(_PyGC_HAVE_FLAG(gc, GC_FLAG_HEAP));
 
-        gc_list_append(gc, reachable);
-        gc_set_refs(gc, 1);
+    switch GET_COLOR(gc) {
+        case COLOR_WHITE:
+            // We thought this object was dead but it turns out to be alive.
+            // Mark as grey because we have to traverse it yet.
+            if (debug_verbose) {
+                fprintf(stderr, "became reachable %p->%p\n", state->ref,
+                        FROM_GC(gc));
+            }
+            SET_COLOR(gc, COLOR_GREY);
+            gc_set_refs(gc, 1);
+            /* no break, continue to grey case */
+            __attribute__ ((fallthrough));
+        case COLOR_GREY:
+            // Try to traverse all objects reachable from this one
+            if (state->queue_depth >= MARK_QUEUE_SIZE) {
+                /* we can't recurse further, leave it grey, next loop will
+                 * get it */
+                state->aborted = 1;
+            }
+            else {
+                /* mark it black as it is proven reachable and we don't have
+                 * to look at it anymore.  Note that every loop in
+                 * mark_reachable() must at least turn some GREY to BLACK in
+                 * order for us to make progress. */
+                SET_COLOR(gc, COLOR_BLACK);
+                if (state->finalizers) {
+                    _PyGC_SET_FLAG(gc, GC_FLAG_FINIALIZER_REACHABLE);
+                }
+                gc_set_refs(gc, 1);
+                state->queue_depth += 1;
+                state->ref = FROM_GC(gc);
+                traverseproc traverse = Py_TYPE(op)->tp_traverse;
+                traverse(op, (visitproc)visit_reachable, state);
+                state->queue_depth -= 1;
+                assert(state->queue_depth >= 0);
+            }
+            break;
+        case COLOR_BLACK:
+            // Object is alive, either not in collected generation or
+            // referenced from other alive objects
+            break;
+        default:
+            assert(0); /* invalid GET_COLOR() value */
     }
-    else if (gc_refs == 0) {
-        /* This is in move_unreachable's 'young' list, but
-         * the traversal hasn't yet gotten to it.  All
-         * we need to do is tell move_unreachable that it's
-         * reachable.
-         */
-        gc_set_refs(gc, 1);
-    }
-    /* Else there's nothing to do.
-     * If gc_refs > 0, it must be in move_unreachable's 'young'
-     * list, and move_unreachable will eventually get to it.
-     */
-    else {
-        _PyObject_ASSERT_WITH_MSG(op, gc_refs > 0, "refcount is too small");
-    }
+
     return 0;
 }
 
-/* Move the unreachable objects from young to unreachable.  After this,
- * all objects in young don't have PREV_MASK_COLLECTING flag and
- * unreachable have the flag.
- * All objects in young after this are directly or indirectly reachable
- * from outside the original young; and all objects in unreachable are
- * not.
- *
- * This function restores _gc_prev pointer.  young and unreachable are
- * doubly linked list after this function.
- * But _gc_next in unreachable list has NEXT_MASK_UNREACHABLE flag.
- * So we can not gc_list_* functions for unreachable until we remove the flag.
- */
 static void
-move_unreachable(PyGC_Head *young, PyGC_Head *unreachable)
+propagate_reachable(gc_state_t *state, int generation, bool finalizers)
 {
-    // previous elem in the young list, used for restore gc_prev.
-    PyGC_Head *prev = young;
-    PyGC_Head *gc = GC_NEXT(young);
+    PyGC_Head *head = HEAD(state);
+    struct mark_state mstate;
+    int done = 0;
+    int mark_loops = 0;
+    mstate.reachable = head;
+    mstate.finalizers = finalizers;
+    mstate.generation = generation;
 
-    /* Invariants:  all objects "to the left" of us in young are reachable
-     * (directly or indirectly) from outside the young list as it was at entry.
-     *
-     * All other objects from the original young "to the left" of us are in
-     * unreachable now, and have NEXT_MASK_UNREACHABLE.  All objects to the
-     * left of us in 'young' now have been scanned, and no objects here
-     * or to the right have been scanned yet.
-     */
+    while (!done) {
+        mark_loops += 1;
+        mstate.aborted = 0;
+        mstate.queue_depth = 0;
+        /* turn grey to black and all reachable from those also black */
+        for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+            if (IS_GREY(gc)) {
+                PyObject *op = FROM_GC(gc);
+                assert(_PyObject_GC_IS_TRACKED(op));
+                visit_reachable(op, &mstate);
+            }
+        }
+        /* if queue depth was exceeded, need another pass */
+        done = !mstate.aborted;
+    }
+#if 0
+    if (mark_loops > 0) {
+        fprintf(stderr, "mark loops needed %d\n", mark_loops);
+    }
+#endif
+    // done propagate, there must be no grey left at this point
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        PyObject *op = FROM_GC(gc);
+        assert(_PyObject_GC_IS_TRACKED(op));
+        if (!IS_WHITE(gc)) {
+            assert(IS_BLACK(gc));
+        }
+    }
+}
 
-    while (gc != young) {
+// Mark all objects that are alive as grey, potential garbage will remain white
+static void
+mark_reachable(gc_state_t *state, int generation)
+{
+    PyGC_Head *head = HEAD(state);
+    PyGC_Head *gc;
+    for (gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        if (!IS_WHITE(gc)) {
+            continue;
+        }
         if (gc_get_refs(gc)) {
-            /* gc is definitely reachable from outside the
-             * original 'young'.  Mark it as such, and traverse
-             * its pointers to find any other objects that may
-             * be directly reachable from it.  Note that the
-             * call to tp_traverse may append objects to young,
-             * so we have to wait until it returns to determine
-             * the next object to visit.
-             */
-            PyObject *op = FROM_GC(gc);
-            traverseproc traverse = Py_TYPE(op)->tp_traverse;
-            _PyObject_ASSERT_WITH_MSG(op, gc_get_refs(gc) > 0,
-                                      "refcount is too small");
-            // NOTE: visit_reachable may change gc->_gc_next when
-            // young->_gc_prev == gc.  Don't do gc = GC_NEXT(gc) before!
-            (void) traverse(op,
-                    (visitproc)visit_reachable,
-                    (void *)young);
-            // relink gc_prev to prev element.
-            _PyGCHead_SET_PREV(gc, prev);
-            // gc is not COLLECTING state after here.
-            gc_clear_collecting(gc);
-            prev = gc;
+            /* gc is definitely reachable from outside */
+            /* mark grey since we still need to mark all objects reachable from
+             * it */
+            SET_COLOR(gc, COLOR_GREY);
         }
         else {
-            /* This *may* be unreachable.  To make progress,
-             * assume it is.  gc isn't directly reachable from
-             * any object we've already traversed, but may be
-             * reachable from an object we haven't gotten to yet.
-             * visit_reachable will eventually move gc back into
-             * young if that's so, and we'll see it again.
-             */
-            // Move gc to unreachable.
-            // No need to gc->next->prev = prev because it is single linked.
-            prev->_gc_next = gc->_gc_next;
-
-            // We can't use gc_list_append() here because we use
-            // NEXT_MASK_UNREACHABLE here.
-            PyGC_Head *last = GC_PREV(unreachable);
-            // NOTE: Since all objects in unreachable set has
-            // NEXT_MASK_UNREACHABLE flag, we set it unconditionally.
-            // But this may set the flat to unreachable too.
-            // move_legacy_finalizers() should care about it.
-            last->_gc_next = (NEXT_MASK_UNREACHABLE | (uintptr_t)gc);
-            _PyGCHead_SET_PREV(gc, last);
-            gc->_gc_next = (NEXT_MASK_UNREACHABLE | (uintptr_t)unreachable);
-            unreachable->_gc_prev = (uintptr_t)gc;
+            /* assume it is garbage but we may find it is alive when traversing
+             * grey objects */
+            assert(IS_WHITE(gc));
         }
-        gc = (PyGC_Head*)prev->_gc_next;
     }
-    // young->_gc_prev must be last element remained in the list.
-    young->_gc_prev = (uintptr_t)prev;
+    propagate_reachable(state, generation, false);
+}
+
+// called after collection, put live objects into next generation
+static void
+increment_generation(gc_state_t *state, int generation)
+{
+    if (generation < NUM_GENERATIONS - 1) {
+        generation +=1;
+    }
+    //fprintf(stderr, "set gen %d\n", generation);
+    PyGC_Head *head = HEAD(state);
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc=GC_NEXT(gc)) {
+        if (IS_BLACK(gc) && GET_GEN(gc) < generation) {
+            SET_GEN(gc, generation);
+        }
+    }
 }
 
 static void
-untrack_tuples(PyGC_Head *head)
+untrack_tuples(gc_state_t *state)
 {
+    PyGC_Head *head = HEAD(state);
     PyGC_Head *next, *gc = GC_NEXT(head);
     while (gc != head) {
         PyObject *op = FROM_GC(gc);
@@ -560,8 +563,9 @@ untrack_tuples(PyGC_Head *head)
 
 /* Try to untrack all currently tracked dictionaries */
 static void
-untrack_dicts(PyGC_Head *head)
+untrack_dicts(gc_state_t *state)
 {
+    PyGC_Head *head = HEAD(state);
     PyGC_Head *next, *gc = GC_NEXT(head);
     while (gc != head) {
         PyObject *op = FROM_GC(gc);
@@ -582,32 +586,36 @@ has_legacy_finalizer(PyObject *op)
 
 /* Move the objects in unreachable with tp_del slots into `finalizers`.
  *
- * This function also removes NEXT_MASK_UNREACHABLE flag
- * from _gc_next in unreachable.
+ * This function also removes GC_FLAG_UNREACHABLE flag
  */
 static void
-move_legacy_finalizers(PyGC_Head *unreachable, PyGC_Head *finalizers)
+move_legacy_finalizers(gc_state_t *state, int generation)
 {
-    PyGC_Head *gc, *next;
-    unreachable->_gc_next &= ~NEXT_MASK_UNREACHABLE;
+    PyGC_Head *head = HEAD(state);
+    bool need_propogate = false;
 
     /* March over unreachable.  Move objects with finalizers into
      * `finalizers`.
      */
-    for (gc = GC_NEXT(unreachable); gc != unreachable; gc = next) {
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        if (IS_BLACK(gc)) {
+            continue;
+        }
+        assert(IS_WHITE(gc));
         PyObject *op = FROM_GC(gc);
 
-        _PyObject_ASSERT(op, gc->_gc_next & NEXT_MASK_UNREACHABLE);
-        gc->_gc_next &= ~NEXT_MASK_UNREACHABLE;
-        next = (PyGC_Head*)gc->_gc_next;
-
         if (has_legacy_finalizer(op)) {
-            gc_clear_collecting(gc);
-            gc_list_move(gc, finalizers);
+            //fprintf(stderr, "move legacy %p\n", op);
+            SET_COLOR(gc, COLOR_GREY);
+            need_propogate = true;
         }
+    }
+    if (need_propogate) {
+        propagate_reachable(state, generation, true);
     }
 }
 
+#if 0
 /* A traversal callback for move_legacy_finalizer_reachable. */
 static int
 visit_move(PyObject *op, PyGC_Head *tolist)
@@ -638,6 +646,7 @@ move_legacy_finalizer_reachable(PyGC_Head *finalizers)
                         (void *)finalizers);
     }
 }
+#endif
 
 /* Clear all weakrefs to unreachable objects, and if such a weakref has a
  * callback, invoke it if necessary.  Note that it's possible for such
@@ -651,16 +660,16 @@ move_legacy_finalizer_reachable(PyGC_Head *finalizers)
  * no object in `unreachable` is weakly referenced anymore.
  */
 static int
-handle_weakrefs(PyGC_Head *unreachable, PyGC_Head *old)
+handle_weakrefs(gc_state_t *state)
 {
-    PyGC_Head *gc;
     PyObject *op;               /* generally FROM_GC(gc) */
     PyWeakReference *wr;        /* generally a cast of op */
-    PyGC_Head wrcb_to_call;     /* weakrefs with callbacks to call */
-    PyGC_Head *next;
+    PyObject *wrcb_to_call;     /* weakrefs with callbacks to call */
     int num_freed = 0;
 
-    gc_list_init(&wrcb_to_call);
+    wrcb_to_call = PyList_New(0);
+    assert(wrcb_to_call != NULL);
+    _PyObject_GC_UNTRACK(wrcb_to_call);
 
     /* Clear all weakrefs to the objects in unreachable.  If such a weakref
      * also has a callback, move it into `wrcb_to_call` if the callback
@@ -670,11 +679,14 @@ handle_weakrefs(PyGC_Head *unreachable, PyGC_Head *old)
      * make another pass over wrcb_to_call, invoking callbacks, after this
      * pass completes.
      */
-    for (gc = GC_NEXT(unreachable); gc != unreachable; gc = next) {
+    PyGC_Head *head = HEAD(state);
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        if (!IS_WHITE(gc)) {
+            continue;
+        }
         PyWeakReference **wrlist;
 
         op = FROM_GC(gc);
-        next = GC_NEXT(gc);
 
         if (! PyType_SUPPORTS_WEAKREFS(Py_TYPE(op)))
             continue;
@@ -695,6 +707,7 @@ handle_weakrefs(PyGC_Head *unreachable, PyGC_Head *old)
              * changes *wrlist.
              */
             _PyObject_ASSERT((PyObject *)wr, wr->wr_object == op);
+            //fprintf(stderr, "clear weakref %p %p\n", wr, wr->wr_object);
             _PyWeakref_ClearRef(wr);
             _PyObject_ASSERT((PyObject *)wr, wr->wr_object == Py_None);
             if (wr->wr_callback == NULL) {
@@ -730,39 +743,31 @@ handle_weakrefs(PyGC_Head *unreachable, PyGC_Head *old)
              * to imagine how calling it later could create a problem for us.  wr
              * is moved to wrcb_to_call in this case.
              */
-            if (gc_is_collecting(AS_GC(wr))) {
-                continue;
+            wrasgc = AS_GC(wr);
+            if (IS_BLACK(wrasgc)) {
+                /* Move wr to wrcb_to_call, for the next pass. */
+                PyList_Append(wrcb_to_call, (PyObject *)wr);
             }
 
-            /* Create a new reference so that wr can't go away
-             * before we can process it again.
-             */
-            Py_INCREF(wr);
-
-            /* Move wr to wrcb_to_call, for the next pass. */
-            wrasgc = AS_GC(wr);
-            assert(wrasgc != next); /* wrasgc is reachable, but
-                                       next isn't, so they can't
-                                       be the same */
-            gc_list_move(wrasgc, &wrcb_to_call);
         }
     }
 
     /* Invoke the callbacks we decided to honor.  It's safe to invoke them
      * because they can't reference unreachable objects.
      */
-    while (! gc_list_is_empty(&wrcb_to_call)) {
+    Py_ssize_t len = PyList_GET_SIZE(wrcb_to_call);
+    for (Py_ssize_t i = 0; i < len; i++) {
         PyObject *temp;
         PyObject *callback;
 
-        gc = (PyGC_Head*)wrcb_to_call._gc_next;
-        op = FROM_GC(gc);
+        op = PyList_GET_ITEM(wrcb_to_call, i);
         _PyObject_ASSERT(op, PyWeakref_Check(op));
         wr = (PyWeakReference *)op;
         callback = wr->wr_callback;
         _PyObject_ASSERT(op, callback != NULL);
 
         /* copy-paste of weakrefobject.c's handle_callback() */
+        //PySys_WriteStderr("calling wr callback %p\n", callback);
         temp = PyObject_CallFunctionObjArgs(callback, wr, NULL);
         if (temp == NULL)
             PyErr_WriteUnraisable(callback);
@@ -780,14 +785,16 @@ handle_weakrefs(PyGC_Head *unreachable, PyGC_Head *old)
          * dict, leaving no other references to the weakref (excepting
          * ours).
          */
-        Py_DECREF(op);
-        if (wrcb_to_call._gc_next == (uintptr_t)gc) {
-            /* object is still alive -- move it */
-            gc_list_move(gc, old);
+        PyList_SetItem(wrcb_to_call, i, Py_None);
+#if 0 // FIXME
+        if (wrcb_to_call._gc_next == gc) {
+            /* object is still alive */
+            SET_COLOR(gc, COLOR_BLACK);
         }
         else {
             ++num_freed;
         }
+#endif
     }
 
     return num_freed;
@@ -808,18 +815,20 @@ debug_cycle(const char *msg, PyObject *op)
  * merged into the old list regardless.
  */
 static void
-handle_legacy_finalizers(struct _gc_runtime_state *state,
-                         PyGC_Head *finalizers, PyGC_Head *old)
+handle_legacy_finalizers(struct _gc_runtime_state *state)
 {
     assert(!PyErr_Occurred());
 
-    PyGC_Head *gc = GC_NEXT(finalizers);
+    PyGC_Head *gc = GC_NEXT(HEAD(state));
     if (state->garbage == NULL) {
         state->garbage = PyList_New(0);
         if (state->garbage == NULL)
             Py_FatalError("gc couldn't create gc.garbage list");
     }
-    for (; gc != finalizers; gc = GC_NEXT(gc)) {
+    for (; gc != HEAD(state); gc = GC_NEXT(gc)) {
+        if (!_PyGC_HAVE_FLAG(gc, GC_FLAG_FINIALIZER_REACHABLE)) {
+            continue;
+        }
         PyObject *op = FROM_GC(gc);
 
         if ((state->debug & DEBUG_SAVEALL) || has_legacy_finalizer(op)) {
@@ -829,19 +838,19 @@ handle_legacy_finalizers(struct _gc_runtime_state *state,
             }
         }
     }
-
-    gc_list_merge(finalizers, old);
 }
 
 /* Run first-time finalizers (if any) on all the objects in collectable.
  * Note that this may remove some (or even all) of the objects from the
  * list, due to refcounts falling to 0.
  */
-static void
-finalize_garbage(PyGC_Head *collectable)
+static bool
+finalize_garbage(gc_state_t *state)
 {
+    bool have_finalizers = false;
     destructor finalize;
-    PyGC_Head seen;
+    PyObject *garbage = PyList_New(0);
+    _PyObject_GC_UNTRACK(garbage);
 
     /* While we're going through the loop, `finalize(op)` may cause op, or
      * other objects, to be reclaimed via refcounts falling to zero.  So
@@ -851,53 +860,76 @@ finalize_garbage(PyGC_Head *collectable)
      * If objects vanish from the `collectable` and `seen` lists we don't
      * care.
      */
-    gc_list_init(&seen);
 
-    while (!gc_list_is_empty(collectable)) {
-        PyGC_Head *gc = GC_NEXT(collectable);
+    PyGC_Head *head = HEAD(state);
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        if (!IS_WHITE(gc)) {
+            continue;
+        }
         PyObject *op = FROM_GC(gc);
-        gc_list_move(gc, &seen);
-        if (!_PyGCHead_FINALIZED(gc) &&
+        if (!gc_is_finalized(gc) &&
                 PyType_HasFeature(Py_TYPE(op), Py_TPFLAGS_HAVE_FINALIZE) &&
                 (finalize = Py_TYPE(op)->tp_finalize) != NULL) {
-            _PyGCHead_SET_FINALIZED(gc);
-            Py_INCREF(op);
-            finalize(op);
-            assert(!PyErr_Occurred());
-            Py_DECREF(op);
+            PyList_Append(garbage, op);
         }
     }
-    gc_list_merge(&seen, collectable);
+    have_finalizers = PyList_GET_SIZE(garbage) > 0;
+    for (Py_ssize_t i=0; i<PyList_GET_SIZE(garbage); i++) {
+        PyObject *op = PyList_GET_ITEM(garbage, i);
+        if (!gc_is_finalized(AS_GC(op))) {
+            _PyGC_SET_FLAG(AS_GC(op), GC_FLAG_FINALIZED);
+            if ((finalize = Py_TYPE(op)->tp_finalize) != NULL) {
+                finalize(op);
+            }
+            PyList_SetItem(garbage, i, Py_None);
+        }
+    }
+    Py_DECREF(garbage);
+    return have_finalizers;
 }
 
 /* Walk the collectable list and check that they are really unreachable
    from the outside (some objects could have been resurrected by a
    finalizer). */
 static int
-check_garbage(PyGC_Head *collectable)
+check_garbage(gc_state_t *state, int generation)
 {
     int ret = 0;
-    PyGC_Head *gc;
-    for (gc = GC_NEXT(collectable); gc != collectable; gc = GC_NEXT(gc)) {
-        // Use gc_refs and break gc_prev again.
+    PyGC_Head *head = HEAD(state);
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        if (!IS_WHITE(gc)) {
+            continue;
+        }
         gc_set_refs(gc, Py_REFCNT(FROM_GC(gc)));
         _PyObject_ASSERT(FROM_GC(gc), gc_get_refs(gc) != 0);
     }
-    subtract_refs(collectable);
-    PyGC_Head *prev = collectable;
-    for (gc = GC_NEXT(collectable); gc != collectable; gc = GC_NEXT(gc)) {
+    subtract_refs(state, generation);
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        if (!IS_WHITE(gc)) {
+            continue;
+        }
         _PyObject_ASSERT_WITH_MSG(FROM_GC(gc),
                                   gc_get_refs(gc) >= 0,
                                   "refcount is too small");
         if (gc_get_refs(gc) != 0) {
+            PySys_WriteStderr("gc: check_garbage failed: %p\n", FROM_GC(gc));
             ret = -1;
         }
-        // Restore gc_prev here.
-        _PyGCHead_SET_PREV(gc, prev);
-        gc_clear_collecting(gc);
-        prev = gc;
     }
     return ret;
+}
+
+static void
+revive_garbage(gc_state_t *state)
+{
+    PyGC_Head *head = HEAD(state);
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        if (!IS_WHITE(gc)) {
+            continue;
+        }
+        _PyGC_SET_FLAG(gc, GC_FLAG_REACHABLE);
+        SET_COLOR(gc, COLOR_BLACK);
+    }
 }
 
 /* Break reference cycles by clearing the containers involved.  This is
@@ -905,13 +937,19 @@ check_garbage(PyGC_Head *collectable)
  * objects may be freed.  It is possible I screwed something up here.
  */
 static void
-delete_garbage(struct _gc_runtime_state *state,
-               PyGC_Head *collectable, PyGC_Head *old)
+delete_garbage(gc_state_t *state, int generation)
 {
     assert(!PyErr_Occurred());
+    // FIXME: this can go away when we iterate over bitmaps
+    PyObject *garbage = PyList_New(0);
+    _PyObject_GC_UNTRACK(garbage);
 
-    while (!gc_list_is_empty(collectable)) {
-        PyGC_Head *gc = GC_NEXT(collectable);
+    PyGC_Head *head = HEAD(state);
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        if (!IS_WHITE(gc)) {
+            continue;
+        }
+
         PyObject *op = FROM_GC(gc);
 
         _PyObject_ASSERT_WITH_MSG(op, Py_REFCNT(op) > 0,
@@ -924,22 +962,32 @@ delete_garbage(struct _gc_runtime_state *state,
             }
         }
         else {
+            PyList_Append(garbage, FROM_GC(gc));
+        }
+    }
+
+    if (debug_verbose) {
+        fprintf(stderr, "delete_garbage %ld\n", PyList_GET_SIZE(garbage));
+    }
+
+    for (Py_ssize_t i=0; i<PyList_GET_SIZE(garbage); i++) {
+        PyObject *op = PyList_GET_ITEM(garbage, i);
+        if (debug_verbose) {
+            fprintf(stderr, "call tp_clear %p refcnt=%ld\n", op, op->ob_refcnt);
+        }
+        if (op->ob_refcnt > 1) {
             inquiry clear;
             if ((clear = Py_TYPE(op)->tp_clear) != NULL) {
-                Py_INCREF(op);
                 (void) clear(op);
                 if (PyErr_Occurred()) {
                     PySys_WriteStderr("Exception ignored in tp_clear of "
                                       "%.50s\n", Py_TYPE(op)->tp_name);
                     PyErr_WriteUnraisable(NULL);
                 }
-                Py_DECREF(op);
             }
         }
-        if (GC_NEXT(collectable) == gc) {
-            /* object is still alive, move it, it may die later */
-            gc_list_move(gc, old);
-        }
+        Py_INCREF(Py_None);
+        PyList_SetItem(garbage, i, Py_None);
     }
 }
 
@@ -964,29 +1012,37 @@ clear_freelists(void)
     (void)PyContext_ClearFreeList();
 }
 
+void
+tally_gen_counts(gc_state_t *state, Py_ssize_t *counts)
+{
+    PyGC_Head *head = HEAD(state);
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        counts[GET_GEN(gc)]++;
+    }
+}
+
 /* This is the main function.  Read this to understand how the
  * collection process works. */
 static Py_ssize_t
-collect(struct _gc_runtime_state *state, int generation,
+collect(gc_state_t *state, int generation,
         Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable, int nofail)
 {
     int i;
     Py_ssize_t m = 0; /* # objects collected */
     Py_ssize_t n = 0; /* # unreachable objects that couldn't be collected */
-    PyGC_Head *young; /* the generation we are examining */
-    PyGC_Head *old; /* next older generation */
-    PyGC_Head unreachable; /* non-problematic unreachable trash */
-    PyGC_Head finalizers;  /* objects with, & reachable from, __del__ */
+    PyGC_Head *head = HEAD(state); /* head of list of container objects */
     PyGC_Head *gc;
     _PyTime_t t1 = 0;   /* initialize to prevent a compiler warning */
 
     if (state->debug & DEBUG_STATS) {
+        Py_ssize_t counts[NUM_GENERATIONS];
         PySys_WriteStderr("gc: collecting generation %d...\n",
                           generation);
         PySys_WriteStderr("gc: objects in each generation:");
+        memset(counts, 0, sizeof(counts));
+        tally_gen_counts(state, counts);
         for (i = 0; i < NUM_GENERATIONS; i++)
-            PySys_FormatStderr(" %zd",
-                              gc_list_size(GEN_HEAD(state, i)));
+            PySys_FormatStderr(" %zd", counts[i]);
         PySys_WriteStderr("\ngc: objects in permanent generation: %zd",
                          gc_list_size(&state->permanent_generation.head));
         t1 = _PyTime_GetMonotonicClock();
@@ -1003,27 +1059,20 @@ collect(struct _gc_runtime_state *state, int generation,
     for (i = 0; i <= generation; i++)
         state->generations[i].count = 0;
 
+#if 0
     /* merge younger generations with one we are currently collecting */
     for (i = 0; i < generation; i++) {
         gc_list_merge(GEN_HEAD(state, i), GEN_HEAD(state, generation));
     }
+#endif
 
-    /* handy references */
-    young = GEN_HEAD(state, generation);
-    if (generation < NUM_GENERATIONS-1)
-        old = GEN_HEAD(state, generation+1);
-    else
-        old = young;
-
-    validate_list(young, 0);
-    validate_list(old, 0);
     /* Using ob_refcnt and gc_refs, calculate which objects in the
      * container set are reachable from outside the set (i.e., have a
      * refcount greater than 0 when all the references within the
      * set are taken into account).
      */
-    update_refs(young);  // gc_prev is used for gc_refs
-    subtract_refs(young);
+    update_refs(state, generation);  // gc_prev is used for gc_refs
+    subtract_refs(state, generation);
 
     /* Leave everything reachable from outside young in young, and move
      * everything else (in young) to unreachable.
@@ -1031,75 +1080,73 @@ collect(struct _gc_runtime_state *state, int generation,
      * set instead.  But most things usually turn out to be reachable,
      * so it's more efficient to move the unreachable things.
      */
-    gc_list_init(&unreachable);
-    move_unreachable(young, &unreachable);  // gc_prev is pointer again
-    validate_list(young, 0);
+    mark_reachable(state, generation);
 
-    untrack_tuples(young);
+    untrack_tuples(state);
     /* Move reachable objects to next generation. */
-    if (young != old) {
+    if (generation < NUM_GENERATIONS - 1) {
         if (generation == NUM_GENERATIONS - 2) {
-            state->long_lived_pending += gc_list_size(young);
+            state->long_lived_pending += gc_list_size(head); // FIXME
         }
-        gc_list_merge(young, old);
     }
     else {
         /* We only untrack dicts in full collections, to avoid quadratic
            dict build-up. See issue #14775. */
-        untrack_dicts(young);
+        untrack_dicts(state);
         state->long_lived_pending = 0;
-        state->long_lived_total = gc_list_size(young);
+        state->long_lived_total = gc_list_size(head); // FIXME
     }
+    increment_generation(state, generation);
 
     /* All objects in unreachable are trash, but objects reachable from
      * legacy finalizers (e.g. tp_del) can't safely be deleted.
      */
-    gc_list_init(&finalizers);
-    // NEXT_MASK_UNREACHABLE is cleared here.
-    // After move_legacy_finalizers(), unreachable is normal list.
-    move_legacy_finalizers(&unreachable, &finalizers);
+    move_legacy_finalizers(state, generation);
+#if 0
     /* finalizers contains the unreachable objects with a legacy finalizer;
      * unreachable objects reachable *from* those are also uncollectable,
      * and we move those into the finalizers list too.
      */
     move_legacy_finalizer_reachable(&finalizers);
-
-    validate_list(&finalizers, 0);
-    validate_list(&unreachable, PREV_MASK_COLLECTING);
+#endif
 
     /* Collect statistics on collectable objects found and print
      * debugging information.
      */
-    for (gc = GC_NEXT(&unreachable); gc != &unreachable; gc = GC_NEXT(gc)) {
-        m++;
-        if (state->debug & DEBUG_COLLECTABLE) {
-            debug_cycle("collectable", FROM_GC(gc));
+    for (gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        if (IS_WHITE(gc)) {
+            m++;
+            if (state->debug & DEBUG_COLLECTABLE || 0) {
+                debug_cycle("collectable", FROM_GC(gc));
+                //dump_obj(FROM_GC(gc));
+            }
         }
     }
 
     /* Clear weakrefs and invoke callbacks as necessary. */
-    m += handle_weakrefs(&unreachable, old);
-
-    validate_list(old, 0);
-    validate_list(&unreachable, PREV_MASK_COLLECTING);
+    m += handle_weakrefs(state);
 
     /* Call tp_finalize on objects which have one. */
-    finalize_garbage(&unreachable);
+    finalize_garbage(state);
 
-    if (check_garbage(&unreachable)) { // clear PREV_MASK_COLLECTING here
-        gc_list_merge(&unreachable, old);
+    if (check_garbage(state, generation)) {
+        fprintf(stderr, "check_garbage -1\n");
+        revive_garbage(state);
     }
     else {
         /* Call tp_clear on objects in the unreachable set.  This will cause
          * the reference cycles to be broken.  It may also cause some objects
          * in finalizers to be freed.
          */
-        delete_garbage(state, &unreachable, old);
+        delete_garbage(state, generation);
     }
 
     /* Collect statistics on uncollectable objects found and print
      * debugging information. */
-    for (gc = GC_NEXT(&finalizers); gc != &finalizers; gc = GC_NEXT(gc)) {
+    for (gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+        if (!_PyGC_HAVE_FLAG(gc, GC_FLAG_FINIALIZER_REACHABLE)) {
+            continue;
+        }
         n++;
         if (state->debug & DEBUG_UNCOLLECTABLE)
             debug_cycle("uncollectable", FROM_GC(gc));
@@ -1121,8 +1168,7 @@ collect(struct _gc_runtime_state *state, int generation,
      * reachable list of garbage.  The programmer has to deal with
      * this if they insist on creating this type of structure.
      */
-    handle_legacy_finalizers(state, &finalizers, old);
-    validate_list(old, 0);
+    handle_legacy_finalizers(state);
 
     /* Clear free list only during the collection of the highest
      * generation */
@@ -1349,7 +1395,7 @@ gc_set_debug_impl(PyObject *module, int flags)
 /*[clinic end generated code: output=7c8366575486b228 input=5e5ce15e84fbed15]*/
 {
     _PyRuntime.gc.debug = flags;
-
+    debug_verbose = flags & DEBUG_VERBOSE;
     Py_RETURN_NONE;
 }
 
@@ -1524,7 +1570,6 @@ static PyObject *
 gc_get_objects_impl(PyObject *module, Py_ssize_t generation)
 /*[clinic end generated code: output=48b35fea4ba6cb0e input=ef7da9df9806754c]*/
 {
-    int i;
     PyObject* result;
     struct _gc_runtime_state *state = &_PyRuntime.gc;
 
@@ -1548,19 +1593,10 @@ gc_get_objects_impl(PyObject *module, Py_ssize_t generation)
                             "generation parameter cannot be negative");
             goto error;
         }
-
-        if (append_objects(result, GEN_HEAD(state, generation))) {
-            goto error;
-        }
-
-        return result;
     }
+    if (append_objects(result, GEN_HEAD(state, 0), generation)) {
 
-    /* If generation is not passed or None, get all objects from all generations */
-    for (i = 0; i < NUM_GENERATIONS; i++) {
-        if (append_objects(result, GEN_HEAD(state, i))) {
-            goto error;
-        }
+        goto error;
     }
     return result;
 
@@ -1787,6 +1823,7 @@ PyInit_gc(void)
     ADD_INT(DEBUG_UNCOLLECTABLE);
     ADD_INT(DEBUG_SAVEALL);
     ADD_INT(DEBUG_LEAK);
+    ADD_INT(DEBUG_VERBOSE);
 #undef ADD_INT
     return m;
 }
@@ -1943,9 +1980,12 @@ _PyObject_GC_Alloc(int use_calloc, size_t basicsize)
         g = (PyGC_Head *)PyObject_Malloc(size);
     if (g == NULL)
         return PyErr_NoMemory();
-    assert(((uintptr_t)g & 3) == 0);  // g must be aligned 4bytes boundary
+    assert((((uintptr_t)g) & 3) == 0);  // g must be aligned 4bytes boundary
     g->_gc_next = 0;
     g->_gc_prev = 0;
+    SET_COLOR(g, COLOR_BLACK);
+    _PyGC_SET_FLAG(g, GC_FLAG_HEAP);
+    SET_GEN(g, 0);
     state->generations[0].count++; /* number of allocated GC objects */
     if (state->generations[0].count > state->generations[0].threshold &&
         state->enabled &&
