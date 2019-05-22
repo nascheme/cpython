@@ -414,8 +414,6 @@ visit_reachable(PyObject *op, struct mark_state *state)
         return 0;
     }
 
-    assert(_PyGC_HAVE_FLAG(gc, GC_FLAG_HEAP));
-
     switch GET_COLOR(gc) {
         case COLOR_WHITE:
             // We thought this object was dead but it turns out to be alive.
@@ -584,9 +582,9 @@ has_legacy_finalizer(PyObject *op)
     return op->ob_type->tp_del != NULL;
 }
 
-/* Move the objects in unreachable with tp_del slots into `finalizers`.
- *
- * This function also removes GC_FLAG_UNREACHABLE flag
+/* Mark unreachable objects that have tp_del slots as grey.  Traverse those
+ * objects and mark everything reachable as black and also set the
+ * GC_FLAG_FINIALIZER_REACHABLE flag.
  */
 static void
 move_legacy_finalizers(gc_state_t *state, int generation)
@@ -1984,7 +1982,6 @@ _PyObject_GC_Alloc(int use_calloc, size_t basicsize)
     g->_gc_next = 0;
     g->_gc_prev = 0;
     SET_COLOR(g, COLOR_BLACK);
-    _PyGC_SET_FLAG(g, GC_FLAG_HEAP);
     SET_GEN(g, 0);
     state->generations[0].count++; /* number of allocated GC objects */
     if (state->generations[0].count > state->generations[0].threshold &&

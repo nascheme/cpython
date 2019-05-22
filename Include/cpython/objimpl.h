@@ -78,7 +78,6 @@ typedef struct _gc_head {
 #define _PyGCHead_SET_PREV(g, p) ((g)->_gc_prev = (PyGC_Head*)(p))
 
 
-#define GC_FLAG_HEAP (1<<0)
 #define GC_FLAG_FINIALIZER_REACHABLE (1<<1)
 /* reachable from legacy finalizer, cannot be collected */
 #define GC_FLAG_LEGACY_FINIALIZER_REACHABLE (1<<2)
