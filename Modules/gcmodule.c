@@ -97,7 +97,7 @@ dump_obj(PyObject *op)
 static inline int
 gc_is_finalized(PyGC_Head *g)
 {
-    return _PyGC_HAVE_FLAG(g, GC_FLAG_FINALIZED);
+    return _PyGC_FINALIZED(FROM_GC(g));
 }
 
 static inline Py_ssize_t
@@ -875,7 +875,7 @@ finalize_garbage(gc_state_t *state)
     for (Py_ssize_t i=0; i<PyList_GET_SIZE(garbage); i++) {
         PyObject *op = PyList_GET_ITEM(garbage, i);
         if (!gc_is_finalized(AS_GC(op))) {
-            _PyGC_SET_FLAG(AS_GC(op), GC_FLAG_FINALIZED);
+            _PyGC_SET_FINALIZED(op);
             if ((finalize = Py_TYPE(op)->tp_finalize) != NULL) {
                 finalize(op);
             }
@@ -925,7 +925,6 @@ revive_garbage(gc_state_t *state)
         if (!IS_WHITE(gc)) {
             continue;
         }
-        _PyGC_SET_FLAG(gc, GC_FLAG_REACHABLE);
         SET_COLOR(gc, COLOR_BLACK);
     }
 }
@@ -1982,6 +1981,7 @@ _PyObject_GC_Alloc(int use_calloc, size_t basicsize)
     g->_gc_next = 0;
     g->_gc_prev = 0;
     SET_COLOR(g, COLOR_BLACK);
+    g->gc_flags = 0;
     SET_GEN(g, 0);
     state->generations[0].count++; /* number of allocated GC objects */
     if (state->generations[0].count > state->generations[0].threshold &&

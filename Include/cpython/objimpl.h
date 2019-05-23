@@ -78,28 +78,27 @@ typedef struct _gc_head {
 #define _PyGCHead_SET_PREV(g, p) ((g)->_gc_prev = (PyGC_Head*)(p))
 
 
-#define GC_FLAG_FINIALIZER_REACHABLE (1<<1)
+#define GC_FLAG_FINIALIZER_REACHABLE (1<<0)
 /* reachable from legacy finalizer, cannot be collected */
-#define GC_FLAG_LEGACY_FINIALIZER_REACHABLE (1<<2)
-/* we think this is garbage, could be revived by finalizers */
-#define GC_FLAG_GARBAGE (1<<3)
-/* set when the object is in generation which is GCed currently. */
-// No objects in interpreter have this flag after GC ends.
-#define GC_FLAG_COLLECTING (1<<4)
+#define GC_FLAG_LEGACY_FINIALIZER_REACHABLE (1<<1)
 /* set when tp_finalize is called */
-#define GC_FLAG_FINALIZED  (1<<5)
-#define GC_FLAG_UNREACHABLE (1<<6)
-#define GC_FLAG_REACHABLE (1<<7)
+#define GC_FLAG_FINALIZED  (1<<3)
 
 #define _PyGC_SET_FLAG(g, v) ((g)->gc_flags |= v)
 #define _PyGC_CLEAR_FLAG(g, v) ((g)->gc_flags &= ~(v))
 #define _PyGC_HAVE_FLAG(g, v) ((g)->gc_flags & v)
 
-#define _PyGC_FINALIZED(o) \
-    _PyGC_HAVE_FLAG(_Py_AS_GC(o), GC_FLAG_FINALIZED)
-#define _PyGC_SET_FINALIZED(o) \
-    _PyGC_SET_FLAG(_Py_AS_GC(o), GC_FLAG_FINALIZED)
+static inline int
+_PyGC_FINALIZED(PyObject *op)
+{
+    return _PyGC_HAVE_FLAG(_Py_AS_GC(op), GC_FLAG_FINALIZED);
+}
 
+static inline void
+_PyGC_SET_FINALIZED(PyObject *op)
+{
+    _PyGC_SET_FLAG(_Py_AS_GC(op), GC_FLAG_FINALIZED);
+}
 
 PyAPI_FUNC(PyObject *) _PyObject_GC_Malloc(size_t size);
 PyAPI_FUNC(PyObject *) _PyObject_GC_Calloc(size_t size);
