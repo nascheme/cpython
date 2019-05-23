@@ -95,7 +95,6 @@ extern "C" {
 */
 
 struct gc_generation {
-    PyGC_Head head;
     int threshold; /* collection threshold */
     int count; /* count of allocations or collections of younger
                   generations */
@@ -122,7 +121,7 @@ struct _gc_runtime_state {
     int debug;
     /* linked lists of container objects */
     struct gc_generation generations[NUM_GENERATIONS];
-    PyGC_Head *generation0;
+    PyGC_Head gc_head;
     /* a permanent generation which won't be collected */
     struct gc_generation permanent_generation;
     struct gc_generation_stats generation_stats[NUM_GENERATIONS];

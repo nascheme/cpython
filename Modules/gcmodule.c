@@ -78,6 +78,11 @@ typedef struct _gc_runtime_state gc_state_t;
 #define SET_GEN(g, v) ((g)->gc_gen = v)
 #define GET_GEN(g) ((g)->gc_gen)
 
+// oldest generation that we move objects to on normal collection
+#define OLD_GENERATION (NUM_GENERATIONS-1)
+// generation used by freeze (next oldest from OLD_GENERATION)
+#define PERMANENT_GENERATION NUM_GENERATIONS
+
 bool debug_verbose;
 
 static void
@@ -136,31 +141,7 @@ static PyObject *gc_str = NULL;
                 DEBUG_UNCOLLECTABLE | \
                 DEBUG_SAVEALL
 
-#define GEN_HEAD(state, n) (&(state)->generations[n].head)
-#define HEAD(state) (&(state)->generations[0].head)
-
-void
-_PyGC_Initialize(gc_state_t *state)
-{
-    state->enabled = 1; /* automatic collection enabled? */
-
-#define _GEN_HEAD(n) GEN_HEAD(state, n)
-    struct gc_generation generations[NUM_GENERATIONS] = {
-        /* PyGC_Head,                                    threshold,    count */
-        {{_GEN_HEAD(0), _GEN_HEAD(0)},   700,        0},
-        {{_GEN_HEAD(1), _GEN_HEAD(1)},   10,         0},
-        {{_GEN_HEAD(2), _GEN_HEAD(2)},   10,         0},
-    };
-    for (int i = 0; i < NUM_GENERATIONS; i++) {
-        state->generations[i] = generations[i];
-    };
-    state->generation0 = GEN_HEAD(state, 0);
-    struct gc_generation permanent_generation = {
-          {&state->permanent_generation.head,
-           &state->permanent_generation.head}, 0, 0
-    };
-    state->permanent_generation = permanent_generation;
-}
+#define HEAD(state) (&(state)->gc_head)
 
 /*
 _gc_prev values
@@ -198,13 +179,13 @@ gc_list_init(PyGC_Head *list)
     list->_gc_next = list;
 }
 
+#if 0
 static inline int
 gc_list_is_empty(PyGC_Head *list)
 {
     return (list->_gc_next == list);
 }
 
-#if 0
 /* Append `node` to `list`. */
 static inline void
 gc_list_append(PyGC_Head *node, PyGC_Head *list)
@@ -258,6 +239,7 @@ gc_list_move(PyGC_Head *node, PyGC_Head *list)
 }
 #endif
 
+#if 0
 /* append list `from` onto list `to`; `from` becomes an empty list */
 static void
 gc_list_merge(PyGC_Head *from, PyGC_Head *to)
@@ -278,7 +260,9 @@ gc_list_merge(PyGC_Head *from, PyGC_Head *to)
     }
     gc_list_init(from);
 }
+#endif
 
+#if 0
 static Py_ssize_t
 gc_list_size(PyGC_Head *list)
 {
@@ -289,6 +273,7 @@ gc_list_size(PyGC_Head *list)
     }
     return n;
 }
+#endif
 
 /* Append objects in a GC list to a Python list.
  * Return 0 if all OK, < 0 if error (out of memory for list).
@@ -312,6 +297,28 @@ append_objects(PyObject *py_list, PyGC_Head *gc_list, int generation)
 }
 
 /*** end of list stuff ***/
+
+void
+_PyGC_Initialize(gc_state_t *state)
+{
+    state->enabled = 1; /* automatic collection enabled? */
+
+    struct gc_generation generations[NUM_GENERATIONS] = {
+        /* threshold,    count */
+        {700,        0},
+        {10,         0},
+        {10,         0},
+    };
+    for (int i = 0; i < NUM_GENERATIONS; i++) {
+        state->generations[i] = generations[i];
+    };
+    gc_list_init(&state->gc_head);
+    struct gc_generation permanent_generation = {
+          0, 0
+    };
+    state->permanent_generation = permanent_generation;
+}
+
 
 
 /* For collected generation, set all gc_refs = ob_refcnt.  Set color to
@@ -488,11 +495,9 @@ propagate_reachable(gc_state_t *state, int generation, bool finalizers)
         /* if queue depth was exceeded, need another pass */
         done = !mstate.aborted;
     }
-#if 0
-    if (mark_loops > 0) {
+    if (debug_verbose && mark_loops > 0) {
         fprintf(stderr, "mark loops needed %d\n", mark_loops);
     }
-#endif
     // done propagate, there must be no grey left at this point
     for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
         PyObject *op = FROM_GC(gc);
@@ -532,7 +537,7 @@ mark_reachable(gc_state_t *state, int generation)
 static void
 increment_generation(gc_state_t *state, int generation)
 {
-    if (generation < NUM_GENERATIONS - 1) {
+    if (generation < OLD_GENERATION) {
         generation +=1;
     }
     //fprintf(stderr, "set gen %d\n", generation);
@@ -910,7 +915,10 @@ check_garbage(gc_state_t *state, int generation)
                                   gc_get_refs(gc) >= 0,
                                   "refcount is too small");
         if (gc_get_refs(gc) != 0) {
-            PySys_WriteStderr("gc: check_garbage failed: %p\n", FROM_GC(gc));
+            if (debug_verbose) {
+                PySys_WriteStderr("gc: check_garbage failed: %p\n",
+                                  FROM_GC(gc));
+            }
             ret = -1;
         }
     }
@@ -1032,7 +1040,7 @@ collect(gc_state_t *state, int generation,
     _PyTime_t t1 = 0;   /* initialize to prevent a compiler warning */
 
     if (state->debug & DEBUG_STATS) {
-        Py_ssize_t counts[NUM_GENERATIONS];
+        Py_ssize_t counts[NUM_GENERATIONS+1];
         PySys_WriteStderr("gc: collecting generation %d...\n",
                           generation);
         PySys_WriteStderr("gc: objects in each generation:");
@@ -1041,7 +1049,7 @@ collect(gc_state_t *state, int generation,
         for (i = 0; i < NUM_GENERATIONS; i++)
             PySys_FormatStderr(" %zd", counts[i]);
         PySys_WriteStderr("\ngc: objects in permanent generation: %zd",
-                         gc_list_size(&state->permanent_generation.head));
+                          counts[PERMANENT_GENERATION]);
         t1 = _PyTime_GetMonotonicClock();
 
         PySys_WriteStderr("\n");
@@ -1055,13 +1063,6 @@ collect(gc_state_t *state, int generation,
         state->generations[generation+1].count += 1;
     for (i = 0; i <= generation; i++)
         state->generations[i].count = 0;
-
-#if 0
-    /* merge younger generations with one we are currently collecting */
-    for (i = 0; i < generation; i++) {
-        gc_list_merge(GEN_HEAD(state, i), GEN_HEAD(state, generation));
-    }
-#endif
 
     /* Using ob_refcnt and gc_refs, calculate which objects in the
      * container set are reachable from outside the set (i.e., have a
@@ -1083,7 +1084,7 @@ collect(gc_state_t *state, int generation,
     /* Move reachable objects to next generation. */
     if (generation < NUM_GENERATIONS - 1) {
         if (generation == NUM_GENERATIONS - 2) {
-            state->long_lived_pending += gc_list_size(head); // FIXME
+            state->long_lived_pending += 0; // FIXME
         }
     }
     else {
@@ -1091,7 +1092,7 @@ collect(gc_state_t *state, int generation,
            dict build-up. See issue #14775. */
         untrack_dicts(state);
         state->long_lived_pending = 0;
-        state->long_lived_total = gc_list_size(head); // FIXME
+        state->long_lived_total = 0; // FIXME
     }
     increment_generation(state, generation);
 
@@ -1127,7 +1128,6 @@ collect(gc_state_t *state, int generation,
     finalize_garbage(state);
 
     if (check_garbage(state, generation)) {
-        fprintf(stderr, "check_garbage -1\n");
         revive_garbage(state);
     }
     else {
@@ -1501,16 +1501,13 @@ Return the list of objects that directly refer to any of objs.");
 static PyObject *
 gc_get_referrers(PyObject *self, PyObject *args)
 {
-    int i;
     PyObject *result = PyList_New(0);
     if (!result) return NULL;
 
     struct _gc_runtime_state *state = &_PyRuntime.gc;
-    for (i = 0; i < NUM_GENERATIONS; i++) {
-        if (!(gc_referrers_for(args, GEN_HEAD(state, i), result))) {
+    if (!(gc_referrers_for(args, HEAD(state), result))) {
             Py_DECREF(result);
             return NULL;
-        }
     }
     return result;
 }
@@ -1591,7 +1588,7 @@ gc_get_objects_impl(PyObject *module, Py_ssize_t generation)
             goto error;
         }
     }
-    if (append_objects(result, GEN_HEAD(state, 0), generation)) {
+    if (append_objects(result, HEAD(state), generation)) {
 
         goto error;
     }
@@ -1690,8 +1687,14 @@ gc_freeze_impl(PyObject *module)
 /*[clinic end generated code: output=502159d9cdc4c139 input=b602b16ac5febbe5]*/
 {
     struct _gc_runtime_state *state = &_PyRuntime.gc;
-    for (int i = 0; i < NUM_GENERATIONS; ++i) {
-        gc_list_merge(GEN_HEAD(state, i), &state->permanent_generation.head);
+    PyGC_Head *head = HEAD(state);
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc=GC_NEXT(gc)) {
+        int i = GET_GEN(gc);
+        if (i < PERMANENT_GENERATION) {
+            SET_GEN(gc, PERMANENT_GENERATION);
+        }
+    }
+    for (int i = 0; i < NUM_GENERATIONS; i++) {
         state->generations[i].count = 0;
     }
     Py_RETURN_NONE;
@@ -1710,7 +1713,13 @@ gc_unfreeze_impl(PyObject *module)
 /*[clinic end generated code: output=1c15f2043b25e169 input=2dd52b170f4cef6c]*/
 {
     struct _gc_runtime_state *state = &_PyRuntime.gc;
-    gc_list_merge(&state->permanent_generation.head, GEN_HEAD(state, NUM_GENERATIONS-1));
+    PyGC_Head *head = HEAD(state);
+    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc=GC_NEXT(gc)) {
+        int i = GET_GEN(gc);
+        if (i == PERMANENT_GENERATION) {
+            SET_GEN(gc, OLD_GENERATION);
+        }
+    }
     Py_RETURN_NONE;
 }
 
@@ -1724,7 +1733,11 @@ static Py_ssize_t
 gc_get_freeze_count_impl(PyObject *module)
 /*[clinic end generated code: output=61cbd9f43aa032e1 input=45ffbc65cfe2a6ed]*/
 {
-    return gc_list_size(&_PyRuntime.gc.permanent_generation.head);
+    struct _gc_runtime_state *state = &_PyRuntime.gc;
+    Py_ssize_t counts[NUM_GENERATIONS+1];
+    memset(counts, 0, sizeof(counts));
+    tally_gen_counts(state, counts);
+    return counts[PERMANENT_GENERATION];
 }
 
 
