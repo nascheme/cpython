@@ -1938,9 +1938,9 @@ _PyObject_GC_Alloc(int use_calloc, size_t basicsize)
         return PyErr_NoMemory();
     size = sizeof(PyGC_Head) + basicsize;
     if (use_calloc)
-        g = (PyGC_Head *)PyObject_Calloc(1, size);
+        g = (PyGC_Head *)_PyGC_Calloc(1, size);
     else
-        g = (PyGC_Head *)PyObject_Malloc(size);
+        g = (PyGC_Head *)_PyGC_Malloc(size);
     if (g == NULL)
         return PyErr_NoMemory();
     assert(((uintptr_t)g & 3) == 0);  // g must be aligned 4bytes boundary
@@ -1972,10 +1972,13 @@ _PyObject_GC_Calloc(size_t basicsize)
     return _PyObject_GC_Alloc(1, basicsize);
 }
 
+#define MALLOC_ALIGN_MASK ((1<<4)-1)
+
 PyObject *
 _PyObject_GC_New(PyTypeObject *tp)
 {
     PyObject *op = _PyObject_GC_Malloc(_PyObject_SIZE(tp));
+    assert((((uintptr_t)op) & MALLOC_ALIGN_MASK) == 0);
     if (op != NULL)
         op = PyObject_INIT(op, tp);
     return op;
@@ -1993,6 +1996,7 @@ _PyObject_GC_NewVar(PyTypeObject *tp, Py_ssize_t nitems)
     }
     size = _PyObject_VAR_SIZE(tp, nitems);
     op = (PyVarObject *) _PyObject_GC_Malloc(size);
+    assert((((uintptr_t)op) & MALLOC_ALIGN_MASK) == 0);
     if (op != NULL)
         op = PyObject_INIT_VAR(op, tp, nitems);
     return op;
@@ -2008,7 +2012,8 @@ _PyObject_GC_Resize(PyVarObject *op, Py_ssize_t nitems)
     }
 
     PyGC_Head *g = AS_GC(op);
-    g = (PyGC_Head *)PyObject_REALLOC(g,  sizeof(PyGC_Head) + basicsize);
+    g = (PyGC_Head *)_PyGC_Realloc(g,  sizeof(PyGC_Head) + basicsize);
+    assert((((uintptr_t)op) & MALLOC_ALIGN_MASK) == 0);
     if (g == NULL)
         return (PyVarObject *)PyErr_NoMemory();
     op = (PyVarObject *) FROM_GC(g);
@@ -2027,5 +2032,5 @@ PyObject_GC_Del(void *op)
     if (state->generations[0].count > 0) {
         state->generations[0].count--;
     }
-    PyObject_FREE(g);
+    _PyGC_Free(g);
 }
