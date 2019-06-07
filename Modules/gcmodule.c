@@ -2009,7 +2009,11 @@ gc_obj_size(PyObject *op)
     size_t size = 0;
     Py_ssize_t isize = op->ob_type->tp_itemsize;
     if (isize > 0) {
-        size = Py_SIZE(op) * isize;
+        size_t n = Py_SIZE(op);
+        if (Py_TYPE(op)->tp_flags & Py_TPFLAGS_TYPE_SUBCLASS) {
+            n += 1; // need sentinel
+        }
+        size = n * isize;
     }
     size += op->ob_type->tp_basicsize;
     return sizeof(PyGC_Head) + size;

@@ -975,13 +975,21 @@ PyObject *
 PyType_GenericAlloc(PyTypeObject *type, Py_ssize_t nitems)
 {
     PyObject *obj;
-    const size_t size = _PyObject_VAR_SIZE(type, nitems+1);
-    /* note that we need to add one, for the sentinel */
+    size_t n = nitems;
+    size_t size;
 
-    if (PyType_IS_GC(type))
+    if (PyType_IS_GC(type)) {
+        if (type->tp_flags & Py_TPFLAGS_TYPE_SUBCLASS) {
+            n += 1; // need sentinel for types
+        }
+        size = _PyObject_VAR_SIZE(type, n);
         obj = _PyObject_GC_Malloc(size);
-    else
+    }
+    else {
+        n += 1; // for sentinel, FIXME: do we always need this?
+        size = _PyObject_VAR_SIZE(type, n);
         obj = (PyObject *)PyObject_MALLOC(size);
+    }
 
     if (obj == NULL)
         return PyErr_NoMemory();
