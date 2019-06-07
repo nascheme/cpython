@@ -15,7 +15,7 @@ class tuple "PyTupleObject *" "&PyTuple_Type"
 
 /* Speed optimization to avoid frequent malloc/free of small tuples */
 #ifndef PyTuple_MAXSAVESIZE
-#define PyTuple_MAXSAVESIZE     20  /* Largest tuple to save on free list */
+#define PyTuple_MAXSAVESIZE     0  /* Largest tuple to save on free list */
 #endif
 #ifndef PyTuple_MAXFREELIST
 #define PyTuple_MAXFREELIST  2000  /* Maximum number of tuples of each size to save */

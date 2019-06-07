@@ -631,13 +631,13 @@ new_arena(void)
 
 
 /*
-address_in_range(P, POOL)
+gc_address_in_range(P, POOL)
 
 Return true if and only if P is an address that was allocated by gcmalloc.
 POOL must be the pool address associated with P, i.e., POOL = POOL_ADDR(P)
 (the caller is asked to compute this because the macro expands POOL more than
 once, and for efficiency it's best for the caller to assign POOL_ADDR(P) to a
-variable and pass the latter to the macro; because address_in_range is
+variable and pass the latter to the macro; because gc_address_in_range is
 called on every alloc/realloc/free, micro-efficiency is important here).
 
 Tricky:  Let B be the arena base address associated with the pool, B =
@@ -662,7 +662,7 @@ arenas[(POOL)->arenaindex].  Suppose obmalloc controls P.  Then (barring wild
 stores, etc), POOL is the correct address of P's pool, AO.address is the
 correct base address of the pool's arena, and P must be within ARENA_SIZE of
 AO.address.  In addition, AO.address is not 0 (no arena can start at address 0
-(NULL)).  Therefore address_in_range correctly reports that obmalloc
+(NULL)).  Therefore gc_address_in_range correctly reports that obmalloc
 controls P.
 
 Now suppose obmalloc does not control P (e.g., P was obtained via a direct
@@ -708,9 +708,9 @@ extremely desirable that it be this fast.
 static bool _Py_NO_ADDRESS_SAFETY_ANALYSIS
             _Py_NO_SANITIZE_THREAD
             _Py_NO_SANITIZE_MEMORY
-address_in_range(void *p, poolp pool)
+gc_address_in_range(void *p, poolp pool)
 {
-    // Since address_in_range may be reading from memory which was not allocated
+    // Since gc_address_in_range may be reading from memory which was not allocated
     // by Python, it is important that pool->arenaindex is read only once, as
     // another thread may be concurrently modifying the value without holding
     // the GIL. The following dance forces the compiler to read pool->arenaindex
@@ -984,7 +984,8 @@ gcmalloc_free(void *p)
 #endif
 
     pool = POOL_ADDR(p);
-    if (!address_in_range(p, pool)) {
+    if (!gc_address_in_range(p, pool)) {
+        assert(0);
         return 0;
     }
     /* We allocated this address. */
@@ -1177,15 +1178,17 @@ success:
 
 
 void
-_PyGC_Free(void *p)
+_PyGC_Free(void *p, size_t size)
 {
     assert(p != NULL);
-    if (!gcmalloc_free(p)) {
+    if (size > SMALL_REQUEST_THRESHOLD) {
         /* gcmalloc didn't allocate this address */
         PyMem_RawFree(p);
     }
+    else {
+        gcmalloc_free(p);
+    }
 }
-
 
 /* gcmalloc realloc.
 
@@ -1197,7 +1200,7 @@ _PyGC_Free(void *p)
 
    Return 0 if gcmalloc didn't allocated p. */
 static int
-gcmalloc_realloc(void **newptr_p, void *p, size_t nbytes)
+gcmalloc_realloc(void **newptr_p, void *p, size_t old_nbytes, size_t nbytes)
 {
     void *bp;
     poolp pool;
@@ -1213,7 +1216,8 @@ gcmalloc_realloc(void **newptr_p, void *p, size_t nbytes)
 #endif
 
     pool = POOL_ADDR(p);
-    if (!address_in_range(p, pool)) {
+    if (!gc_address_in_range(p, pool)) {
+        assert(0);
         /* gcmalloc is not managing this block.
 
            If nbytes <= SMALL_REQUEST_THRESHOLD, it's tempting to try to take
@@ -1250,7 +1254,7 @@ gcmalloc_realloc(void **newptr_p, void *p, size_t nbytes)
     bp = _PyGC_Malloc(nbytes);
     if (bp != NULL) {
         memcpy(bp, p, size);
-        _PyGC_Free(p);
+        _PyGC_Free(p, old_nbytes);
     }
     *newptr_p = bp;
     return 1;
@@ -1258,17 +1262,41 @@ gcmalloc_realloc(void **newptr_p, void *p, size_t nbytes)
 
 
 void *
-_PyGC_Realloc(void *ptr, size_t nbytes)
+_PyGC_Realloc(void *p, size_t old_nbytes, size_t nbytes)
 {
-    void *ptr2;
-
-    if (ptr == NULL) {
+    if (p == NULL) {
         return _PyGC_Malloc(nbytes);
     }
 
-    if (gcmalloc_realloc(&ptr2, ptr, nbytes)) {
-        return ptr2;
+    if (old_nbytes > SMALL_REQUEST_THRESHOLD) {
+        if (nbytes > SMALL_REQUEST_THRESHOLD) {
+            return PyMem_RawRealloc(p, nbytes);
+        }
+        else {
+            // take it over
+            void *bp = _PyGC_Malloc(nbytes);
+            if (bp != NULL) {
+                memcpy(bp, p, nbytes);
+                PyMem_RawFree(p);
+            }
+            return bp;
+        }
     }
-
-    return PyMem_RawRealloc(ptr, nbytes);
+    else {
+        if (nbytes > SMALL_REQUEST_THRESHOLD) {
+            /// give to large allocator
+            void *bp = PyMem_RawMalloc(nbytes);
+            if (bp != NULL) {
+                memcpy(bp, p, old_nbytes);
+                gcmalloc_free(p);
+            }
+            return bp;
+        }
+        else {
+            // remains as small allocator object
+            void *bp;
+            gcmalloc_realloc(&bp, p, old_nbytes, nbytes);
+            return bp;
+        }
+    }
 }

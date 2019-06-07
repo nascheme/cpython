@@ -184,8 +184,8 @@ static inline int _PyMem_IsPtrFreed(void *ptr)
 Py_ssize_t _PyGC_GetAllocatedBlocks(void);
 void *_PyGC_Malloc(size_t nbytes);
 void *_PyGC_Calloc(size_t nelem, size_t elsize);
-void _PyGC_Free(void *p);
-void *_PyGC_Realloc(void *ptr, size_t nbytes);
+void _PyGC_Free(void *p, size_t nbytes);
+void *_PyGC_Realloc(void *ptr, size_t old_nbytes, size_t nbytes);
 
 
 #ifdef __cplusplus
