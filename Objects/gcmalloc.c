@@ -757,9 +757,8 @@ gcmalloc_alloc(void **ptr_p, size_t nbytes)
     if (nbytes == 0) {
         return 0;
     }
-    if (nbytes > SMALL_REQUEST_THRESHOLD) {
-        return 0;
-    }
+
+    assert(nbytes <= SMALL_REQUEST_THRESHOLD);
 
     /*
      * Most frequent paths first
@@ -929,12 +928,12 @@ void *
 _PyGC_Malloc(size_t nbytes)
 {
     void* ptr;
-    if (gcmalloc_alloc(&ptr, nbytes)) {
-        gcmalloc_AllocatedBlocks++;
-        return ptr;
+    if (nbytes > SMALL_REQUEST_THRESHOLD) {
+        ptr = PyMem_RawMalloc(nbytes);
     }
-
-    ptr = PyMem_RawMalloc(nbytes);
+    else {
+        gcmalloc_alloc(&ptr, nbytes);
+    }
     if (ptr != NULL) {
         gcmalloc_AllocatedBlocks++;
     }
@@ -950,13 +949,15 @@ _PyGC_Calloc(size_t nelem, size_t elsize)
     assert(elsize == 0 || nelem <= (size_t)PY_SSIZE_T_MAX / elsize);
     size_t nbytes = nelem * elsize;
 
-    if (gcmalloc_alloc(&ptr, nbytes)) {
-        memset(ptr, 0, nbytes);
-        gcmalloc_AllocatedBlocks++;
-        return ptr;
+    if (nbytes > SMALL_REQUEST_THRESHOLD) {
+        ptr = PyMem_RawCalloc(nelem, elsize);
     }
-
-    ptr = PyMem_RawCalloc(nelem, elsize);
+    else {
+        gcmalloc_alloc(&ptr, nbytes);
+        if (ptr != NULL) {
+            memset(ptr, 0, nbytes);
+        }
+    }
     if (ptr != NULL) {
         gcmalloc_AllocatedBlocks++;
     }
@@ -984,10 +985,12 @@ gcmalloc_free(void *p)
 #endif
 
     pool = POOL_ADDR(p);
+#if 0
     if (!gc_address_in_range(p, pool)) {
         assert(0);
         return 0;
     }
+#endif
     /* We allocated this address. */
 
     /* Link p to the start of the pool's freeblock list.  Since
@@ -1233,6 +1236,7 @@ gcmalloc_realloc(void **newptr_p, void *p, size_t old_nbytes, size_t nbytes)
 #endif
 
     pool = POOL_ADDR(p);
+#if 0
     if (!gc_address_in_range(p, pool)) {
         assert(0);
         /* gcmalloc is not managing this block.
@@ -1249,6 +1253,7 @@ gcmalloc_realloc(void **newptr_p, void *p, size_t old_nbytes, size_t nbytes)
            Instead we punt: let C continue to manage this block. */
         return 0;
     }
+#endif
 
     /* gcmalloc is in charge of this block */
     size = INDEX2SIZE(pool->szidx);
