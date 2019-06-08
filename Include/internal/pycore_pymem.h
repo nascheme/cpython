@@ -182,11 +182,17 @@ static inline int _PyMem_IsPtrFreed(void *ptr)
 
 // Implemented in gcmalloc.c
 Py_ssize_t _PyGC_GetAllocatedBlocks(void);
+size_t _PyGC_Size(PyObject *op);
 void *_PyGC_Malloc(size_t nbytes);
 void *_PyGC_Calloc(size_t nelem, size_t elsize);
 void _PyGC_Free(void *p, size_t nbytes);
 void *_PyGC_Realloc(void *ptr, size_t old_nbytes, size_t nbytes);
-
+#define _PyGC_SMALL_REQUEST_THRESHOLD 512
+static inline int
+_PyGC_IsLarge(size_t size)
+{
+    return size > _PyGC_SMALL_REQUEST_THRESHOLD;
+}
 
 #ifdef __cplusplus
 }

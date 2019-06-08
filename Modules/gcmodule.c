@@ -2002,23 +2002,6 @@ _PyObject_GC_NewVar(PyTypeObject *tp, Py_ssize_t nitems)
     return op;
 }
 
-/* return the allocation size for object 'op' */
-size_t
-gc_obj_size(PyObject *op)
-{
-    size_t size = 0;
-    Py_ssize_t isize = op->ob_type->tp_itemsize;
-    if (isize > 0) {
-        size_t n = Py_SIZE(op);
-        if (Py_TYPE(op)->tp_flags & Py_TPFLAGS_TYPE_SUBCLASS) {
-            n += 1; // need sentinel
-        }
-        size = n * isize;
-    }
-    size += op->ob_type->tp_basicsize;
-    return sizeof(PyGC_Head) + size;
-}
-
 PyVarObject *
 _PyObject_GC_Resize(PyVarObject *op, Py_ssize_t nitems)
 {
@@ -2029,7 +2012,7 @@ _PyObject_GC_Resize(PyVarObject *op, Py_ssize_t nitems)
     }
     PyGC_Head *g = AS_GC(op);
     g = (PyGC_Head *)_PyGC_Realloc(g,
-                                   gc_obj_size((PyObject *)op),
+                                   _PyGC_Size((PyObject *)op),
                                    sizeof(PyGC_Head) + basicsize);
     assert((((uintptr_t)op) & MALLOC_ALIGN_MASK) == 0);
     if (g == NULL)
@@ -2051,5 +2034,5 @@ PyObject_GC_Del(void *op)
         state->generations[0].count--;
     }
 
-    _PyGC_Free(g, gc_obj_size((PyObject *)op));
+    _PyGC_Free(g, _PyGC_Size((PyObject *)op));
 }

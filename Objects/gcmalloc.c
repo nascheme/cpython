@@ -203,7 +203,7 @@ static int running_on_valgrind = -1;
  * Although not required, for better performance and space efficiency,
  * it is recommended that SMALL_REQUEST_THRESHOLD is set to a power of 2.
  */
-#define SMALL_REQUEST_THRESHOLD 512
+#define SMALL_REQUEST_THRESHOLD _PyGC_SMALL_REQUEST_THRESHOLD
 #define NB_SMALL_SIZE_CLASSES   (SMALL_REQUEST_THRESHOLD / ALIGNMENT)
 
 /*
@@ -1176,6 +1176,23 @@ success:
     return 1;
 }
 
+
+/* return the allocation size for object 'op' */
+size_t
+_PyGC_Size(PyObject *op)
+{
+    size_t size = 0;
+    Py_ssize_t isize = op->ob_type->tp_itemsize;
+    if (isize > 0) {
+        size_t n = Py_SIZE(op);
+        if (Py_TYPE(op)->tp_flags & Py_TPFLAGS_TYPE_SUBCLASS) {
+            n += 1; // need sentinel
+        }
+        size = n * isize;
+    }
+    size += op->ob_type->tp_basicsize;
+    return sizeof(PyGC_Head) + size;
+}
 
 void
 _PyGC_Free(void *p, size_t size)
