@@ -400,10 +400,47 @@ static PyGetSetDef frame_getsetlist[] = {
    frames could provoke free_list into growing without bound.
 */
 
-static PyFrameObject *free_list = NULL;
-static int numfree = 0;         /* number of frames currently in free_list */
+typedef struct {
+    /* linked list using f_back */
+    PyFrameObject *frame;
+    /* number of frames currently in free_list */
+    int numfree;
+} free_list_t;
+
+static free_list_t large_free_list;
+static free_list_t small_free_list;
+
 /* max value for numfree */
 #define PyFrame_MAXFREELIST 200
+
+static free_list_t*
+frame_get_freelist(size_t size)
+{
+    if (_PyGC_IsLarge(size)) {
+        return &large_free_list;
+    }
+    else {
+        return &small_free_list;
+    }
+}
+
+static Py_ssize_t
+frame_get_num_extras(PyCodeObject *code)
+{
+    Py_ssize_t extras, ncells, nfrees;
+    ncells = PyTuple_GET_SIZE(code->co_cellvars);
+    nfrees = PyTuple_GET_SIZE(code->co_freevars);
+    extras = code->co_stacksize + code->co_nlocals + ncells + nfrees;
+    return extras;
+}
+
+static Py_ssize_t
+frame_get_alloc_size(Py_ssize_t extras)
+{
+        size_t basicsize = _PyObject_VAR_SIZE(&PyFrame_Type, extras);
+        return sizeof(PyGC_Head) + basicsize;
+}
+
 
 static void _Py_HOT_FUNCTION
 frame_dealloc(PyFrameObject *f)
@@ -432,13 +469,14 @@ frame_dealloc(PyFrameObject *f)
     Py_CLEAR(f->f_locals);
     Py_CLEAR(f->f_trace);
 
+    free_list_t *fl = frame_get_freelist(_PyGC_Size((PyObject *)f));
     co = f->f_code;
     if (co->co_zombieframe == NULL)
         co->co_zombieframe = f;
-    else if (numfree < PyFrame_MAXFREELIST) {
-        ++numfree;
-        f->f_back = free_list;
-        free_list = f;
+    else if (fl->numfree < PyFrame_MAXFREELIST) {
+        fl->numfree++;
+        f->f_back = fl->frame;
+        fl->frame = f;
     }
     else
         PyObject_GC_Del(f);
@@ -527,12 +565,9 @@ PyDoc_STRVAR(clear__doc__,
 static PyObject *
 frame_sizeof(PyFrameObject *f, PyObject *Py_UNUSED(ignored))
 {
-    Py_ssize_t res, extras, ncells, nfrees;
+    Py_ssize_t res, extras;
 
-    ncells = PyTuple_GET_SIZE(f->f_code->co_cellvars);
-    nfrees = PyTuple_GET_SIZE(f->f_code->co_freevars);
-    extras = f->f_code->co_stacksize + f->f_code->co_nlocals +
-             ncells + nfrees;
+    extras = frame_get_num_extras(f->f_code);
     /* subtract one as it is already included in PyFrameObject */
     res = sizeof(PyFrameObject) + (extras-1) * sizeof(PyObject *);
 
@@ -655,7 +690,8 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
         nfrees = PyTuple_GET_SIZE(code->co_freevars);
         extras = code->co_stacksize + code->co_nlocals + ncells +
             nfrees;
-        if (free_list == NULL) {
+        free_list_t *fl = frame_get_freelist(frame_get_alloc_size(extras));
+        if (fl->frame == NULL) {
             f = PyObject_GC_NewVar(PyFrameObject, &PyFrame_Type,
             extras);
             if (f == NULL) {
@@ -664,10 +700,10 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
             }
         }
         else {
-            assert(numfree > 0);
-            --numfree;
-            f = free_list;
-            free_list = free_list->f_back;
+            assert(fl->numfree > 0);
+            fl->numfree--;
+            f = fl->frame;
+            fl->frame = fl->frame->f_back;
             if (Py_SIZE(f) < extras) {
                 PyFrameObject *new_f = PyObject_GC_Resize(PyFrameObject, f, extras);
                 if (new_f == NULL) {
@@ -971,20 +1007,27 @@ PyFrame_LocalsToFast(PyFrameObject *f, int clear)
     PyErr_Restore(error_type, error_value, error_traceback);
 }
 
+static int
+frame_clear_freelist(free_list_t *fl)
+{
+    int freelist_size = fl->numfree;
+
+    while (fl->frame != NULL) {
+        PyFrameObject *f = fl->frame;
+        fl->frame = fl->frame->f_back;
+        PyObject_GC_Del(f);
+        fl->numfree--;
+    }
+    assert(fl->numfree == 0);
+    return freelist_size;
+}
+
 /* Clear out the free list */
 int
 PyFrame_ClearFreeList(void)
 {
-    int freelist_size = numfree;
-
-    while (free_list != NULL) {
-        PyFrameObject *f = free_list;
-        free_list = free_list->f_back;
-        PyObject_GC_Del(f);
-        --numfree;
-    }
-    assert(numfree == 0);
-    return freelist_size;
+    return (frame_clear_freelist(&large_free_list) +
+            frame_clear_freelist(&small_free_list));
 }
 
 void
@@ -997,6 +1040,7 @@ PyFrame_Fini(void)
 void
 _PyFrame_DebugMallocStats(FILE *out)
 {
+    int numfree = large_free_list.numfree + small_free_list.numfree;
     _PyDebugAllocatorStats(out,
                            "free PyFrameObject",
                            numfree, sizeof(PyFrameObject));
