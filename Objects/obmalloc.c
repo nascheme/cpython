@@ -847,7 +847,7 @@ static int running_on_valgrind = -1;
  * Arenas are allocated with mmap() on systems supporting anonymous memory
  * mappings to reduce heap fragmentation.
  */
-#define ARENA_SIZE              (256 << 10)     /* 256KB */
+#define ARENA_SIZE              (1 << 24)     /* 16 MiB */
 
 #ifdef WITH_MEMORY_LIMITS
 #define MAX_ARENAS              (SMALL_MEMORY_LIMIT / ARENA_SIZE)
@@ -857,7 +857,8 @@ static int running_on_valgrind = -1;
  * Size of the pools used for small blocks. Should be a power of 2,
  * between 1K and SYSTEM_PAGE_SIZE, that is: 1k, 2k, 4k.
  */
-#define POOL_SIZE               (SYSTEM_PAGE_SIZE*1) /* must be 2^N */
+#define POOL_BITS               14
+#define POOL_SIZE               (1 << POOL_BITS) /* 4 KiB */
 #define POOL_SIZE_MASK          (POOL_SIZE - 1)
 
 /*
@@ -2698,11 +2699,11 @@ _PyObject_DebugMallocStats(FILE *out)
 #define ALIGNMENT_MASK (ALIGNMENT_LENGTH-1)
 
 // index to object cell within pool
-#define CELL_OFFSET_BITS 8
+#define CELL_OFFSET_BITS (POOL_BITS-ALIGNMENT_SHIFT) // 8 for 4 KiB pool
 #define CELL_OFFSET_LENGTH (1<<CELL_OFFSET_BITS)
 #define CELL_OFFSET_MASK (CELL_OFFSET_LENGTH-1)
 
-#define L3_BITS 16
+#define L3_BITS (24-CELL_OFFSET_BITS)
 #define L3_LENGTH (1<<L3_BITS)
 #define L3_MASK (L3_LENGTH-1)
 
