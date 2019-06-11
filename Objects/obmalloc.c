@@ -915,8 +915,8 @@ static int running_on_valgrind = -1;
  * Size of the pools used for small blocks. Should be a power of 2,
  * between 1K and SYSTEM_PAGE_SIZE, that is: 1k, 2k, 4k.
  */
-#define POOL_SIZE               SYSTEM_PAGE_SIZE        /* must be 2^N */
-#define POOL_SIZE_MASK          SYSTEM_PAGE_SIZE_MASK
+#define POOL_SIZE               (SYSTEM_PAGE_SIZE*1) /* must be 2^N */
+#define POOL_SIZE_MASK          (POOL_SIZE - 1)
 
 #define MAX_POOLS_IN_ARENA  (ARENA_SIZE / POOL_SIZE)
 #if MAX_POOLS_IN_ARENA * POOL_SIZE != ARENA_SIZE
@@ -1214,6 +1214,27 @@ _Py_GetAllocatedBlocks(void)
     return _Py_AllocatedBlocks;
 }
 
+static void pool_mark_used(block *op, int is_used);
+static int pool_is_used(block *op);
+
+/* mark all pools in arena as used or not used */
+static void
+arena_mark_pools(struct arena_object *ao, int used)
+{
+    block *p = (block*)ao->address;
+    uint n = MAX_POOLS_IN_ARENA;
+    uint excess = (uint)(ao->address & POOL_SIZE_MASK);
+    if (excess != 0) {
+        --n;
+        p += POOL_SIZE - excess;
+    }
+    //fprintf(stderr, "use arena %p %d\n", ao, used);
+    for (uint i = 0; i < MAX_POOLS_IN_ARENA; i++) {
+        //fprintf(stderr, "use pool %p %d %d\n", p, i, used);
+        pool_mark_used(p, used);
+        p += POOL_SIZE;
+    }
+}
 
 /* Allocate a new arena.  If we run out of memory, return NULL.  Else
  * allocate a new arena, and return the address of an arena_object
@@ -1309,6 +1330,8 @@ new_arena(void)
     }
     arenaobj->ntotalpools = arenaobj->nfreepools;
 
+    arena_mark_pools(arenaobj, 1);
+
     return arenaobj;
 }
 
@@ -1393,6 +1416,7 @@ static bool _Py_NO_ADDRESS_SAFETY_ANALYSIS
             _Py_NO_SANITIZE_MEMORY
 address_in_range(void *p, poolp pool)
 {
+#if 0
     // Since address_in_range may be reading from memory which was not allocated
     // by Python, it is important that pool->arenaindex is read only once, as
     // another thread may be concurrently modifying the value without holding
@@ -1402,6 +1426,9 @@ address_in_range(void *p, poolp pool)
     return arenaindex < maxarenas &&
         (uintptr_t)p - arenas[arenaindex].address < ARENA_SIZE &&
         arenas[arenaindex].address != 0;
+#else
+    return pool_is_used(p);
+#endif
 }
 
 
@@ -1804,6 +1831,9 @@ pymalloc_free(void *ctx, void *p)
          */
         ao->nextarena = unused_arena_objects;
         unused_arena_objects = ao;
+
+        /* mark pools as not under control of obmalloc */
+        arena_mark_pools(ao, 0);
 
         /* Free the entire arena. */
         _PyObject_Arena.free(_PyObject_Arena.ctx,
@@ -2738,5 +2768,117 @@ _PyObject_DebugMallocStats(FILE *out)
     (void)printone(out, "Total", total);
     return 1;
 }
+
+//////////////////////////////////////////////////////////
+// obmalloc, radix tree
+
+
+// radix key (4 KiB pool):
+//   18 -> L1
+//   18 -> L2
+//   16 -> L3 -> pool
+//    8 -> cell within pool
+//    4 -> zero due to 16-byte alignment
+//-----
+//   64
+
+
+// alignment of malloc() pointers, 4 bits on 64-bit platforms
+#define ALIGNMENT_BITS ALIGNMENT_SHIFT
+#define ALIGNMENT_LENGTH (1<<ALIGNMENT_SHIFT)
+#define ALIGNMENT_MASK (ALIGNMENT_LENGTH-1)
+
+// index to object cell within pool
+#define CELL_OFFSET_BITS 8
+#define CELL_OFFSET_LENGTH (1<<CELL_OFFSET_BITS)
+#define CELL_OFFSET_MASK (CELL_OFFSET_LENGTH-1)
+
+#define L3_BITS 16
+#define L3_LENGTH (1<<L3_BITS)
+#define L3_MASK (L3_LENGTH-1)
+
+#define L2_BITS 18
+#define L2_LENGTH (1<<L2_BITS)
+#define L2_MASK (L2_LENGTH-1)
+
+#define L1_LENGTH L2_LENGTH
+
+#define L3_SHIFT (CELL_OFFSET_BITS + ALIGNMENT_BITS)
+#define L2_SHIFT (L3_BITS + L3_SHIFT)
+#define L1_SHIFT (L2_BITS + L2_SHIFT)
+
+#define AS_UINT(op) ((uintptr_t)(op))
+#define L3_INDEX(op) ((AS_UINT(op) >> L3_SHIFT) & L3_MASK)
+#define L2_INDEX(op) ((AS_UINT(op) >> L2_SHIFT) & L2_MASK)
+#define L1_INDEX(op) (AS_UINT(op) >> L1_SHIFT)
+
+
+typedef struct _node3 {
+    int8_t used[L3_LENGTH]; // FIXME: use bits
+} node3_t;
+
+typedef struct _node2 {
+    struct _node3 *ptrs[L2_LENGTH];
+} node2_t;
+
+typedef struct _node1 {
+    struct _node2 *ptrs[L1_LENGTH];
+} node1_t;
+
+static node1_t root;
+static int l1_count = 0;
+static int l2_count = 0;
+static int l3_count = 0;
+
+static node3_t *
+tree_get_l3(block *op, int create)
+{
+    int i1 = L1_INDEX(op);
+    if (root.ptrs[i1] == NULL) {
+        if (!create) {
+            return NULL;
+        }
+        // make 2nd level node
+        node2_t *n = PyMem_RawCalloc(1, sizeof(node2_t));
+        assert(n != NULL); // FIXME
+        root.ptrs[i1] = n;
+        l1_count++;
+    }
+
+    int i2 = L2_INDEX(op);
+    if (root.ptrs[i1]->ptrs[i2] == NULL) {
+        if (!create) {
+            return NULL;
+        }
+        // make 3rd level node
+        node3_t *n = PyMem_RawCalloc(1, sizeof(node3_t));
+        assert(n != NULL); // FIXME
+        root.ptrs[i1]->ptrs[i2] = n;
+        l2_count++;
+    }
+    return root.ptrs[i1]->ptrs[i2];
+}
+
+static void
+pool_mark_used(block *op, int is_used)
+{
+    node3_t *n = tree_get_l3(op, 1);
+    int i3 = L3_INDEX(op);
+    n->used[i3] = is_used;
+    l3_count++;
+}
+
+static int
+pool_is_used(block *op)
+{
+    node3_t *n = tree_get_l3(op, 0);
+    if (n == NULL)
+        return 0;
+    int i3 = L3_INDEX(op);
+    return n->used[i3];
+}
+
+// end radix tree
+//////////////////////////////////////////////////////////
 
 #endif /* #ifdef WITH_PYMALLOC */
