@@ -1173,25 +1173,6 @@ _Py_GetAllocatedBlocks(void)
 static void pool_mark_used(block *op, int is_used);
 static int pool_is_used(block *op);
 
-/* mark all pools in arena as used or not used */
-static void
-arena_mark_pools(struct arena_object *ao, int used)
-{
-    block *p = (block*)ao->address;
-    uint n = MAX_POOLS_IN_ARENA;
-    uint excess = (uint)(ao->address & POOL_SIZE_MASK);
-    if (excess != 0) {
-        --n;
-        p += POOL_SIZE - excess;
-    }
-    //fprintf(stderr, "use arena %p %d\n", ao, used);
-    for (uint i = 0; i < MAX_POOLS_IN_ARENA; i++) {
-        //fprintf(stderr, "use pool %p %d %d\n", p, i, used);
-        pool_mark_used(p, used);
-        p += POOL_SIZE;
-    }
-}
-
 /* Allocate a new arena.  If we run out of memory, return NULL.  Else
  * allocate a new arena, and return the address of an arena_object
  * describing the new arena.  It's expected that the caller will set
@@ -1286,8 +1267,6 @@ new_arena(void)
         arenaobj->pool_address += POOL_SIZE - excess;
     }
     arenaobj->ntotalpools = arenaobj->nfreepools;
-
-    arena_mark_pools(arenaobj, 1);
 
     return arenaobj;
 }
@@ -1499,6 +1478,7 @@ pymalloc_alloc(void *ctx, void **ptr_p, size_t nbytes)
          * arena_object from usable_arenas.
          */
         --usable_arenas->nfreepools;
+        pool_mark_used((block *)pool, 1);
         if (usable_arenas->nfreepools == 0) {
             /* Wholly allocated:  remove. */
             assert(usable_arenas->freepools == NULL);
@@ -1568,6 +1548,7 @@ pymalloc_alloc(void *ctx, void **ptr_p, size_t nbytes)
     pool->szidx = DUMMY_SIZE_IDX;
     usable_arenas->pool_address += POOL_SIZE;
     --usable_arenas->nfreepools;
+    pool_mark_used((block *)pool, 1);
 
     if (usable_arenas->nfreepools == 0) {
         assert(usable_arenas->nextarena == NULL ||
@@ -1718,6 +1699,7 @@ pymalloc_free(void *ctx, void *p)
     pool->nextpool = ao->freepools;
     ao->freepools = pool;
     nf = ++ao->nfreepools;
+    pool_mark_used((block *)pool, 0);
 
     /* All the rest is arena management.  We just freed
      * a pool, and there are 4 cases for arena mgmt:
@@ -1763,9 +1745,6 @@ pymalloc_free(void *ctx, void *p)
          */
         ao->nextarena = unused_arena_objects;
         unused_arena_objects = ao;
-
-        /* mark pools as not under control of obmalloc */
-        arena_mark_pools(ao, 0);
 
         /* Free the entire arena. */
         _PyObject_Arena.free(_PyObject_Arena.ctx,
