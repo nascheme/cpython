@@ -1218,6 +1218,11 @@ _Py_GetAllocatedBlocks(void)
 static void pool_mark_used(block *op, int is_used);
 static int pool_is_used(block *op);
 
+// counts of radix tree nodes
+static int l1_count = 0;
+static int l2_count = 0;
+static int l3_count = 0;
+
 /* Allocate a new arena.  If we run out of memory, return NULL.  Else
  * allocate a new arena, and return the address of an arena_object
  * describing the new arena.  It's expected that the caller will set
@@ -2735,6 +2740,12 @@ _PyObject_DebugMallocStats(FILE *out)
 
     fputc('\n', out);
 
+    (void)printone(out, "# L1 tree nodes", l1_count);
+    (void)printone(out, "# L2 tree nodes", l2_count);
+    (void)printone(out, "# L3 tree nodes", l3_count);
+
+    fputc('\n', out);
+
     total = printone(out, "# bytes in allocated blocks", allocated_bytes);
     total += printone(out, "# bytes in available blocks", available_bytes);
 
@@ -2806,9 +2817,6 @@ typedef struct _node1 {
 } node1_t;
 
 static node1_t root;
-static int l1_count = 0;
-static int l2_count = 0;
-static int l3_count = 0;
 
 static node3_t *
 tree_get_l3(block *op, int create)
