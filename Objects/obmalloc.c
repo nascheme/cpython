@@ -2773,28 +2773,21 @@ _PyObject_DebugMallocStats(FILE *out)
 //-----
 //   64
 
+// number of bits in a pointer
+#define BITS 64
 
-// alignment of malloc() pointers, 4 bits on 64-bit platforms
-#define ALIGNMENT_BITS ALIGNMENT_SHIFT
-#define ALIGNMENT_LENGTH (1<<ALIGNMENT_SHIFT)
-#define ALIGNMENT_MASK (ALIGNMENT_LENGTH-1)
+#define L1_BITS 17
+#define L1_LENGTH (1<<L1_BITS)
 
-// index to object cell within pool
-#define CELL_OFFSET_BITS (POOL_BITS-ALIGNMENT_SHIFT) // 8 for 4 KiB pool
-#define CELL_OFFSET_LENGTH (1<<CELL_OFFSET_BITS)
-#define CELL_OFFSET_MASK (CELL_OFFSET_LENGTH-1)
-
-#define L3_BITS (24-CELL_OFFSET_BITS)
-#define L3_LENGTH (1<<L3_BITS)
-#define L3_MASK (L3_LENGTH-1)
-
-#define L2_BITS 18
+#define L2_BITS 17
 #define L2_LENGTH (1<<L2_BITS)
 #define L2_MASK (L2_LENGTH-1)
 
-#define L1_LENGTH L2_LENGTH
+#define L3_BITS (BITS - L1_BITS - L2_BITS - POOL_BITS)
+#define L3_LENGTH (1<<L3_BITS)
+#define L3_MASK (L3_LENGTH-1)
 
-#define L3_SHIFT (CELL_OFFSET_BITS + ALIGNMENT_BITS)
+#define L3_SHIFT (POOL_BITS)
 #define L2_SHIFT (L3_BITS + L3_SHIFT)
 #define L1_SHIFT (L2_BITS + L2_SHIFT)
 
