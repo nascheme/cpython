@@ -1176,7 +1176,6 @@ static int pool_is_used(block *op);
 // counts of radix tree nodes
 static int l1_count = 0;
 static int l2_count = 0;
-static int l3_count = 0;
 
 /* Allocate a new arena.  If we run out of memory, return NULL.  Else
  * allocate a new arena, and return the address of an arena_object
@@ -2651,7 +2650,6 @@ _PyObject_DebugMallocStats(FILE *out)
 
     (void)printone(out, "# L1 tree nodes", l1_count);
     (void)printone(out, "# L2 tree nodes", l2_count);
-    (void)printone(out, "# L3 tree nodes", l3_count);
 
     fputc('\n', out);
 
@@ -2755,7 +2753,6 @@ pool_mark_used(block *op, int is_used)
     node3_t *n = tree_get_l3(op, 1);
     int i3 = L3_INDEX(op);
     n->used[i3] = is_used;
-    l3_count++;
 }
 
 static int
