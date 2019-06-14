@@ -2705,6 +2705,11 @@ _PyObject_DebugMallocStats(FILE *out)
 
 #define ARENA_MASK (ARENA_SIZE - 1)
 
+/* arena_coverage_t members require this to be true  */
+#if ARENA_BITS >= 32
+#   error "arena size must be < 2^32"
+#endif
+
 // bits used for L1 and L2 nodes
 #define INTERIOR_BITS ((BITS - ARENA_BITS + 2) / 3)
 
@@ -2732,10 +2737,8 @@ _PyObject_DebugMallocStats(FILE *out)
  * an array of structs, rather than two arrays of uintptr_t.
  */
 typedef struct {
-    /* actual arena base with this ideal address */
-    uintptr_t arena_base_hi;
-    /* actual arena base with one lower ideal */
-    uintptr_t arena_base_lo;
+    int32_t tail_hi;
+    int32_t tail_lo;
 } arena_coverage_t;
 
 typedef struct _node3 {
@@ -2806,8 +2809,8 @@ tree_get_l3(block *p, int create)
  * The L3 nodes for 200 and 300 both store the address of arena.  There
  * are two cases: the arena starts at a lower ideal arena and extends to
  * this one, or the arena starts in this arena and extends to the next
- * ideal arena.  The arena_base_lo and arena_base_hi members correspond
- * to these two cases.
+ * ideal arena.  The tail_lo and tail_hi members correspond to these two
+ * cases.
  */
 
 
@@ -2821,22 +2824,26 @@ tree_mark_used(uintptr_t arena_base, int is_used)
         return 0; /* failed to allocate space for node */
     }
     int i3 = L3_INDEX((block *)arena_base);
-    n_hi->arenas[i3].arena_base_hi = is_used ? arena_base : 0;
-    uintptr_t offset = (arena_base & ARENA_MASK);
-    if (offset) {
+    int32_t tail = (int32_t)(arena_base & ARENA_MASK);
+    if (tail == 0) {
+        /* is ideal arena address */
+        n_hi->arenas[i3].tail_hi = is_used ? -1 : 0;
+    }
+    else {
         /* arena_base address is not ideal (aligned to arena size) and
          * so it covers two L3 nodes.  Get the L3 node for the next
          * arena.  Note that it might be in a different L1 and L2 branch
          * so we need to call tree_get_l3() again. */
+        n_hi->arenas[i3].tail_hi = is_used ? tail : 0;
         uintptr_t arena_base_next = arena_base + ARENA_SIZE;
         node3_t *n_lo = tree_get_l3((block *)arena_base_next, is_used);
         if (n_lo == NULL) {
             assert(is_used); /* otherwise should already exist */
-            n_hi->arenas[i3].arena_base_hi = 0;
+            n_hi->arenas[i3].tail_hi = 0;
             return 0; /* failed to allocate space for node */
         }
         int i3_next = L3_INDEX(arena_base_next);
-        n_lo->arenas[i3_next].arena_base_lo = is_used ? arena_base : 0;
+        n_lo->arenas[i3_next].tail_lo = is_used ? tail : 0;
     }
     return 1;
 }
@@ -2851,12 +2858,11 @@ tree_is_marked(block *p)
         return 0;
     }
     int i3 = L3_INDEX(p);
-    uintptr_t hi = n->arenas[i3].arena_base_hi;
-    uintptr_t lo = n->arenas[i3].arena_base_lo;
-    /* this test uses the same unsigned arithmetic trick of
-     * address_in_range() in order to avoid half the compares */
-    return (hi != 0 && AS_UINT(p) - hi < ARENA_SIZE) ||
-           (lo != 0 && AS_UINT(p) - lo < ARENA_SIZE);
+    /* in order to fit tail into 32-bits, ARENA_BITS must be <= 32 */
+    int32_t hi = n->arenas[i3].tail_hi;
+    int32_t lo = n->arenas[i3].tail_lo;
+    int32_t tail = (int32_t)(AS_UINT(p) & ARENA_MASK);
+    return (tail < lo) || (tail >= hi && hi != 0);
 }
 
 // end radix tree
