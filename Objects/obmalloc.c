@@ -2807,8 +2807,8 @@ _PyObject_DebugMallocStats(FILE *out)
 
 
 typedef struct _node3 {
-    uintptr_t arena_base_hi; /* actual arena base with this ideal address */
-    uintptr_t arena_base_lo; /* actual arena base with one lower ideal */
+    uintptr_t arena_base_hi[L3_LENGTH]; /* actual arena base with this ideal address */
+    uintptr_t arena_base_lo[L3_LENGTH]; /* actual arena base with one lower ideal */
 } node3_t;
 
 typedef struct _node2 {
@@ -2834,7 +2834,6 @@ tree_get_l3(block *p, int create)
             return NULL;
         }
         root.ptrs[i1] = n;
-        fprintf(stderr, "L1 node %x\n", i1);
         l1_count++;
     }
     int i2 = L2_INDEX(p);
@@ -2860,8 +2859,9 @@ tree_is_marked(block *p)
     if (n == NULL) {
         return 0;
     }
-    uintptr_t hi = n->arena_base_hi;
-    uintptr_t lo = n->arena_base_lo;
+    int i3 = L3_INDEX(p);
+    uintptr_t hi = n->arena_base_hi[i3];
+    uintptr_t lo = n->arena_base_lo[i3];
     return (hi != 0 && AS_UINT(p) - hi < ARENA_SIZE) ||
            (lo != 0 && AS_UINT(p) - lo < ARENA_SIZE);
 }
@@ -2875,11 +2875,14 @@ tree_mark_used(uintptr_t arena_base, int is_used)
         assert(is_used); /* should find node otherwise */
         return 0; /* failed to allocate space for node */
     }
-    n_hi->arena_base_hi = is_used ? arena_base : 0;
+    int i3 = L3_INDEX((block *)arena_base);
+    n_hi->arena_base_hi[i3] = is_used ? arena_base : 0;
+#if 0
     fprintf(stderr, "L1_BITS %d L3_BITS %d L3_SHIFT %d\n", L1_BITS, L3_BITS, L3_SHIFT);
     fprintf(stderr, "arena_base_hi %lx %lx %d size %x\n",
             arena_base >> ARENA_BITS,
-            n_hi->arena_base_hi, is_used, ARENA_SIZE);
+            n_hi->arena_base_hi[i3], is_used, ARENA_SIZE);
+#endif
     uintptr_t offset = (arena_base & ARENA_MASK);
     if (offset) {
         /* arena address is not ideal (aligned to arena size) */
@@ -2887,13 +2890,16 @@ tree_mark_used(uintptr_t arena_base, int is_used)
         node3_t *n_lo = tree_get_l3((block *)arena_base_next, is_used);
         if (n_lo == NULL) {
             assert(is_used); /* should find node otherwise */
-            n_hi->arena_base_hi = 0;
+            n_hi->arena_base_hi[i3] = 0;
             return 0; /* failed to allocate space for node */
         }
-        n_lo->arena_base_lo = is_used ? arena_base : 0;
+        int i3_next = L3_INDEX(arena_base_next);
+        n_lo->arena_base_lo[i3_next] = is_used ? arena_base : 0;
+#if 0
         fprintf(stderr, "arena_base_lo %lx %lx %d offset %lx\n",
                 arena_base_next >> ARENA_BITS,
-                n_lo->arena_base_lo, is_used, offset);
+                n_lo->arena_base_lo[i3_next], is_used, offset);
+#endif
     }
     return 1;
 }
