@@ -3,7 +3,6 @@
 
 #include <stdbool.h>
 
-
 /* Defined in tracemalloc.c */
 extern void _PyMem_DumpTraceback(int fd, const void *ptr);
 
@@ -51,6 +50,11 @@ static void _PyMem_SetupDebugHooksDomain(PyMemAllocatorDomain domain);
 #    define _Py_NO_SANITIZE_THREAD __attribute__((no_sanitize_thread))
 #  endif
 #endif
+
+/* If defined, use radix tree to find if address is controlled by
+ * obmalloc.  Otherwise, we use a slightly memory unsanitary scheme that
+ * has the advantage of performing very well.  */
+#define WITH_RADIX_TREE
 
 #ifndef _Py_NO_ADDRESS_SAFETY_ANALYSIS
 #  define _Py_NO_ADDRESS_SAFETY_ANALYSIS
@@ -906,7 +910,7 @@ static int running_on_valgrind = -1;
  * mappings to reduce heap fragmentation.
  */
 #define ARENA_BITS              24
-#define ARENA_SIZE              (1 << ARENA_BITS)     /* 1 MiB */
+#define ARENA_SIZE              (1 << ARENA_BITS)     /* 16 MiB */
 
 #ifdef WITH_MEMORY_LIMITS
 #define MAX_ARENAS              (SMALL_MEMORY_LIMIT / ARENA_SIZE)
@@ -916,8 +920,8 @@ static int running_on_valgrind = -1;
  * Size of the pools used for small blocks. Should be a power of 2,
  * between 1K and SYSTEM_PAGE_SIZE, that is: 1k, 2k, 4k.
  */
-#define POOL_BITS               14
-#define POOL_SIZE               (1 << POOL_BITS) /* 4 KiB */
+#define POOL_BITS               12
+#define POOL_SIZE               (1 << POOL_BITS)
 #define POOL_SIZE_MASK          (POOL_SIZE - 1)
 
 #define MAX_POOLS_IN_ARENA  (ARENA_SIZE / POOL_SIZE)
@@ -1216,12 +1220,14 @@ _Py_GetAllocatedBlocks(void)
     return _Py_AllocatedBlocks;
 }
 
+#ifdef WITH_RADIX_TREE
 static int tree_is_marked(block *op);
 static int tree_mark_used(uintptr_t arena_base, int is_used);
 
 // counts of radix tree nodes
 static int l1_count = 0;
 static int l2_count = 0;
+#endif
 
 /* Allocate a new arena.  If we run out of memory, return NULL.  Else
  * allocate a new arena, and return the address of an arena_object
@@ -1291,6 +1297,7 @@ new_arena(void)
     unused_arena_objects = arenaobj->nextarena;
     assert(arenaobj->address == 0);
     address = _PyObject_Arena.alloc(_PyObject_Arena.ctx, ARENA_SIZE);
+#ifdef WITH_RADIX_TREE
     if (address != NULL) {
         if (!tree_mark_used((uintptr_t)address, 1)) {
             /* marking arena in radix tree failed, abort */
@@ -1298,6 +1305,7 @@ new_arena(void)
             address = NULL;
         }
     }
+#endif
     if (address == NULL) {
         /* The allocation failed: return NULL after putting the
          * arenaobj back.
@@ -1408,7 +1416,9 @@ static bool _Py_NO_ADDRESS_SAFETY_ANALYSIS
             _Py_NO_SANITIZE_MEMORY
 address_in_range(void *p, poolp pool)
 {
-#if 0
+#ifdef WITH_RADIX_TREE
+    return tree_is_marked(p);
+#else
     // Since address_in_range may be reading from memory which was not allocated
     // by Python, it is important that pool->arenaindex is read only once, as
     // another thread may be concurrently modifying the value without holding
@@ -1418,8 +1428,6 @@ address_in_range(void *p, poolp pool)
     return arenaindex < maxarenas &&
         (uintptr_t)p - arenas[arenaindex].address < ARENA_SIZE &&
         arenas[arenaindex].address != 0;
-#else
-    return tree_is_marked(p);
 #endif
 }
 
@@ -1824,8 +1832,10 @@ pymalloc_free(void *ctx, void *p)
         ao->nextarena = unused_arena_objects;
         unused_arena_objects = ao;
 
+#ifdef WITH_RADIX_TREE
         /* mark arena as not under control of obmalloc */
         tree_mark_used(ao->address, 0);
+#endif
 
         /* Free the entire arena. */
         _PyObject_Arena.free(_PyObject_Arena.ctx,
@@ -2747,8 +2757,10 @@ _PyObject_DebugMallocStats(FILE *out)
 
     fputc('\n', out);
 
+#ifdef WITH_RADIX_TREE
     (void)printone(out, "# L1 tree nodes", l1_count);
     (void)printone(out, "# L2 tree nodes", l2_count);
+#endif
 
     fputc('\n', out);
 
@@ -2766,6 +2778,8 @@ _PyObject_DebugMallocStats(FILE *out)
     return 1;
 }
 
+
+#ifdef WITH_RADIX_TREE
 //////////////////////////////////////////////////////////
 // obmalloc, radix tree for tracking arena coverage
 
@@ -2805,10 +2819,11 @@ _PyObject_DebugMallocStats(FILE *out)
 #define L2_INDEX(p) ((AS_UINT(p) >> L2_SHIFT) & L2_MASK)
 #define L1_INDEX(p) (AS_UINT(p) >> L1_SHIFT)
 
-
 typedef struct _node3 {
-    uintptr_t arena_base_hi[L3_LENGTH]; /* actual arena base with this ideal address */
-    uintptr_t arena_base_lo[L3_LENGTH]; /* actual arena base with one lower ideal */
+    /* actual arena base with this ideal address */
+    uintptr_t arena_base_hi[L3_LENGTH];
+    /* actual arena base with one lower ideal */
+    uintptr_t arena_base_lo[L3_LENGTH];
 } node3_t;
 
 typedef struct _node2 {
@@ -2819,13 +2834,19 @@ typedef struct _node1 {
     struct _node2 *ptrs[L1_LENGTH];
 } node1_t;
 
-static node1_t root;
+/* the root of tree and contains all L1 nodes.  Note that by
+ * initializing like this, the memory should be in the BSS.  The OS will
+ * only map pages as the L1 nodes get used.
+ */
+static node1_t tree_root;
 
+/* return a pointer to a L3 node, return NULL if it doesn't exist
+ * or it cannot be created */
 static node3_t *
 tree_get_l3(block *p, int create)
 {
     int i1 = L1_INDEX(p);
-    if (root.ptrs[i1] == NULL) {
+    if (tree_root.ptrs[i1] == NULL) {
         if (!create) {
             return NULL;
         }
@@ -2833,11 +2854,11 @@ tree_get_l3(block *p, int create)
         if (n == NULL) {
             return NULL;
         }
-        root.ptrs[i1] = n;
+        tree_root.ptrs[i1] = n;
         l1_count++;
     }
     int i2 = L2_INDEX(p);
-    if (root.ptrs[i1]->ptrs[i2] == NULL) {
+    if (tree_root.ptrs[i1]->ptrs[i2] == NULL) {
         if (!create) {
             return NULL;
         }
@@ -2845,13 +2866,67 @@ tree_get_l3(block *p, int create)
         if (n == NULL) {
             return NULL;
         }
-        root.ptrs[i1]->ptrs[i2] = n;
+        tree_root.ptrs[i1]->ptrs[i2] = n;
         l2_count++;
     }
-    return root.ptrs[i1]->ptrs[i2];
+    return tree_root.ptrs[i1]->ptrs[i2];
 }
 
-/* return true if 'p' is a pointer inside an obmalloc arena */
+/* The radix tree only tracks arenas.  So, for 16 MiB arenas, we throw
+ * away 24 bits of the address.  That reduces the space requirement of
+ * the tree compared to similar radix tree page-map schemes.  In
+ * exchange for slashing the space requirement, it needs more
+ * computation to check an address. 
+ *
+ * We create a L3 node for each "ideal" arena address.  It is easier to
+ * explain in decimal so let's say that the arena size is 100 bytes.
+ * Then, ideal addresses are 100, 200, 300, etc.  For checking if a
+ * pointer address is inside an actual (potentially non-ideal) arena, we
+ * have to check two ideal arena addresses and therefore two L3 nodes.
+ * E.g. if pointer is 357, we need to check L3 nodes for 200 and 300.
+ * In the rare case that an arena is aligned in the ideal way (e.g. base
+ * address of arena is 200) then we only have to check one L3 node.
+ *
+ * The L3 nodes for 200 and 300 both store the address of arena.  There
+ * are two cases: the arena starts at a lower ideal arena and extends to
+ * this one, or the arena starts in this arena and extends to the next
+ * ideal arena.  The arena_base_lo and arena_base_hi members correspond
+ * to these two cases.
+ */
+
+
+/* mark or unmark addresses covered by arena */
+static int
+tree_mark_used(uintptr_t arena_base, int is_used)
+{
+    node3_t *n_hi = tree_get_l3((block *)arena_base, is_used);
+    if (n_hi == NULL) {
+        assert(is_used); /* otherwise node should already exist */
+        return 0; /* failed to allocate space for node */
+    }
+    int i3 = L3_INDEX((block *)arena_base);
+    n_hi->arena_base_hi[i3] = is_used ? arena_base : 0;
+    uintptr_t offset = (arena_base & ARENA_MASK);
+    if (offset) {
+        /* arena_base address is not ideal (aligned to arena size) and
+         * so it covers two L3 nodes.  Get the L3 node for the next
+         * arena.  Note that it might be in a different L1 and L2 branch
+         * so we need to call tree_get_l3() again. */
+        uintptr_t arena_base_next = arena_base + ARENA_SIZE;
+        node3_t *n_lo = tree_get_l3((block *)arena_base_next, is_used);
+        if (n_lo == NULL) {
+            assert(is_used); /* otherwise should already exist */
+            n_hi->arena_base_hi[i3] = 0;
+            return 0; /* failed to allocate space for node */
+        }
+        int i3_next = L3_INDEX(arena_base_next);
+        n_lo->arena_base_lo[i3_next] = is_used ? arena_base : 0;
+    }
+    return 1;
+}
+
+/* return true if 'p' is a pointer inside an obmalloc arena.
+ * _PyObject_Free() calls this so it needs to be very fast. */
 static int
 tree_is_marked(block *p)
 {
@@ -2862,49 +2937,14 @@ tree_is_marked(block *p)
     int i3 = L3_INDEX(p);
     uintptr_t hi = n->arena_base_hi[i3];
     uintptr_t lo = n->arena_base_lo[i3];
+    /* this test uses the same unsigned arithmetic trick of
+     * address_in_range() in order to avoid half the compares */
     return (hi != 0 && AS_UINT(p) - hi < ARENA_SIZE) ||
            (lo != 0 && AS_UINT(p) - lo < ARENA_SIZE);
 }
 
-/* mark or unmark addresses covered by arena */
-static int
-tree_mark_used(uintptr_t arena_base, int is_used)
-{
-    node3_t *n_hi = tree_get_l3((block *)arena_base, is_used);
-    if (n_hi == NULL) {
-        assert(is_used); /* should find node otherwise */
-        return 0; /* failed to allocate space for node */
-    }
-    int i3 = L3_INDEX((block *)arena_base);
-    n_hi->arena_base_hi[i3] = is_used ? arena_base : 0;
-#if 0
-    fprintf(stderr, "L1_BITS %d L3_BITS %d L3_SHIFT %d\n", L1_BITS, L3_BITS, L3_SHIFT);
-    fprintf(stderr, "arena_base_hi %lx %lx %d size %x\n",
-            arena_base >> ARENA_BITS,
-            n_hi->arena_base_hi[i3], is_used, ARENA_SIZE);
-#endif
-    uintptr_t offset = (arena_base & ARENA_MASK);
-    if (offset) {
-        /* arena address is not ideal (aligned to arena size) */
-        uintptr_t arena_base_next = arena_base + ARENA_SIZE;
-        node3_t *n_lo = tree_get_l3((block *)arena_base_next, is_used);
-        if (n_lo == NULL) {
-            assert(is_used); /* should find node otherwise */
-            n_hi->arena_base_hi[i3] = 0;
-            return 0; /* failed to allocate space for node */
-        }
-        int i3_next = L3_INDEX(arena_base_next);
-        n_lo->arena_base_lo[i3_next] = is_used ? arena_base : 0;
-#if 0
-        fprintf(stderr, "arena_base_lo %lx %lx %d offset %lx\n",
-                arena_base_next >> ARENA_BITS,
-                n_lo->arena_base_lo[i3_next], is_used, offset);
-#endif
-    }
-    return 1;
-}
-
 // end radix tree
 //////////////////////////////////////////////////////////
+#endif /* WITH_RADIX_TREE */
 
 #endif /* #ifdef WITH_PYMALLOC */
