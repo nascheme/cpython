@@ -905,7 +905,8 @@ static int running_on_valgrind = -1;
  * Arenas are allocated with mmap() on systems supporting anonymous memory
  * mappings to reduce heap fragmentation.
  */
-#define ARENA_SIZE              (1 << 20)     /* 1 MiB */
+#define ARENA_BITS              24
+#define ARENA_SIZE              (1 << ARENA_BITS)     /* 1 MiB */
 
 #ifdef WITH_MEMORY_LIMITS
 #define MAX_ARENAS              (SMALL_MEMORY_LIMIT / ARENA_SIZE)
@@ -1215,8 +1216,8 @@ _Py_GetAllocatedBlocks(void)
     return _Py_AllocatedBlocks;
 }
 
-static void pool_mark_used(block *op, int is_used);
-static int pool_is_used(block *op);
+static int tree_is_marked(block *op);
+static int tree_mark_used(uintptr_t arena_base, int is_used);
 
 // counts of radix tree nodes
 static int l1_count = 0;
@@ -1290,6 +1291,13 @@ new_arena(void)
     unused_arena_objects = arenaobj->nextarena;
     assert(arenaobj->address == 0);
     address = _PyObject_Arena.alloc(_PyObject_Arena.ctx, ARENA_SIZE);
+    if (address != NULL) {
+        if (!tree_mark_used((uintptr_t)address, 1)) {
+            /* marking arena in radix tree failed, abort */
+            _PyObject_Arena.free(_PyObject_Arena.ctx, address, ARENA_SIZE);
+            address = NULL;
+        }
+    }
     if (address == NULL) {
         /* The allocation failed: return NULL after putting the
          * arenaobj back.
@@ -1411,7 +1419,7 @@ address_in_range(void *p, poolp pool)
         (uintptr_t)p - arenas[arenaindex].address < ARENA_SIZE &&
         arenas[arenaindex].address != 0;
 #else
-    return pool_is_used(p);
+    return tree_is_marked(p);
 #endif
 }
 
@@ -1535,7 +1543,6 @@ pymalloc_alloc(void *ctx, void **ptr_p, size_t nbytes)
         /* Unlink from cached pools. */
         usable_arenas->freepools = pool->nextpool;
         --usable_arenas->nfreepools;
-        pool_mark_used((block *)pool, 1);
         if (usable_arenas->nfreepools == 0) {
             /* Wholly allocated:  remove. */
             assert(usable_arenas->freepools == NULL);
@@ -1604,7 +1611,6 @@ pymalloc_alloc(void *ctx, void **ptr_p, size_t nbytes)
     pool->szidx = DUMMY_SIZE_IDX;
     usable_arenas->pool_address += POOL_SIZE;
     --usable_arenas->nfreepools;
-    pool_mark_used((block *)pool, 1);
 
     if (usable_arenas->nfreepools == 0) {
         assert(usable_arenas->nextarena == NULL ||
@@ -1767,7 +1773,6 @@ pymalloc_free(void *ctx, void *p)
         nfp2lasta[nf] = (p != NULL && p->nfreepools == nf) ? p : NULL;
     }
     ao->nfreepools = ++nf;
-    pool_mark_used((block *)pool, 0);
 
     /* All the rest is arena management.  We just freed
      * a pool, and there are 4 cases for arena mgmt:
@@ -1818,6 +1823,9 @@ pymalloc_free(void *ctx, void *p)
          */
         ao->nextarena = unused_arena_objects;
         unused_arena_objects = ao;
+
+        /* mark arena as not under control of obmalloc */
+        tree_mark_used(ao->address, 0);
 
         /* Free the entire arena. */
         _PyObject_Arena.free(_PyObject_Arena.ctx,
@@ -2759,44 +2767,48 @@ _PyObject_DebugMallocStats(FILE *out)
 }
 
 //////////////////////////////////////////////////////////
-// obmalloc, radix tree
+// obmalloc, radix tree for tracking arena coverage
 
-
-// radix key (4 KiB pool):
-//   18 -> L1
-//   18 -> L2
-//   16 -> L3 -> pool
-//    8 -> cell within pool
-//    4 -> zero due to 16-byte alignment
+// radix key (2^24 arena size)
+//   14 -> L1
+//   14 -> L2
+//   12 -> L3
+//   24 -> ideal aligned arena
 //-----
 //   64
 
 // number of bits in a pointer
 #define BITS 64
 
-#define L1_BITS 17
-#define L1_LENGTH (1<<L1_BITS)
+#define ARENA_MASK (ARENA_SIZE - 1)
 
-#define L2_BITS 17
-#define L2_LENGTH (1<<L2_BITS)
-#define L2_MASK (L2_LENGTH-1)
+// bits used for L1 and L2 nodes
+#define INTERIOR_BITS ((BITS - ARENA_BITS + 2) / 3)
 
-#define L3_BITS (BITS - L1_BITS - L2_BITS - POOL_BITS)
-#define L3_LENGTH (1<<L3_BITS)
-#define L3_MASK (L3_LENGTH-1)
+#define L1_BITS INTERIOR_BITS
+#define L1_LENGTH (1 << L1_BITS)
 
-#define L3_SHIFT (POOL_BITS)
+#define L2_BITS INTERIOR_BITS
+#define L2_LENGTH (1 << L2_BITS)
+#define L2_MASK (L2_LENGTH - 1)
+
+#define L3_BITS (BITS - ARENA_BITS - 2*INTERIOR_BITS)
+#define L3_LENGTH (1 << L3_BITS)
+#define L3_MASK (L3_LENGTH - 1)
+
+#define L3_SHIFT ARENA_BITS
 #define L2_SHIFT (L3_BITS + L3_SHIFT)
 #define L1_SHIFT (L2_BITS + L2_SHIFT)
 
-#define AS_UINT(op) ((uintptr_t)(op))
-#define L3_INDEX(op) ((AS_UINT(op) >> L3_SHIFT) & L3_MASK)
-#define L2_INDEX(op) ((AS_UINT(op) >> L2_SHIFT) & L2_MASK)
-#define L1_INDEX(op) (AS_UINT(op) >> L1_SHIFT)
+#define AS_UINT(p) ((uintptr_t)(p))
+#define L3_INDEX(p) ((AS_UINT(p) >> L3_SHIFT) & L3_MASK)
+#define L2_INDEX(p) ((AS_UINT(p) >> L2_SHIFT) & L2_MASK)
+#define L1_INDEX(p) (AS_UINT(p) >> L1_SHIFT)
 
 
 typedef struct _node3 {
-    int8_t used[L3_LENGTH]; // FIXME: use bits
+    uintptr_t arena_base_hi; /* actual arena base with this ideal address */
+    uintptr_t arena_base_lo; /* actual arena base with one lower ideal */
 } node3_t;
 
 typedef struct _node2 {
@@ -2810,50 +2822,80 @@ typedef struct _node1 {
 static node1_t root;
 
 static node3_t *
-tree_get_l3(block *op, int create)
+tree_get_l3(block *p, int create)
 {
-    int i1 = L1_INDEX(op);
+    int i1 = L1_INDEX(p);
     if (root.ptrs[i1] == NULL) {
         if (!create) {
             return NULL;
         }
-        // make 2nd level node
         node2_t *n = PyMem_RawCalloc(1, sizeof(node2_t));
-        assert(n != NULL); // FIXME
+        if (n == NULL) {
+            return NULL;
+        }
         root.ptrs[i1] = n;
+        fprintf(stderr, "L1 node %x\n", i1);
         l1_count++;
     }
-
-    int i2 = L2_INDEX(op);
+    int i2 = L2_INDEX(p);
     if (root.ptrs[i1]->ptrs[i2] == NULL) {
         if (!create) {
             return NULL;
         }
-        // make 3rd level node
         node3_t *n = PyMem_RawCalloc(1, sizeof(node3_t));
-        assert(n != NULL); // FIXME
+        if (n == NULL) {
+            return NULL;
+        }
         root.ptrs[i1]->ptrs[i2] = n;
         l2_count++;
     }
     return root.ptrs[i1]->ptrs[i2];
 }
 
-static void
-pool_mark_used(block *op, int is_used)
+/* return true if 'p' is a pointer inside an obmalloc arena */
+static int
+tree_is_marked(block *p)
 {
-    node3_t *n = tree_get_l3(op, 1);
-    int i3 = L3_INDEX(op);
-    n->used[i3] = is_used;
+    node3_t *n = tree_get_l3(p, 0);
+    if (n == NULL) {
+        return 0;
+    }
+    uintptr_t hi = n->arena_base_hi;
+    uintptr_t lo = n->arena_base_lo;
+    return (hi != 0 && AS_UINT(p) - hi < ARENA_SIZE) ||
+           (lo != 0 && AS_UINT(p) - lo < ARENA_SIZE);
 }
 
+/* mark or unmark addresses covered by arena */
 static int
-pool_is_used(block *op)
+tree_mark_used(uintptr_t arena_base, int is_used)
 {
-    node3_t *n = tree_get_l3(op, 0);
-    if (n == NULL)
-        return 0;
-    int i3 = L3_INDEX(op);
-    return n->used[i3];
+    node3_t *n_hi = tree_get_l3((block *)arena_base, is_used);
+    if (n_hi == NULL) {
+        assert(is_used); /* should find node otherwise */
+        return 0; /* failed to allocate space for node */
+    }
+    n_hi->arena_base_hi = is_used ? arena_base : 0;
+    fprintf(stderr, "L1_BITS %d L3_BITS %d L3_SHIFT %d\n", L1_BITS, L3_BITS, L3_SHIFT);
+    fprintf(stderr, "arena_base_hi %lx %lx %d size %x\n",
+            arena_base >> ARENA_BITS,
+            n_hi->arena_base_hi, is_used, ARENA_SIZE);
+    uintptr_t offset = (arena_base & ARENA_MASK);
+    if (offset) {
+        /* arena address is not ideal (aligned to arena size) */
+        uintptr_t arena_base_next = arena_base + ARENA_SIZE;
+        node3_t *n_lo = tree_get_l3((block *)arena_base_next, is_used);
+        if (n_lo == NULL) {
+            assert(is_used); /* should find node otherwise */
+            n_hi->arena_base_hi = 0;
+            return 0; /* failed to allocate space for node */
+        }
+        n_lo->arena_base_lo = is_used ? arena_base : 0;
+        fprintf(stderr, "arena_base_lo %lx %lx %d offset %lx\n",
+                arena_base_next >> ARENA_BITS,
+                n_lo->arena_base_lo, is_used, offset);
+    }
+    return 1;
 }
 
 // end radix tree
