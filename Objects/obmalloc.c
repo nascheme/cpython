@@ -2819,11 +2819,18 @@ _PyObject_DebugMallocStats(FILE *out)
 #define L2_INDEX(p) ((AS_UINT(p) >> L2_SHIFT) & L2_MASK)
 #define L1_INDEX(p) (AS_UINT(p) >> L1_SHIFT)
 
-typedef struct _node3 {
+/* these two members are accessed together.  It better to have them as
+ * an array of structs, rather than two arrays of uintptr_t.
+ */
+typedef struct {
     /* actual arena base with this ideal address */
-    uintptr_t arena_base_hi[L3_LENGTH];
+    uintptr_t arena_base_hi;
     /* actual arena base with one lower ideal */
-    uintptr_t arena_base_lo[L3_LENGTH];
+    uintptr_t arena_base_lo;
+} arena_coverage_t;
+
+typedef struct _node3 {
+    arena_coverage_t arenas[L3_LENGTH];
 } node3_t;
 
 typedef struct _node2 {
@@ -2905,7 +2912,7 @@ tree_mark_used(uintptr_t arena_base, int is_used)
         return 0; /* failed to allocate space for node */
     }
     int i3 = L3_INDEX((block *)arena_base);
-    n_hi->arena_base_hi[i3] = is_used ? arena_base : 0;
+    n_hi->arenas[i3].arena_base_hi = is_used ? arena_base : 0;
     uintptr_t offset = (arena_base & ARENA_MASK);
     if (offset) {
         /* arena_base address is not ideal (aligned to arena size) and
@@ -2916,11 +2923,11 @@ tree_mark_used(uintptr_t arena_base, int is_used)
         node3_t *n_lo = tree_get_l3((block *)arena_base_next, is_used);
         if (n_lo == NULL) {
             assert(is_used); /* otherwise should already exist */
-            n_hi->arena_base_hi[i3] = 0;
+            n_hi->arenas[i3].arena_base_hi = 0;
             return 0; /* failed to allocate space for node */
         }
         int i3_next = L3_INDEX(arena_base_next);
-        n_lo->arena_base_lo[i3_next] = is_used ? arena_base : 0;
+        n_lo->arenas[i3_next].arena_base_lo = is_used ? arena_base : 0;
     }
     return 1;
 }
@@ -2935,8 +2942,8 @@ tree_is_marked(block *p)
         return 0;
     }
     int i3 = L3_INDEX(p);
-    uintptr_t hi = n->arena_base_hi[i3];
-    uintptr_t lo = n->arena_base_lo[i3];
+    uintptr_t hi = n->arenas[i3].arena_base_hi;
+    uintptr_t lo = n->arenas[i3].arena_base_lo;
     /* this test uses the same unsigned arithmetic trick of
      * address_in_range() in order to avoid half the compares */
     return (hi != 0 && AS_UINT(p) - hi < ARENA_SIZE) ||
