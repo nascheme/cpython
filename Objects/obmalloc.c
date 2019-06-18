@@ -52,8 +52,10 @@ static void _PyMem_SetupDebugHooksDomain(PyMemAllocatorDomain domain);
 
 /* If defined, use radix tree to find if address is controlled by
  * obmalloc.  Otherwise, we use a slightly memory unsanitary scheme that
- * has the advantage of performing very well.  */
+ * has the advantage of performing very well. */
+#if SIZEOF_VOID_P == 8
 #define WITH_RADIX_TREE
+#endif
 
 #ifndef _Py_NO_ADDRESS_SAFETY_ANALYSIS
 #  define _Py_NO_ADDRESS_SAFETY_ANALYSIS
@@ -859,10 +861,15 @@ static int running_on_valgrind = -1;
 #endif
 
 /*
- * Size of the pools used for small blocks. Should be a power of 2,
- * between 1K and SYSTEM_PAGE_SIZE, that is: 1k, 2k, 4k.
+ * Size of the pools used for small blocks. Must be a power of 2.  If radix tree
+ * is disabled, must also be <= SYSTEM_PAGE_SIZE.
  */
+#ifdef WITH_RADIX_TREE
 #define POOL_BITS               14
+#else
+#define POOL_BITS               12
+#endif
+
 #define POOL_SIZE               (1 << POOL_BITS)
 #define POOL_SIZE_MASK          (POOL_SIZE - 1)
 
@@ -1292,6 +1299,19 @@ new_arena(void)
 }
 
 
+#ifdef WITH_RADIX_TREE
+
+/* Return true if and only if P is an address that was allocated by
+   pymalloc.  When the radix tree is used, 'poolp' is unused.
+ */
+static bool
+address_in_range(void *p, poolp pool)
+{
+    return tree_is_marked(p);
+}
+
+#else /* !WITH_RADIX_TREE */
+
 /*
 address_in_range(P, POOL)
 
@@ -1372,9 +1392,6 @@ static bool _Py_NO_ADDRESS_SAFETY_ANALYSIS
             _Py_NO_SANITIZE_MEMORY
 address_in_range(void *p, poolp pool)
 {
-#ifdef WITH_RADIX_TREE
-    return tree_is_marked(p);
-#else
     // Since address_in_range may be reading from memory which was not allocated
     // by Python, it is important that pool->arenaindex is read only once, as
     // another thread may be concurrently modifying the value without holding
@@ -1384,9 +1401,8 @@ address_in_range(void *p, poolp pool)
     return arenaindex < maxarenas &&
         (uintptr_t)p - arenas[arenaindex].address < ARENA_SIZE &&
         arenas[arenaindex].address != 0;
-#endif
 }
-
+#endif /* !WITH_RADIX_TREE */
 
 /*==========================================================================*/
 
@@ -2667,11 +2683,10 @@ _PyObject_DebugMallocStats(FILE *out)
     fputc('\n', out);
 
 #ifdef WITH_RADIX_TREE
-    (void)printone(out, "# L1 tree nodes", l1_count);
-    (void)printone(out, "# L2 tree nodes", l2_count);
-#endif
-
+    (void)printone(out, "# L1 radix tree nodes", l1_count);
+    (void)printone(out, "# L2 radix tree nodes", l2_count);
     fputc('\n', out);
+#endif
 
     total = printone(out, "# bytes in allocated blocks", allocated_bytes);
     total += printone(out, "# bytes in available blocks", available_bytes);
@@ -2689,19 +2704,25 @@ _PyObject_DebugMallocStats(FILE *out)
 
 
 #ifdef WITH_RADIX_TREE
-//////////////////////////////////////////////////////////
-// obmalloc, radix tree for tracking arena coverage
+/* radix tree for tracking arena coverage
 
-// radix key (2^24 arena size)
-//   14 -> L1
-//   14 -> L2
-//   12 -> L3
-//   24 -> ideal aligned arena
-//-----
-//   64
+   key format (2^20 arena size)
+     15 -> L1
+     15 -> L2
+     14 -> L3
+     20 -> ideal aligned arena
+   ----
+     64
+*/
 
-// number of bits in a pointer
+/* number of bits in a pointer */
 #define BITS 64
+
+#if SIZEOF_VOID_P != 8
+ /* Currently this code works for 64-bit pointers only.  For 32-bits, we
+  * could use a two-layer tree but it hasn't been implemented yet.  */
+#error "Radix tree requires 64-bit pointers."
+#endif
 
 #define ARENA_MASK (ARENA_SIZE - 1)
 
@@ -2710,7 +2731,7 @@ _PyObject_DebugMallocStats(FILE *out)
 #   error "arena size must be < 2^32"
 #endif
 
-// bits used for L1 and L2 nodes
+/* bits used for L1 and L2 nodes */
 #define INTERIOR_BITS ((BITS - ARENA_BITS + 2) / 3)
 
 #define L1_BITS INTERIOR_BITS
@@ -2865,8 +2886,6 @@ tree_is_marked(block *p)
     return (tail < lo) || (tail >= hi && hi != 0);
 }
 
-// end radix tree
-//////////////////////////////////////////////////////////
 #endif /* WITH_RADIX_TREE */
 
 #endif /* #ifdef WITH_PYMALLOC */
