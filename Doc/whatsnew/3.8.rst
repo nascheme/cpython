@@ -1041,6 +1041,10 @@ Build and C API Changes
   allocation or deallocation may need to be adjusted.
   (Contributed by Eddie Elizondo in :issue:`35810`.)
 
+* The new function :c:func:`PyCode_NewWithPosOnlyArgs` allows to create
+  code objects like :c:func:`PyCode_New`, but with an extra *posonlyargcount*
+  parameter for indicating the number of positonal-only arguments.
+
 
 Deprecated
 ==========
@@ -1453,9 +1457,6 @@ Changes in the C API
   is not checked anymore before reading :c:member:`~PyTypeObject.tp_finalize`).
 
   (Contributed by Antoine Pitrou in :issue:`32388`.)
-
-* The :c:func:`PyCode_New` has a new parameter in the second position (*posonlyargcount*)
-  to support :pep:`570`, indicating the number of positional-only arguments.
 
 
 CPython bytecode changes
