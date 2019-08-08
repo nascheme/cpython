@@ -358,6 +358,7 @@ class Application:
             print()
             print('* User Break')
             print()
+            raise
             rc = 1
 
         except self.InternalError:

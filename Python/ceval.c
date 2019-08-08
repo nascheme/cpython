@@ -106,16 +106,21 @@ typedef PyObject *(*callproc)(PyObject *, PyObject *, PyObject *);
 /* Forward declarations */
 #ifdef WITH_TSC
 static PyObject * call_function(PyObject ***, int, uint64*, uint64*);
+static int call_function_reg(int, PyObject **, unsigned char **, uint64*, uint64*);
 #else
 static PyObject * call_function(PyObject ***, int);
+static int call_function_reg(int, PyObject **, unsigned char **);
 #endif
 static PyObject * fast_function(PyObject *, PyObject ***, int, int, int);
+static PyObject * fast_function_reg(PyObject *, PyObject *, PyObject **, unsigned char **, int, int, int);
 static PyObject * do_call(PyObject *, PyObject ***, int, int);
+static PyObject * do_call_reg(PyObject *, PyObject **, unsigned char **, int, int);
 static PyObject * ext_do_call(PyObject *, PyObject ***, int, int, int);
 static PyObject * update_keyword_args(PyObject *, int, PyObject ***,
                                       PyObject *);
 static PyObject * update_star_args(int, int, PyObject *, PyObject ***);
 static PyObject * load_args(PyObject ***, int);
+static PyObject * load_args_reg(int, PyObject **, unsigned char **);
 #define CALL_FLAG_VAR 1
 #define CALL_FLAG_KW 2
 
@@ -754,6 +759,7 @@ static void swap_exc_state(PyThreadState *, PyFrameObject *);
 static void restore_and_clear_exc_state(PyThreadState *, PyFrameObject *);
 static int do_raise(PyObject *, PyObject *);
 static int unpack_iterable(PyObject *, int, int, PyObject **);
+static int unpack_iterable_reg(PyObject *, int, unsigned char **, PyObject **);
 
 /* Records whether tracing is on for any thread.  Counts the number of
    threads for which tstate->c_tracefunc is non-NULL, so if the value
@@ -795,7 +801,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
     register PyObject **stack_pointer;  /* Next free slot in value stack */
     register unsigned char *next_instr;
     register int opcode;        /* Current opcode */
-    register int oparg;         /* Current opcode argument, if any */
+    register int oparg, extendedarg;         /* Current opcode argument, if any */
     register enum why_code why; /* Reason for block stack unwind */
     register PyObject **fastlocals, **freevars;
     PyObject *retval = NULL;            /* Return value */
@@ -884,16 +890,13 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #define TARGET_WITH_IMPL(op, impl) \
     TARGET_##op: \
         opcode = op; \
-        if (HAS_ARG(op)) \
-            oparg = NEXTARG(); \
     case op: \
         goto impl; \
 
 #define TARGET(op) \
     TARGET_##op: \
+        extendedarg = 0; \
         opcode = op; \
-        if (HAS_ARG(op)) \
-            oparg = NEXTARG(); \
     case op:
 
 
@@ -989,10 +992,19 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
 #define INSTR_OFFSET()  ((int)(next_instr - first_instr))
 #define NEXTOP()        (*next_instr++)
-#define NEXTARG()       (next_instr += 2, (next_instr[-1]<<8) + next_instr[-2])
+#define NEXTARG()       (next_instr += 2, (next_instr[-1]<<8) + next_instr[-2] + extendedarg)
+#define NEXTIMM8()      (next_instr += 1, next_instr[-1])
+
+/* FIXME:  + extendedarg */
+#define NEXTARG_PTR(p_next_instr) (*(p_next_instr) += 2, ((*(p_next_instr))[-1]<<8) + (*(p_next_instr))[-2])
+#define NEXTIMM8_PTR(p_next_instr)      (*(p_next_instr) += 1, (*(p_next_instr))[-1])
+
+#define NEXTREG()       (next_instr += 2, (next_instr[-1]<<8) + next_instr[-2])
 #define PEEKARG()       ((next_instr[2]<<8) + next_instr[1])
 #define JUMPTO(x)       (next_instr = first_instr + (x))
 #define JUMPBY(x)       (next_instr += (x))
+
+#define NEXTREG_PTR(p_next_instr) (*(p_next_instr) += 2, ((*(p_next_instr))[-1]<<8) + (*(p_next_instr))[-2])
 
 /* OpCode prediction macros
     Some opcodes tend to come in pairs thus making it possible to
@@ -1028,7 +1040,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #else
 #define PREDICT(op)             if (*next_instr == op) goto PRED_##op
 #define PREDICTED(op)           PRED_##op: next_instr++
-#define PREDICTED_WITH_ARG(op)  PRED_##op: oparg = PEEKARG(); next_instr += 3
+#define PREDICTED_WITH_ARG(op)  PREDICTED(op)
 #endif
 
 
@@ -1074,6 +1086,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 /* Local variable macros */
 
 #define GETLOCAL(i)     (fastlocals[i])
+#define GETREG(i)     (f->f_registers[i])
 
 /* The SETLOCAL() macro must not DECREF the local variable in-place and
    then store the new value; it must copy the old value to a temporary
@@ -1300,12 +1313,11 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
         /* Extract opcode and argument */
 
+        extendedarg = 0;
         opcode = NEXTOP();
-        oparg = 0;   /* allows oparg to be stored in a register because
-            it doesn't have to be remembered across a full loop */
-        if (HAS_ARG(opcode))
-            oparg = NEXTARG();
     dispatch_opcode:
+        oparg = -1;   /* allows oparg to be stored in a register because
+            it doesn't have to be remembered across a full loop */
 #ifdef DYNAMIC_EXECUTION_PROFILE
 #ifdef DXPAIRS
         dxpairs[lastopcode][opcode]++;
@@ -1343,7 +1355,9 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             FAST_DISPATCH();
 
         TARGET(LOAD_FAST) {
-            PyObject *value = GETLOCAL(oparg);
+            PyObject *value;
+            oparg = NEXTARG();
+            value = GETLOCAL(oparg);
             if (value == NULL) {
                 format_exc_check_arg(PyExc_UnboundLocalError,
                                      UNBOUNDLOCAL_ERROR_MSG,
@@ -1356,22 +1370,70 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
         }
 
         TARGET(LOAD_CONST) {
-            PyObject *value = GETITEM(consts, oparg);
+            PyObject *value;
+            oparg = NEXTARG();
+            value = GETITEM(consts, oparg);
             Py_INCREF(value);
             PUSH(value);
             FAST_DISPATCH();
         }
 
+        TARGET(LOAD_CONST_REG) {
+            PyObject *value;
+            int reg = NEXTREG();
+            oparg = NEXTARG();
+            value = GETITEM(consts, oparg);
+            Py_INCREF(value);
+            SETLOCAL(reg, value);
+            FAST_DISPATCH();
+        }
+
         PREDICTED_WITH_ARG(STORE_FAST);
         TARGET(STORE_FAST) {
-            PyObject *value = POP();
+            PyObject *value;
+            oparg = NEXTARG();
+            value = POP();
             SETLOCAL(oparg, value);
+            FAST_DISPATCH();
+        }
+
+        TARGET(POP_REG) {
+            int reg = NEXTREG();
+            PyObject *value = POP();
+            SETLOCAL(reg, value);
+            FAST_DISPATCH();
+        }
+
+        TARGET(MOVE_REG) {
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            PyObject *value;
+            value = GETLOCAL(reg1);
+            Py_INCREF(value);
+            SETLOCAL(reg0, value);
+            FAST_DISPATCH();
+        }
+
+        TARGET(PUSH_REG) {
+            int reg = NEXTREG();
+            PyObject *value;
+            value = GETLOCAL(reg);
+            /* FIXME: check for NULL? */
+            Py_INCREF(value);
+            PUSH(value);
             FAST_DISPATCH();
         }
 
         TARGET(POP_TOP) {
             PyObject *value = POP();
             Py_DECREF(value);
+            FAST_DISPATCH();
+        }
+
+        TARGET(CLEAR_REG) {
+            int reg;
+            reg = NEXTREG();
+            SETLOCAL(reg, NULL);
             FAST_DISPATCH();
         }
 
@@ -1421,6 +1483,17 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(UNARY_POSITIVE_REG) {
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            PyObject *value = GETLOCAL(reg1);
+            PyObject *res = PyNumber_Positive(value);
+            if (res == NULL)
+                goto error;
+            SETLOCAL(reg0, res);
+            DISPATCH();
+        }
+
         TARGET(UNARY_NEGATIVE) {
             PyObject *value = TOP();
             PyObject *res = PyNumber_Negative(value);
@@ -1428,6 +1501,17 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             SET_TOP(res);
             if (res == NULL)
                 goto error;
+            DISPATCH();
+        }
+
+        TARGET(UNARY_NEGATIVE_REG) {
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            PyObject *value = GETLOCAL(reg1);
+            PyObject *res = PyNumber_Negative(value);
+            if (res == NULL)
+                goto error;
+            SETLOCAL(reg0, res);
             DISPATCH();
         }
 
@@ -1447,6 +1531,27 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
                 DISPATCH();
             }
             STACKADJ(-1);
+            goto error;
+        }
+
+        TARGET(UNARY_NOT_REG) {
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            PyObject *value;
+            int err;
+
+            value = GETLOCAL(reg1);
+            err = PyObject_IsTrue(value);
+            if (err == 0) {
+                Py_INCREF(Py_True);
+                SETLOCAL(reg0, Py_True);
+                DISPATCH();
+            }
+            else if (err > 0) {
+                Py_INCREF(Py_False);
+                SETLOCAL(reg0, Py_False);
+                DISPATCH();
+            }
             goto error;
         }
 
@@ -1484,6 +1589,33 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(BINARY_MULTIPLY_REG) {
+            PyObject *product;
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            int reg2 = NEXTREG();
+            PyObject *left = GETLOCAL(reg1);
+            PyObject *right = GETLOCAL(reg2);
+            product = PyNumber_Multiply(left, right);
+            if (product == NULL)
+                goto error;
+            SETLOCAL(reg0, product);
+            DISPATCH();
+        }
+
+        TARGET(INPLACE_MULTIPLY_REG) {
+            PyObject *product;
+            int reg1 = NEXTREG();
+            int reg2 = NEXTREG();
+            PyObject *left = GETLOCAL(reg1);
+            PyObject *right = GETLOCAL(reg2);
+            product = PyNumber_InPlaceMultiply(left, right);
+            if (product == NULL)
+                goto error;
+            SETLOCAL(reg1, product);
+            DISPATCH();
+        }
+
         TARGET(BINARY_TRUE_DIVIDE) {
             PyObject *divisor = POP();
             PyObject *dividend = TOP();
@@ -1493,6 +1625,22 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             SET_TOP(quotient);
             if (quotient == NULL)
                 goto error;
+            DISPATCH();
+        }
+
+        TARGET(BINARY_TRUE_DIVIDE_REG) {
+            int reg0, reg1, reg2;
+            PyObject *divisor, *dividend, *quotient;
+
+            reg0 = NEXTREG();
+            reg1 = NEXTREG();
+            reg2 = NEXTREG();
+            divisor = GETLOCAL(reg1);
+            dividend = GETLOCAL(reg2);
+            quotient = PyNumber_TrueDivide(dividend, divisor);
+            if (quotient == NULL)
+                goto error;
+            SETLOCAL(reg0, quotient);
             DISPATCH();
         }
 
@@ -1508,6 +1656,33 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(BINARY_FLOOR_DIVIDE_REG) {
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            int reg2 = NEXTREG();
+            PyObject *divisor = GETLOCAL(reg2);
+            PyObject *dividend = GETLOCAL(reg1);
+            PyObject *quotient;
+            quotient = PyNumber_FloorDivide(dividend, divisor);
+            if (quotient == NULL)
+                goto error;
+            SETLOCAL(reg0, quotient);
+            DISPATCH();
+        }
+
+        TARGET(INPLACE_FLOOR_DIVIDE_REG) {
+            int reg1 = NEXTREG();
+            int reg2 = NEXTREG();
+            PyObject *dividend = GETLOCAL(reg1);
+            PyObject *divisor = GETLOCAL(reg2);
+            PyObject *quotient;
+            quotient = PyNumber_InPlaceFloorDivide(dividend, divisor);
+            if (quotient == NULL)
+                goto error;
+            SETLOCAL(reg1, quotient);
+            DISPATCH();
+        }
+
         TARGET(BINARY_MODULO) {
             PyObject *divisor = POP();
             PyObject *dividend = TOP();
@@ -1519,6 +1694,25 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             SET_TOP(res);
             if (res == NULL)
                 goto error;
+            DISPATCH();
+        }
+
+        TARGET(BINARY_MODULO_REG) {
+            int reg_result, reg_divisor, reg_dividend;
+            PyObject *divisor, *dividend, *res;
+
+            reg_result = NEXTREG();
+            reg_dividend = NEXTREG();
+            reg_divisor = NEXTREG();
+            dividend = GETLOCAL(reg_dividend);
+            divisor = GETLOCAL(reg_divisor);
+            if (PyUnicode_CheckExact(dividend))
+                res = PyUnicode_Format(dividend, divisor);
+            else
+                res = PyNumber_Remainder(dividend, divisor);
+            if (res == NULL)
+                goto error;
+            SETLOCAL(reg_result, res);
             DISPATCH();
         }
 
@@ -1542,6 +1736,58 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(BINARY_ADD_REG) {
+            PyObject *sum;
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            int reg2 = NEXTREG();
+            PyObject *left = GETLOCAL(reg1);
+            PyObject *right = GETLOCAL(reg2);
+
+            /* FIXME: enable unicode_concatenate() optimization,
+               refleak issue on left? */
+            #if 0
+            if (PyUnicode_CheckExact(left) &&
+                     PyUnicode_CheckExact(right)) {
+                sum = unicode_concatenate(left, right, f, next_instr);
+                /* unicode_concatenate consumed the ref to v */
+            }
+            else
+            #endif
+            {
+                sum = PyNumber_Add(left, right);
+            }
+            if (sum == NULL)
+                goto error;
+            SETLOCAL(reg0, sum);
+            DISPATCH();
+        }
+
+        TARGET(INPLACE_ADD_REG) {
+            PyObject *sum;
+            int reg1 = NEXTREG();
+            int reg2 = NEXTREG();
+            PyObject *left = GETLOCAL(reg1);
+            PyObject *right = GETLOCAL(reg2);
+
+            /* FIXME: enable this optimization */
+            #if 0
+            if (PyUnicode_CheckExact(left) && PyUnicode_CheckExact(right)) {
+                Py_INCREF(left);
+                sum = unicode_concatenate(left, right, f, next_instr);
+                /* unicode_concatenate consumed the ref to v */
+            }
+            else
+            #endif
+            {
+                sum = PyNumber_InPlaceAdd(left, right);
+            }
+            if (sum == NULL)
+                goto error;
+            SETLOCAL(reg1, sum);
+            DISPATCH();
+        }
+
         TARGET(BINARY_SUBTRACT) {
             PyObject *right = POP();
             PyObject *left = TOP();
@@ -1554,6 +1800,33 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(BINARY_SUBTRACT_REG) {
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            int reg2 = NEXTREG();
+            PyObject *left = GETLOCAL(reg1);
+            PyObject *right = GETLOCAL(reg2);
+            PyObject *diff;
+            diff = PyNumber_Subtract(left, right);
+            if (diff == NULL)
+                goto error;
+            SETLOCAL(reg0, diff);
+            DISPATCH();
+        }
+
+        TARGET(INPLACE_SUBTRACT_REG) {
+            int reg1 = NEXTREG();
+            int reg2 = NEXTREG();
+            PyObject *left = GETLOCAL(reg1);
+            PyObject *right = GETLOCAL(reg2);
+            PyObject *diff;
+            diff = PyNumber_InPlaceSubtract(left, right);
+            if (diff == NULL)
+                goto error;
+            SETLOCAL(reg1, diff);
+            DISPATCH();
+        }
+
         TARGET(BINARY_SUBSCR) {
             PyObject *sub = POP();
             PyObject *container = TOP();
@@ -1563,6 +1836,19 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             SET_TOP(res);
             if (res == NULL)
                 goto error;
+            DISPATCH();
+        }
+
+        TARGET(BINARY_SUBSCR_REG) {
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            int reg2 = NEXTREG();
+            PyObject *sub = GETLOCAL(reg2);
+            PyObject *container = GETLOCAL(reg1);
+            PyObject *res = PyObject_GetItem(container, sub);
+            if (res == NULL)
+                goto error;
+            SETLOCAL(reg0, res);
             DISPATCH();
         }
 
@@ -1627,8 +1913,10 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
         }
 
         TARGET(LIST_APPEND) {
-            PyObject *v = POP();
-            PyObject *list = PEEK(oparg);
+            PyObject *v, *list;
+            oparg = NEXTARG();
+            v = POP();
+            list = PEEK(oparg);
             int err;
             err = PyList_Append(list, v);
             Py_DECREF(v);
@@ -1638,9 +1926,27 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(LIST_APPEND_REG) {
+            int reg_list, reg_v;
+            PyObject *list, *v;
+            int err;
+
+            reg_list = NEXTREG();
+            reg_v = NEXTREG();
+            list = GETLOCAL(reg_list);
+            v = GETLOCAL(reg_v);
+            err = PyList_Append(list, v);
+            if (err != 0)
+                goto error;
+            PREDICT(JUMP_ABSOLUTE);
+            DISPATCH();
+        }
+
         TARGET(SET_ADD) {
-            PyObject *v = POP();
-            PyObject *set = stack_pointer[-oparg];
+            PyObject *v, *set;
+            oparg = NEXTARG();
+            v = POP();
+            set = stack_pointer[-oparg];
             int err;
             err = PySet_Add(set, v);
             Py_DECREF(v);
@@ -1686,6 +1992,22 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(INPLACE_TRUE_DIVIDE_REG) {
+            int reg1, reg2;
+            PyObject *divisor, *dividend, *quotient;
+
+            reg1 = NEXTREG();
+            reg2 = NEXTREG();
+
+            dividend = GETLOCAL(reg1);
+            divisor = GETLOCAL(reg2);
+            quotient = PyNumber_InPlaceTrueDivide(dividend, divisor);
+            if (quotient == NULL)
+                goto error;
+            SETLOCAL(reg1, quotient);
+            DISPATCH();
+        }
+
         TARGET(INPLACE_FLOOR_DIVIDE) {
             PyObject *divisor = POP();
             PyObject *dividend = TOP();
@@ -1707,6 +2029,20 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             SET_TOP(mod);
             if (mod == NULL)
                 goto error;
+            DISPATCH();
+        }
+
+        TARGET(INPLACE_MODULO_REG) {
+            int reg1, reg2;
+            PyObject *right, *left, *mod;
+            reg1 = NEXTREG();
+            reg2 = NEXTREG();
+            left = GETLOCAL(reg1);
+            right = GETLOCAL(reg2);
+            mod = PyNumber_InPlaceRemainder(left, right);
+            if (mod == NULL)
+                goto error;
+            SETLOCAL(reg1, mod);
             DISPATCH();
         }
 
@@ -1817,6 +2153,26 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(STORE_SUBSCR_REG) {
+            int reg0, reg1, reg2;
+            PyObject *sub, *container, *v;
+            int err;
+
+            reg0 = NEXTREG();
+            reg1 = NEXTREG();
+            reg2 = NEXTREG();
+
+            container = GETLOCAL(reg0);
+            sub = GETLOCAL(reg1);
+            v = GETLOCAL(reg2);
+
+            /* v[w] = u */
+            err = PyObject_SetItem(container, sub, v);
+            if (err != 0)
+                goto error;
+            DISPATCH();
+        }
+
         TARGET(DELETE_SUBSCR) {
             PyObject *sub = TOP();
             PyObject *container = SECOND();
@@ -1826,6 +2182,22 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             err = PyObject_DelItem(container, sub);
             Py_DECREF(container);
             Py_DECREF(sub);
+            if (err != 0)
+                goto error;
+            DISPATCH();
+        }
+
+        TARGET(DELETE_SUBSCR_REG) {
+            int reg_sub, reg_container;
+            PyObject *sub, *container;
+            int err;
+
+            reg_container = NEXTREG();
+            reg_sub = NEXTREG();
+            container = GETLOCAL(reg_container);
+            sub = GETLOCAL(reg_sub);
+            /* del v[w] */
+            err = PyObject_DelItem(container, sub);
             if (err != 0)
                 goto error;
             DISPATCH();
@@ -1854,6 +2226,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 #endif
         TARGET(RAISE_VARARGS) {
             PyObject *cause = NULL, *exc = NULL;
+            oparg = NEXTARG();
             switch (oparg) {
             case 2:
                 cause = POP(); /* cause */
@@ -1881,8 +2254,27 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(STORE_LOCALS_REG) {
+            int reg = NEXTREG();
+            PyObject *locals, *old;
+            old = f->f_locals;
+            locals = GETLOCAL(reg);
+            Py_INCREF(locals);
+            Py_XDECREF(old);
+            f->f_locals = locals;
+            DISPATCH();
+        }
+
         TARGET(RETURN_VALUE) {
             retval = POP();
+            why = WHY_RETURN;
+            goto fast_block_end;
+        }
+
+        TARGET(RETURN_VALUE_REG) {
+            int reg = NEXTREG();
+            retval = GETLOCAL(reg);
+            Py_INCREF(retval);
             why = WHY_RETURN;
             goto fast_block_end;
         }
@@ -1922,6 +2314,17 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             retval = POP();
             f->f_stacktop = stack_pointer;
             why = WHY_YIELD;
+            goto fast_yield;
+        }
+
+        TARGET(YIELD_REG) {
+            int reg;
+            reg = NEXTREG();
+            retval = GETLOCAL(reg);
+            Py_INCREF(retval);
+            f->f_stacktop = stack_pointer;
+            why = WHY_YIELD;
+            f->f_lasti = INSTR_OFFSET() - 1;
             goto fast_yield;
         }
 
@@ -2012,10 +2415,44 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(LOAD_BUILD_CLASS_REG) {
+            _Py_IDENTIFIER(__build_class__);
+            int reg;
+
+            reg = NEXTREG();
+
+            PyObject *bc;
+            if (PyDict_CheckExact(f->f_builtins)) {
+                bc = _PyDict_GetItemId(f->f_builtins, &PyId___build_class__);
+                if (bc == NULL) {
+                    PyErr_SetString(PyExc_NameError,
+                                    "__build_class__ not found");
+                    goto error;
+                }
+                Py_INCREF(bc);
+            }
+            else {
+                PyObject *build_class_str = _PyUnicode_FromId(&PyId___build_class__);
+                if (build_class_str == NULL)
+                    break;
+                bc = PyObject_GetItem(f->f_builtins, build_class_str);
+                if (bc == NULL) {
+                    if (PyErr_ExceptionMatches(PyExc_KeyError))
+                        PyErr_SetString(PyExc_NameError,
+                                        "__build_class__ not found");
+                    goto error;
+                }
+            }
+            SETLOCAL(reg, bc);
+            DISPATCH();
+        }
+
         TARGET(STORE_NAME) {
-            PyObject *name = GETITEM(names, oparg);
-            PyObject *v = POP();
-            PyObject *ns = f->f_locals;
+            PyObject *name, *v, *ns;
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
+            v = POP();
+            ns = f->f_locals;
             int err;
             if (ns == NULL) {
                 PyErr_Format(PyExc_SystemError,
@@ -2033,9 +2470,34 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(STORE_NAME_REG) {
+            int reg;
+            PyObject *name, *v, *ns;
+            oparg = NEXTARG();
+            reg = NEXTREG();
+            name = GETITEM(names, oparg);
+            v = GETLOCAL(reg);
+            ns = f->f_locals;
+            int err;
+            if (ns == NULL) {
+                PyErr_Format(PyExc_SystemError,
+                             "no locals found when storing %R", name);
+                goto error;
+            }
+            if (PyDict_CheckExact(ns))
+                err = PyDict_SetItem(ns, name, v);
+            else
+                err = PyObject_SetItem(ns, name, v);
+            if (err != 0)
+                goto error;
+            DISPATCH();
+        }
+
         TARGET(DELETE_NAME) {
-            PyObject *name = GETITEM(names, oparg);
-            PyObject *ns = f->f_locals;
+            PyObject *name, *ns;
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
+            ns = f->f_locals;
             int err;
             if (ns == NULL) {
                 PyErr_Format(PyExc_SystemError,
@@ -2054,7 +2516,9 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
         PREDICTED_WITH_ARG(UNPACK_SEQUENCE);
         TARGET(UNPACK_SEQUENCE) {
-            PyObject *seq = POP(), *item, **items;
+            PyObject *seq, *item, **items;
+            oparg = NEXTARG();
+            seq = POP();
             if (PyTuple_CheckExact(seq) &&
                 PyTuple_GET_SIZE(seq) == oparg) {
                 items = ((PyTupleObject *)seq)->ob_item;
@@ -2083,8 +2547,49 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        PREDICTED(UNPACK_SEQUENCE_REG);
+        TARGET(UNPACK_SEQUENCE_REG) {
+            int nreg;
+            int regseq, reg, i;
+            PyObject *seq, *item, **items;
+            regseq = NEXTREG();
+            seq = GETLOCAL(regseq);
+            nreg = NEXTARG();
+            assert(nreg >= 1);
+            if (PyTuple_CheckExact(seq) &&
+                PyTuple_GET_SIZE(seq) == nreg) {
+                items = ((PyTupleObject *)seq)->ob_item;
+                for (i=0; i<nreg; i++) {
+                    reg = NEXTREG();
+                    item = items[i];
+                    Py_INCREF(item);
+                    SETLOCAL(reg, item);
+                }
+            } else if (PyList_CheckExact(seq) &&
+                       PyList_GET_SIZE(seq) == nreg) {
+                items = ((PyListObject *)seq)->ob_item;
+                for (i=0; i<nreg; i++) {
+                    reg = NEXTREG();
+                    item = items[i];
+                    Py_INCREF(item);
+                    SETLOCAL(reg, item);
+                }
+            } else {
+                unsigned char *next_instr_var;
+                int ok;
+                next_instr_var = next_instr;
+                ok = unpack_iterable_reg(seq, nreg, &next_instr_var, fastlocals);
+                next_instr = next_instr_var;
+                if (!ok)
+                    goto error;
+            }
+            DISPATCH();
+        }
+
         TARGET(UNPACK_EX) {
-            int totalargs = 1 + (oparg & 0xFF) + (oparg >> 8);
+            int totalargs;
+            oparg = NEXTARG();
+            totalargs = 1 + (oparg & 0xFF) + (oparg >> 8);
             PyObject *seq = POP();
 
             if (unpack_iterable(seq, oparg & 0xFF, oparg >> 8,
@@ -2098,10 +2603,28 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(UNPACK_EX_REG) {
+            int regseq;
+            PyObject *seq;
+            unsigned char *next_instr_var;
+            int ok;
+            regseq = NEXTREG();
+            seq = GETLOCAL(regseq);
+
+            next_instr_var = next_instr;
+            ok = unpack_iterable_reg(seq, -1, &next_instr_var, fastlocals);
+            next_instr = next_instr_var;
+            if (!ok)
+                goto error;
+            DISPATCH();
+        }
+
         TARGET(STORE_ATTR) {
-            PyObject *name = GETITEM(names, oparg);
-            PyObject *owner = TOP();
-            PyObject *v = SECOND();
+            PyObject *name, *owner, *v;
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
+            owner = TOP();
+            v = SECOND();
             int err;
             STACKADJ(-2);
             err = PyObject_SetAttr(owner, name, v);
@@ -2112,10 +2635,27 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(STORE_ATTR_REG) {
+            PyObject *name, *owner, *v;
+            int err, reg_owner, reg_value;
+            reg_owner = NEXTREG();
+            oparg = NEXTARG();
+            reg_value = NEXTREG();
+            owner = GETLOCAL(reg_owner);
+            name = GETITEM(names, oparg);
+            v = GETLOCAL(reg_value);
+            err = PyObject_SetAttr(owner, name, v);
+            if (err != 0)
+                goto error;
+            DISPATCH();
+        }
+
         TARGET(DELETE_ATTR) {
-            PyObject *name = GETITEM(names, oparg);
-            PyObject *owner = POP();
+            PyObject *name, *owner;
             int err;
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
+            owner = POP();
             err = PyObject_SetAttr(owner, name, (PyObject *)NULL);
             Py_DECREF(owner);
             if (err != 0)
@@ -2124,9 +2664,11 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
         }
 
         TARGET(STORE_GLOBAL) {
-            PyObject *name = GETITEM(names, oparg);
-            PyObject *v = POP();
+            PyObject *name, *v;
             int err;
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
+            v = POP();
             err = PyDict_SetItem(f->f_globals, name, v);
             Py_DECREF(v);
             if (err != 0)
@@ -2134,9 +2676,25 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
-        TARGET(DELETE_GLOBAL) {
-            PyObject *name = GETITEM(names, oparg);
+        TARGET(STORE_GLOBAL_REG) {
+            PyObject *name, *v;
+            int reg;
             int err;
+            oparg = NEXTARG();
+            reg = NEXTREG();
+            name = GETITEM(names, oparg);
+            v = GETLOCAL(reg);
+            err = PyDict_SetItem(f->f_globals, name, v);
+            if (err != 0)
+                goto error;
+            DISPATCH();
+        }
+
+        TARGET(DELETE_GLOBAL) {
+            PyObject *name;
+            int err;
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
             err = PyDict_DelItem(f->f_globals, name);
             if (err != 0) {
                 format_exc_check_arg(
@@ -2147,9 +2705,10 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
         }
 
         TARGET(LOAD_NAME) {
-            PyObject *name = GETITEM(names, oparg);
-            PyObject *locals = f->f_locals;
-            PyObject *v;
+            PyObject *name, *locals, *v;
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
+            locals = f->f_locals;
             if (locals == NULL) {
                 PyErr_Format(PyExc_SystemError,
                              "no locals when loading %R", name);
@@ -2198,9 +2757,65 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(LOAD_NAME_REG) {
+            PyObject *name, *locals, *v;
+            int reg;
+            reg = NEXTREG();
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
+            locals = f->f_locals;
+            if (locals == NULL) {
+                PyErr_Format(PyExc_SystemError,
+                             "no locals when loading %R", name);
+                goto error;
+            }
+            if (PyDict_CheckExact(locals)) {
+                v = PyDict_GetItem(locals, name);
+                Py_XINCREF(v);
+            }
+            else {
+                v = PyObject_GetItem(locals, name);
+                if (v == NULL && PyErr_Occurred()) {
+                    if (!PyErr_ExceptionMatches(
+                                    PyExc_KeyError))
+                        break;
+                    PyErr_Clear();
+                }
+            }
+            if (v == NULL) {
+                v = PyDict_GetItem(f->f_globals, name);
+                Py_XINCREF(v);
+                if (v == NULL) {
+                    if (PyDict_CheckExact(f->f_builtins)) {
+                        v = PyDict_GetItem(f->f_builtins, name);
+                        if (v == NULL) {
+                            format_exc_check_arg(
+                                        PyExc_NameError,
+                                        NAME_ERROR_MSG, name);
+                            goto error;
+                        }
+                        Py_INCREF(v);
+                    }
+                    else {
+                        v = PyObject_GetItem(f->f_builtins, name);
+                        if (v == NULL) {
+                            if (PyErr_ExceptionMatches(PyExc_KeyError))
+                                format_exc_check_arg(
+                                            PyExc_NameError,
+                                            NAME_ERROR_MSG, name);
+                            goto error;
+                        }
+                    }
+                }
+            }
+            SETLOCAL(reg, v);
+            DISPATCH();
+        }
+
         TARGET(LOAD_GLOBAL) {
-            PyObject *name = GETITEM(names, oparg);
-            PyObject *v;
+            PyObject *name, *v;
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
             if (PyDict_CheckExact(f->f_globals)
                 && PyDict_CheckExact(f->f_builtins)) {
                 v = _PyDict_LoadGlobal((PyDictObject *)f->f_globals,
@@ -2232,8 +2847,47 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(LOAD_GLOBAL_REG) {
+            PyObject *name;
+            PyObject *v;
+            int reg = NEXTREG();
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
+            if (PyDict_CheckExact(f->f_globals)
+                && PyDict_CheckExact(f->f_builtins)) {
+                v = _PyDict_LoadGlobal((PyDictObject *)f->f_globals,
+                                       (PyDictObject *)f->f_builtins,
+                                       name);
+                if (v == NULL) {
+                    if (!PyErr_Occurred())
+                        format_exc_check_arg(PyExc_NameError,
+                                             GLOBAL_NAME_ERROR_MSG, name);
+                    goto error;
+                }
+                Py_INCREF(v);
+            }
+            else {
+                /* Slow-path if globals or builtins is not a dict */
+                v = PyObject_GetItem(f->f_globals, name);
+                if (v == NULL) {
+                    v = PyObject_GetItem(f->f_builtins, name);
+                    if (v == NULL) {
+                        if (PyErr_ExceptionMatches(PyExc_KeyError))
+                            format_exc_check_arg(
+                                        PyExc_NameError,
+                                        GLOBAL_NAME_ERROR_MSG, name);
+                        goto error;
+                    }
+                }
+            }
+            SETLOCAL(reg, v);
+            DISPATCH();
+        }
+
         TARGET(DELETE_FAST) {
-            PyObject *v = GETLOCAL(oparg);
+            PyObject *v;
+            oparg = NEXTARG();
+            v = GETLOCAL(oparg);
             if (v != NULL) {
                 SETLOCAL(oparg, NULL);
                 DISPATCH();
@@ -2247,7 +2901,9 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
         }
 
         TARGET(DELETE_DEREF) {
-            PyObject *cell = freevars[oparg];
+            PyObject *cell;
+            oparg = NEXTARG();
+            cell = freevars[oparg];
             if (PyCell_GET(cell) != NULL) {
                 PyCell_Set(cell, NULL);
                 DISPATCH();
@@ -2257,15 +2913,30 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
         }
 
         TARGET(LOAD_CLOSURE) {
-            PyObject *cell = freevars[oparg];
+            PyObject *cell;
+            oparg = NEXTARG();
+            cell = freevars[oparg];
             Py_INCREF(cell);
             PUSH(cell);
             DISPATCH();
         }
 
+        TARGET(LOAD_CLOSURE_REG) {
+            PyObject *cell;
+            int reg;
+            reg = NEXTREG();
+            oparg = NEXTARG();
+            cell = freevars[oparg];
+            Py_INCREF(cell);
+            SETLOCAL(reg, cell);
+            DISPATCH();
+        }
+
         TARGET(LOAD_DEREF) {
-            PyObject *cell = freevars[oparg];
-            PyObject *value = PyCell_GET(cell);
+            PyObject *cell, *value;
+            oparg = NEXTARG();
+            cell = freevars[oparg];
+            value = PyCell_GET(cell);
             if (value == NULL) {
                 format_exc_unbound(co, oparg);
                 goto error;
@@ -2275,16 +2946,47 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(LOAD_DEREF_REG) {
+            PyObject *cell, *value;
+            int reg;
+            reg = NEXTREG();
+            oparg = NEXTARG();
+            cell = freevars[oparg];
+            value = PyCell_GET(cell);
+            if (value == NULL) {
+                format_exc_unbound(co, oparg);
+                goto error;
+            }
+            Py_INCREF(value);
+            SETLOCAL(reg, value);
+            DISPATCH();
+        }
+
         TARGET(STORE_DEREF) {
-            PyObject *v = POP();
-            PyObject *cell = freevars[oparg];
+            PyObject *v, *cell;
+            oparg = NEXTARG();
+            v = POP();
+            cell = freevars[oparg];
             PyCell_Set(cell, v);
             Py_DECREF(v);
             DISPATCH();
         }
 
+        TARGET(STORE_DEREF_REG) {
+            PyObject *v, *cell;
+            int reg;
+            reg = NEXTREG();
+            oparg = NEXTARG();
+            v = GETLOCAL(reg);
+            cell = freevars[oparg];
+            PyCell_Set(cell, v);
+            DISPATCH();
+        }
+
         TARGET(BUILD_TUPLE) {
-            PyObject *tup = PyTuple_New(oparg);
+            PyObject *tup;
+            oparg = NEXTARG();
+            tup = PyTuple_New(oparg);
             if (tup == NULL)
                 goto error;
             while (--oparg >= 0) {
@@ -2295,8 +2997,30 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(BUILD_TUPLE_REG) {
+            int i, nreg;
+            int regres;
+            PyObject *tup;
+
+            regres = NEXTREG();
+            nreg = NEXTARG();
+            tup = PyTuple_New(nreg);
+            if (tup == NULL)
+                goto error;
+            for (i=0; i<nreg; i++) {
+                int reg = NEXTREG();
+                PyObject *item = GETLOCAL(reg);
+                Py_INCREF(item);
+                PyTuple_SET_ITEM(tup, i, item);
+            }
+            SETLOCAL(regres, tup);
+            DISPATCH();
+        }
+
         TARGET(BUILD_LIST) {
-            PyObject *list =  PyList_New(oparg);
+            PyObject *list;
+            oparg = NEXTARG();
+            list =  PyList_New(oparg);
             if (list == NULL)
                 goto error;
             while (--oparg >= 0) {
@@ -2307,9 +3031,31 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(BUILD_LIST_REG) {
+            PyObject *list, *item;
+            int i, nreg, regres, reg;
+            regres = NEXTREG();
+            nreg = NEXTARG();
+            list =  PyList_New(nreg);
+            if (list == NULL)
+                goto error;
+            for (i=0; i<nreg; i++) {
+                reg = NEXTREG();
+                item = GETLOCAL(reg);
+                Py_INCREF(item);
+                PyList_SET_ITEM(list, i, item);
+            }
+            SETLOCAL(regres, list);
+            DISPATCH();
+        }
+
         TARGET(BUILD_SET) {
-            PyObject *set = PySet_New(NULL);
-            int err = 0;
+            PyObject *set;
+            int err;
+
+            oparg = NEXTARG();
+            set = PySet_New(NULL);
+            err = 0;
             if (set == NULL)
                 goto error;
             while (--oparg >= 0) {
@@ -2327,10 +3073,24 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
         }
 
         TARGET(BUILD_MAP) {
-            PyObject *map = _PyDict_NewPresized((Py_ssize_t)oparg);
+            PyObject *map;
+            oparg = NEXTARG();
+            map = _PyDict_NewPresized((Py_ssize_t)oparg);
             if (map == NULL)
                 goto error;
             PUSH(map);
+            DISPATCH();
+        }
+
+        TARGET(BUILD_MAP_REG) {
+            PyObject *map;
+            int reg;
+            reg = NEXTREG();
+            oparg = NEXTARG();
+            map = _PyDict_NewPresized((Py_ssize_t)oparg);
+            if (map == NULL)
+                goto error;
+            SETLOCAL(reg, map);
             DISPATCH();
         }
 
@@ -2349,11 +3109,29 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
-        TARGET(MAP_ADD) {
-            PyObject *key = TOP();
-            PyObject *value = SECOND();
-            PyObject *map;
+        TARGET(STORE_MAP_REG) {
+            int reg0, reg1, reg2;
+            PyObject *map, *key, *value;
             int err;
+            reg0 = NEXTREG();
+            reg1 = NEXTREG();
+            reg2 = NEXTREG();
+            map = GETLOCAL(reg0);
+            key = GETLOCAL(reg1);
+            value = GETLOCAL(reg2);
+            assert(PyDict_CheckExact(map));
+            err = PyDict_SetItem(map, key, value);
+            if (err != 0)
+                goto error;
+            DISPATCH();
+        }
+
+        TARGET(MAP_ADD) {
+            PyObject *key, *value, *map;
+            int err;
+            oparg = NEXTARG();
+            key = TOP();
+            value = SECOND();
             STACKADJ(-2);
             map = stack_pointer[-oparg];  /* dict */
             assert(PyDict_CheckExact(map));
@@ -2366,10 +3144,30 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(MAP_ADD_REG) {
+            int regm, regk, regv;
+            PyObject *key, *value, *map;
+            int err;
+            regm = NEXTREG();
+            regk = NEXTREG();
+            regv = NEXTREG();
+            map = GETLOCAL(regm);
+            key = GETLOCAL(regk);
+            value = GETLOCAL(regv);
+            assert(PyDict_CheckExact(map));
+            err = PyDict_SetItem(map, key, value);  /* v[w] = u */
+            if (err != 0)
+                goto error;
+            PREDICT(JUMP_ABSOLUTE);
+            DISPATCH();
+        }
+
         TARGET(LOAD_ATTR) {
-            PyObject *name = GETITEM(names, oparg);
-            PyObject *owner = TOP();
-            PyObject *res = PyObject_GetAttr(owner, name);
+            PyObject *name, *owner, *res;
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
+            owner = TOP();
+            res = PyObject_GetAttr(owner, name);
             Py_DECREF(owner);
             SET_TOP(res);
             if (res == NULL)
@@ -2377,10 +3175,26 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(LOAD_ATTR_REG) {
+            PyObject *name, *owner, *res;
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            oparg = NEXTARG();
+            owner = GETLOCAL(reg1);
+            name = GETITEM(names, oparg);
+            res = PyObject_GetAttr(owner, name);
+            if (res == NULL)
+                goto error;
+            SETLOCAL(reg0, res);
+            DISPATCH();
+        }
+
         TARGET(COMPARE_OP) {
-            PyObject *right = POP();
-            PyObject *left = TOP();
-            PyObject *res = cmp_outcome(oparg, left, right);
+            PyObject *right, *left, *res;
+            oparg = NEXTARG();
+            right = POP();
+            left = TOP();
+            res = cmp_outcome(oparg, left, right);
             Py_DECREF(left);
             Py_DECREF(right);
             SET_TOP(res);
@@ -2391,11 +3205,31 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(COMPARE_REG) {
+            int reg0, reg1, reg2;
+            PyObject *left, *right, *res;
+
+            reg0 = NEXTREG();
+            oparg = NEXTARG();
+            reg1 = NEXTREG();
+            reg2 = NEXTREG();
+            left = GETLOCAL(reg1);
+            right = GETLOCAL(reg2);
+            res = cmp_outcome(oparg, left, right);
+            if (res == NULL)
+                goto error;
+            SETLOCAL(reg0, res);
+            PREDICT(JUMP_IF_FALSE_REG);
+            PREDICT(JUMP_IF_TRUE_REG);
+            DISPATCH();
+        }
+
         TARGET(IMPORT_NAME) {
             _Py_IDENTIFIER(__import__);
-            PyObject *name = GETITEM(names, oparg);
-            PyObject *func = _PyDict_GetItemId(f->f_builtins, &PyId___import__);
-            PyObject *from, *level, *args, *res;
+            PyObject *name, *func, *from, *level, *args, *res;
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
+            func = _PyDict_GetItemId(f->f_builtins, &PyId___import__);
             if (func == NULL) {
                 PyErr_SetString(PyExc_ImportError,
                                 "__import__ not found");
@@ -2437,6 +3271,55 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(IMPORT_NAME_REG) {
+            _Py_IDENTIFIER(__import__);
+            int reg_result, reg;
+            PyObject *name, *func, *from, *level, *args, *res;
+            reg_result = NEXTREG();
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
+            func = _PyDict_GetItemId(f->f_builtins, &PyId___import__);
+            if (func == NULL) {
+                PyErr_SetString(PyExc_ImportError,
+                                "__import__ not found");
+                goto error;
+            }
+            Py_INCREF(func);
+            reg = NEXTREG();
+            from = GETLOCAL(reg);
+            reg = NEXTREG();
+            level = GETLOCAL(reg);
+            if (PyLong_AsLong(level) != -1 || PyErr_Occurred())
+                args = PyTuple_Pack(5,
+                            name,
+                            f->f_globals,
+                            f->f_locals == NULL ?
+                                  Py_None : f->f_locals,
+                            from,
+                            level);
+            else
+                args = PyTuple_Pack(4,
+                            name,
+                            f->f_globals,
+                            f->f_locals == NULL ?
+                                  Py_None : f->f_locals,
+                            from);
+            if (args == NULL) {
+                Py_DECREF(func);
+                STACKADJ(-1);
+                goto error;
+            }
+            READ_TIMESTAMP(intr0);
+            res = PyEval_CallObject(func, args);
+            READ_TIMESTAMP(intr1);
+            Py_DECREF(args);
+            Py_DECREF(func);
+            if (res == NULL)
+                goto error;
+            SETLOCAL(reg_result, res);
+            DISPATCH();
+        }
+
         TARGET(IMPORT_STAR) {
             PyObject *from = POP(), *locals;
             int err;
@@ -2457,10 +3340,33 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(IMPORT_STAR_REG) {
+            int reg_from;
+            PyObject *from, *locals;
+            int err;
+            reg_from = NEXTREG();
+            from = GETLOCAL(reg_from);
+            PyFrame_FastToLocals(f);
+            locals = f->f_locals;
+            if (locals == NULL) {
+                PyErr_SetString(PyExc_SystemError,
+                    "no locals found during 'import *'");
+                goto error;
+            }
+            READ_TIMESTAMP(intr0);
+            err = import_all_from(locals, from);
+            READ_TIMESTAMP(intr1);
+            PyFrame_LocalsToFast(f, 0);
+            if (err != 0)
+                goto error;
+            DISPATCH();
+        }
+
         TARGET(IMPORT_FROM) {
-            PyObject *name = GETITEM(names, oparg);
-            PyObject *from = TOP();
-            PyObject *res;
+            PyObject *name, *from, *res;
+            oparg = NEXTARG();
+            name = GETITEM(names, oparg);
+            from = TOP();
             READ_TIMESTAMP(intr0);
             res = import_from(from, name);
             READ_TIMESTAMP(intr1);
@@ -2470,15 +3376,35 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(IMPORT_FROM_REG) {
+            int reg_result, reg_from;
+            PyObject *name, *from, *res;
+            reg_result = NEXTREG();
+            reg_from = NEXTREG();
+            oparg = NEXTARG();
+            from = GETLOCAL(reg_from);
+            name = GETITEM(names, oparg);
+            READ_TIMESTAMP(intr0);
+            res = import_from(from, name);
+            READ_TIMESTAMP(intr1);
+            if (res == NULL)
+                goto error;
+            SETLOCAL(reg_result, res);
+            DISPATCH();
+        }
+
         TARGET(JUMP_FORWARD) {
+            oparg = NEXTARG();
             JUMPBY(oparg);
             FAST_DISPATCH();
         }
 
         PREDICTED_WITH_ARG(POP_JUMP_IF_FALSE);
         TARGET(POP_JUMP_IF_FALSE) {
-            PyObject *cond = POP();
+            PyObject *cond;
             int err;
+            oparg = NEXTARG();
+            cond = POP();
             if (cond == Py_True) {
                 Py_DECREF(cond);
                 FAST_DISPATCH();
@@ -2499,10 +3425,36 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        PREDICTED(JUMP_IF_FALSE_REG);
+        TARGET(JUMP_IF_FALSE_REG) {
+            PyObject *cond;
+            int err;
+            int reg = NEXTREG();
+            oparg = NEXTARG();
+            cond = GETLOCAL(reg);
+            if (cond == Py_True) {
+                FAST_DISPATCH();
+            }
+            if (cond == Py_False) {
+                JUMPTO(oparg);
+                FAST_DISPATCH();
+            }
+            err = PyObject_IsTrue(cond);
+            if (err > 0)
+                err = 0;
+            else if (err == 0)
+                JUMPTO(oparg);
+            else
+                goto error;
+            DISPATCH();
+        }
+
         PREDICTED_WITH_ARG(POP_JUMP_IF_TRUE);
         TARGET(POP_JUMP_IF_TRUE) {
-            PyObject *cond = POP();
+            PyObject *cond;
             int err;
+            oparg = NEXTARG();
+            cond = POP();
             if (cond == Py_False) {
                 Py_DECREF(cond);
                 FAST_DISPATCH();
@@ -2525,9 +3477,36 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
-        TARGET(JUMP_IF_FALSE_OR_POP) {
-            PyObject *cond = TOP();
+        PREDICTED(JUMP_IF_TRUE_REG);
+        TARGET(JUMP_IF_TRUE_REG) {
             int err;
+            int reg = NEXTREG();
+            PyObject *cond = GETLOCAL(reg);
+            oparg = NEXTARG();
+            if (cond == Py_False) {
+                FAST_DISPATCH();
+            }
+            if (cond == Py_True) {
+                JUMPTO(oparg);
+                FAST_DISPATCH();
+            }
+            err = PyObject_IsTrue(cond);
+            if (err > 0) {
+                err = 0;
+                JUMPTO(oparg);
+            }
+            else if (err == 0)
+                ;
+            else
+                goto error;
+            DISPATCH();
+        }
+
+        TARGET(JUMP_IF_FALSE_OR_POP) {
+            PyObject *cond;
+            int err;
+            oparg = NEXTARG();
+            cond = TOP();
             if (cond == Py_True) {
                 STACKADJ(-1);
                 Py_DECREF(cond);
@@ -2551,8 +3530,10 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
         }
 
         TARGET(JUMP_IF_TRUE_OR_POP) {
-            PyObject *cond = TOP();
+            PyObject *cond;
             int err;
+            oparg = NEXTARG();
+            cond = TOP();
             if (cond == Py_False) {
                 STACKADJ(-1);
                 Py_DECREF(cond);
@@ -2578,6 +3559,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
         PREDICTED_WITH_ARG(JUMP_ABSOLUTE);
         TARGET(JUMP_ABSOLUTE) {
+            oparg = NEXTARG();
             JUMPTO(oparg);
 #if FAST_LOOPS
             /* Enabling this path speeds-up all while and for-loops by bypassing
@@ -2605,11 +3587,24 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(GET_ITER_REG) {
+            int reg1 = NEXTREG();
+            int reg2 = NEXTREG();
+            PyObject *iterable = GETLOCAL(reg2);
+            PyObject *iter = PyObject_GetIter(iterable);
+            if (iter == NULL)
+                goto error;
+            SETLOCAL(reg1, iter);
+            DISPATCH();
+        }
+
         PREDICTED_WITH_ARG(FOR_ITER);
         TARGET(FOR_ITER) {
             /* before: [iter]; after: [iter, iter()] *or* [] */
-            PyObject *iter = TOP();
-            PyObject *next = (*iter->ob_type->tp_iternext)(iter);
+            PyObject *iter, *next;
+            oparg = NEXTARG();
+            iter = TOP();
+            next = (*iter->ob_type->tp_iternext)(iter);
             if (next != NULL) {
                 PUSH(next);
                 PREDICT(STORE_FAST);
@@ -2628,12 +3623,38 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(FOR_ITER_REG) {
+            /* before: [iter]; after: [iter, iter()] *or* [] */
+            PyObject *iter, *next;
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            oparg = NEXTARG();
+
+            iter = GETLOCAL(reg1);
+            next = (*iter->ob_type->tp_iternext)(iter);
+            if (next != NULL) {
+                PREDICT(UNPACK_SEQUENCE_REG);
+                /* FIXME: predict something else? */
+                SETLOCAL(reg0, next);
+                DISPATCH();
+            }
+            if (PyErr_Occurred()) {
+                if (!PyErr_ExceptionMatches(PyExc_StopIteration))
+                    goto error;
+                PyErr_Clear();
+            }
+            /* iterator ended normally */
+            JUMPBY(oparg);
+            DISPATCH();
+        }
+
         TARGET(BREAK_LOOP) {
             why = WHY_BREAK;
             goto fast_block_end;
         }
 
         TARGET(CONTINUE_LOOP) {
+            oparg = NEXTARG();
             retval = PyLong_FromLong(oparg);
             if (retval == NULL)
                 goto error;
@@ -2649,6 +3670,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
                are not try/except/finally handlers, you may need
                to update the PyGen_NeedsFinalizing() function.
                */
+            oparg = NEXTARG();
 
             PyFrame_BlockSetup(f, opcode, INSTR_OFFSET() + oparg,
                                STACK_LEVEL());
@@ -2658,9 +3680,11 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
         TARGET(SETUP_WITH) {
             _Py_IDENTIFIER(__exit__);
             _Py_IDENTIFIER(__enter__);
-            PyObject *mgr = TOP();
-            PyObject *exit = special_lookup(mgr, &PyId___exit__), *enter;
-            PyObject *res;
+            PyObject *mgr, *exit, *enter, *res;
+
+            oparg = NEXTARG();
+            mgr = TOP();
+            exit = special_lookup(mgr, &PyId___exit__);
             if (exit == NULL)
                 goto error;
             SET_TOP(exit);
@@ -2778,6 +3802,7 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
 
         TARGET(CALL_FUNCTION) {
             PyObject **sp, *res;
+            oparg = NEXTARG();
             PCALL(PCALL_ALL);
             sp = stack_pointer;
 #ifdef WITH_TSC
@@ -2792,15 +3817,36 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET_WITH_IMPL(CALL_PROCEDURE_REG, _call_function_reg)
+        TARGET(CALL_FUNCTION_REG)
+        _call_function_reg: {
+            int res;
+            unsigned char *next_instr_var;
+            PCALL(PCALL_ALL);
+            next_instr_var = next_instr;
+#ifdef WITH_TSC
+            res = call_function_reg(opcode == CALL_PROCEDURE_REG, fastlocals, &next_instr_var, &intr0, &intr1);
+#else
+            res = call_function_reg(opcode == CALL_PROCEDURE_REG, fastlocals, &next_instr_var);
+#endif
+            next_instr = next_instr_var;
+            if (res == -1)
+                goto error;
+            DISPATCH();
+        }
+
         TARGET_WITH_IMPL(CALL_FUNCTION_VAR, _call_function_var_kw)
         TARGET_WITH_IMPL(CALL_FUNCTION_KW, _call_function_var_kw)
         TARGET(CALL_FUNCTION_VAR_KW)
         _call_function_var_kw: {
-            int na = oparg & 0xff;
-            int nk = (oparg>>8) & 0xff;
-            int flags = (opcode - CALL_FUNCTION) & 3;
-            int n = na + 2 * nk;
+            int na, nk, flags, n;
             PyObject **pfunc, *func, **sp, *res;
+
+            oparg = NEXTARG();
+            na = oparg & 0xff;
+            nk = (oparg>>8) & 0xff;
+            flags = (opcode - CALL_FUNCTION) & 3;
+            n = na + 2 * nk;
             PCALL(PCALL_ALL);
             if (flags & CALL_FLAG_VAR)
                 n++;
@@ -2841,13 +3887,16 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
         TARGET_WITH_IMPL(MAKE_CLOSURE, _make_function)
         TARGET(MAKE_FUNCTION)
         _make_function: {
-            int posdefaults = oparg & 0xff;
-            int kwdefaults = (oparg>>8) & 0xff;
-            int num_annotations = (oparg >> 16) & 0x7fff;
+            int posdefaults, kwdefaults, num_annotations;
+            PyObject *qualname, *code, *func;
 
-            PyObject *qualname = POP(); /* qualname */
-            PyObject *code = POP(); /* code object */
-            PyObject *func = PyFunction_NewWithQualName(code, f->f_globals, qualname);
+            oparg = NEXTARG();
+            posdefaults = oparg & 0xff;
+            kwdefaults = (oparg>>8) & 0xff;
+            num_annotations = (oparg >> 16) & 0x7fff;
+            qualname = POP(); /* qualname */
+            code = POP(); /* code object */
+            func = PyFunction_NewWithQualName(code, f->f_globals, qualname);
             Py_DECREF(code);
             Py_DECREF(qualname);
 
@@ -2950,8 +3999,138 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET_WITH_IMPL(MAKE_CLOSURE_REG, _make_function_reg)
+        TARGET(MAKE_FUNCTION_REG)
+        _make_function_reg: {
+            int reg_result, reg_qualname, reg_code, reg;
+            int posdefaults, kwdefaults, num_annotations;
+            PyObject *qualname, *code, *func;
+
+            reg_result = NEXTREG();
+            reg_qualname = NEXTREG();
+            reg_code = NEXTREG();
+
+            qualname = GETLOCAL(reg_qualname); /* qualname */
+            code = GETLOCAL(reg_code); /* code object */
+            func = PyFunction_NewWithQualName(code, f->f_globals, qualname);
+
+            if (func == NULL)
+                goto error;
+
+            if (opcode == MAKE_CLOSURE_REG) {
+                int reg_closure = NEXTREG();
+                PyObject *closure = GETLOCAL(reg_closure);
+                if (PyFunction_SetClosure(func, closure) != 0) {
+                    /* Can't happen unless bytecode is corrupt. */
+                    Py_DECREF(func);
+                    goto error;
+                }
+            }
+
+            posdefaults = NEXTIMM8();
+
+            /* XXX Maybe this should be a separate opcode? */
+            if (posdefaults > 0) {
+                PyObject *defs = PyTuple_New(posdefaults);
+                if (defs == NULL) {
+                    Py_DECREF(func);
+                    goto error;
+                }
+                while (--posdefaults >= 0) {
+                    int reg_def = NEXTREG();
+                    PyObject *def = GETLOCAL(reg_def);
+                    Py_INCREF(def);
+                    PyTuple_SET_ITEM(defs, posdefaults, def);
+                }
+                if (PyFunction_SetDefaults(func, defs) != 0) {
+                    /* Can't happen unless
+                       PyFunction_SetDefaults changes. */
+                    Py_DECREF(defs);
+                    Py_DECREF(func);
+                    goto error;
+                }
+                Py_DECREF(defs);
+            }
+
+            kwdefaults = NEXTIMM8();
+            if (kwdefaults > 0) {
+                PyObject *defs = PyDict_New();
+                if (defs == NULL) {
+                    Py_DECREF(func);
+                    goto error;
+                }
+                while (--kwdefaults >= 0) {
+                    int reg_v, reg_key;
+                    PyObject *v, *key;
+                    reg_v = NEXTREG();
+                    reg_key = NEXTREG();
+                    v = GETLOCAL(reg_v); /* default value */
+                    key = GETLOCAL(reg_key); /* kw only arg name */
+                    int err = PyDict_SetItem(defs, key, v);
+                    if (err != 0) {
+                        Py_DECREF(defs);
+                        Py_DECREF(func);
+                        goto error;
+                    }
+                }
+                if (PyFunction_SetKwDefaults(func, defs) != 0) {
+                    /* Can't happen unless
+                       PyFunction_SetKwDefaults changes. */
+                    Py_DECREF(func);
+                    Py_DECREF(defs);
+                    goto error;
+                }
+                Py_DECREF(defs);
+            }
+
+            num_annotations = NEXTIMM8();
+
+            if (num_annotations > 0) {
+                Py_ssize_t name_ix;
+                PyObject *names; /* names of args with annotations */
+                PyObject *anns;
+                reg = NEXTREG();
+                names = GETLOCAL(reg);
+                anns = PyDict_New();
+                if (anns == NULL) {
+                    Py_DECREF(func);
+                    goto error;
+                }
+                name_ix = PyTuple_Size(names);
+                assert(num_annotations == name_ix+1);
+                while (name_ix > 0) {
+                    PyObject *name, *value;
+                    int err;
+                    --name_ix;
+                    name = PyTuple_GET_ITEM(names, name_ix);
+
+                    reg = NEXTREG();
+                    value = GETLOCAL(reg);
+                    err = PyDict_SetItem(anns, name, value);
+                    if (err != 0) {
+                        Py_DECREF(anns);
+                        Py_DECREF(func);
+                        goto error;
+                    }
+                }
+
+                if (PyFunction_SetAnnotations(func, anns) != 0) {
+                    /* Can't happen unless
+                       PyFunction_SetAnnotations changes. */
+                    Py_DECREF(anns);
+                    Py_DECREF(func);
+                    goto error;
+                }
+                Py_DECREF(anns);
+            }
+
+            SETLOCAL(reg_result, func);
+            DISPATCH();
+        }
+
         TARGET(BUILD_SLICE) {
             PyObject *start, *stop, *step, *slice;
+            oparg = NEXTARG();
             if (oparg == 3)
                 step = POP();
             else
@@ -2968,9 +4147,41 @@ PyEval_EvalFrameEx(PyFrameObject *f, int throwflag)
             DISPATCH();
         }
 
+        TARGET(BUILD_SLICE2_REG) {
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            int reg2 = NEXTREG();
+            PyObject *start, *stop, *slice;
+            start = GETLOCAL(reg1);
+            stop = GETLOCAL(reg2);
+            slice = PySlice_New(start, stop, NULL);
+            if (slice == NULL)
+                goto error;
+            SETLOCAL(reg0, slice);
+            DISPATCH();
+        }
+
+        TARGET(BUILD_SLICE3_REG) {
+            int reg0 = NEXTREG();
+            int reg1 = NEXTREG();
+            int reg2 = NEXTREG();
+            int reg3 = NEXTREG();
+            PyObject *start, *stop, *step, *slice;
+            start = GETLOCAL(reg1);
+            stop = GETLOCAL(reg2);
+            step = GETLOCAL(reg3);
+            slice = PySlice_New(start, stop, step);
+            if (slice == NULL)
+                goto error;
+            SETLOCAL(reg0, slice);
+            DISPATCH();
+        }
+
         TARGET(EXTENDED_ARG) {
+            oparg = NEXTARG();
+            extendedarg = oparg<<16;
+
             opcode = NEXTOP();
-            oparg = oparg<<16 | NEXTARG();
             goto dispatch_opcode;
         }
 
@@ -3773,6 +4984,97 @@ Error:
     return 0;
 }
 
+static int
+unpack_iterable_reg(PyObject *v, int argcnt,
+                    unsigned char **p_next_instr, PyObject **fastlocals)
+{
+    int i = 0, j = 0;
+    Py_ssize_t ll = 0;
+    PyObject *it;  /* iter(v) */
+    PyObject *w;
+    PyObject *l = NULL; /* variable list */
+    int reg;
+    unsigned char **old_next_instr = p_next_instr;
+    int ext;
+    int argcntafter;
+
+    assert(v != NULL);
+
+    it = PyObject_GetIter(v);
+    if (it == NULL)
+        goto Error;
+
+    ext = (argcnt == -1);
+    if (ext)
+        argcnt = NEXTIMM8_PTR(p_next_instr);
+
+    for (; i < argcnt; i++) {
+        w = PyIter_Next(it);
+        if (w == NULL) {
+            /* Iterator done, via error or exhaustion. */
+            if (!PyErr_Occurred()) {
+                PyErr_Format(PyExc_ValueError,
+                    "need more than %d value%s to unpack",
+                    i, i == 1 ? "" : "s");
+            }
+            goto Error;
+        }
+        reg = NEXTREG_PTR(p_next_instr);
+        SETLOCAL(reg, w);
+    }
+
+    if (!ext) {
+        /* We better have exhausted the iterator now. */
+        w = PyIter_Next(it);
+        if (w == NULL) {
+            if (PyErr_Occurred())
+                goto Error;
+            Py_DECREF(it);
+            return 1;
+        }
+        Py_DECREF(w);
+        PyErr_Format(PyExc_ValueError, "too many values to unpack "
+                     "(expected %d)", argcnt);
+        goto Error;
+    }
+
+    l = PySequence_List(it);
+    if (l == NULL)
+        goto Error;
+    reg = NEXTREG_PTR(p_next_instr);
+    SETLOCAL(reg, l);
+    i++;
+
+    argcntafter = NEXTIMM8_PTR(p_next_instr);
+
+    ll = PyList_GET_SIZE(l);
+    if (ll < argcntafter) {
+        PyErr_Format(PyExc_ValueError, "need more than %zd values to unpack",
+                     argcnt + ll);
+        goto Error;
+    }
+
+    /* Pop the "after-variable" args off the list. */
+    for (j = argcntafter; j > 0; j--, i++) {
+        reg = NEXTREG_PTR(p_next_instr);
+        w = PyList_GET_ITEM(l, ll - j);
+        SETLOCAL(reg, w);
+    }
+    /* Resize the list. */
+    Py_SIZE(l) = ll - argcntafter;
+    Py_DECREF(it);
+    return 1;
+
+Error:
+    for (; i > 0; i--) {
+        reg = NEXTREG_PTR(old_next_instr);
+        w = GETLOCAL(reg);
+        Py_DECREF(w);
+    }
+    Py_XDECREF(it);
+    return 0;
+}
+
 
 #ifdef LLTRACE
 static int
@@ -4183,6 +5485,101 @@ call_function(PyObject ***pp_stack, int oparg
     return x;
 }
 
+static int
+call_function_reg(int is_procedure, PyObject **fastlocals, unsigned char **p_next_instr
+#ifdef WITH_TSC
+                , uint64* pintr0, uint64* pintr1
+#endif
+                )
+{
+    int regres, regfunc, nreg;
+    int na, nk, n;
+    PyObject *func, *x, *method_self = NULL;
+
+    if (!is_procedure)
+        regres = NEXTREG_PTR(p_next_instr);
+    regfunc = NEXTREG_PTR(p_next_instr);
+    /* FIXME: nreg: + extendedarg */
+    nreg = NEXTARG_PTR(p_next_instr);
+    func = GETLOCAL(regfunc);
+
+    na = nreg & 0xff;
+    nk = (nreg >>8) & 0xff;
+    n = na + 2 * nk;
+
+    /* Always dispatch PyCFunction first, because these are
+       presumed to be the most frequent callable object.
+    */
+    if (PyCFunction_Check(func) && nk == 0) {
+        int flags = PyCFunction_GET_FLAGS(func);
+        PyThreadState *tstate = PyThreadState_GET();
+
+        PCALL(PCALL_CFUNCTION);
+        if (flags & (METH_NOARGS | METH_O)) {
+            PyCFunction meth = PyCFunction_GET_FUNCTION(func);
+            PyObject *self = PyCFunction_GET_SELF(func);
+            if (flags & METH_NOARGS && na == 0) {
+                C_TRACE(x, (*meth)(self,NULL));
+            }
+            else if (flags & METH_O && na == 1) {
+                int regarg0 = NEXTREG_PTR(p_next_instr);
+                PyObject *arg = GETLOCAL(regarg0);
+                C_TRACE(x, (*meth)(self,arg));
+            }
+            else {
+                err_args(func, flags, na);
+                x = NULL;
+            }
+        }
+        else {
+            PyObject *callargs;
+            callargs = load_args_reg(na, fastlocals, p_next_instr);
+            READ_TIMESTAMP(*pintr0);
+            C_TRACE(x, PyCFunction_Call(func,callargs,NULL));
+            READ_TIMESTAMP(*pintr1);
+            Py_XDECREF(callargs);
+        }
+    } else {
+        if (PyMethod_Check(func) && PyMethod_GET_SELF(func) != NULL) {
+            /* optimize access to bound methods */
+            PyObject *self = PyMethod_GET_SELF(func);
+            method_self = self;
+            Py_INCREF(method_self);
+            PCALL(PCALL_METHOD);
+            PCALL(PCALL_BOUND_METHOD);
+            func = PyMethod_GET_FUNCTION(func);
+            Py_INCREF(func);
+            na++;
+            n++;
+        } else
+            Py_INCREF(func);
+        READ_TIMESTAMP(*pintr0);
+        if (PyFunction_Check(func))
+            x = fast_function_reg(method_self, func, fastlocals, p_next_instr, n, na, nk);
+        else
+            x = do_call_reg(func, fastlocals, p_next_instr, na, nk);
+        if (method_self != NULL)
+            Py_DECREF(method_self);
+        READ_TIMESTAMP(*pintr1);
+        Py_DECREF(func);
+    }
+
+    /* Clear the stack of the function object.  Also removes
+       the arguments in case they weren't consumed already
+       (fast_function() and err_args() leave them on the stack).
+     */
+    if (x != NULL) {
+        if (!is_procedure)
+            SETLOCAL(regres, x);
+        else
+            Py_DECREF(x);
+    }
+
+    if (x == NULL)
+        return -1;
+    return 0;
+}
+
 /* The fast_function() function optimize calls for which no argument
    tuple is necessary; the objects are passed directly from the stack.
    For the simplest case -- a function that takes only positional
@@ -4248,6 +5645,103 @@ fast_function(PyObject *func, PyObject ***pp_stack, int n, int na, int nk)
 }
 
 static PyObject *
+fast_function_reg(PyObject *method_self, PyObject *func, PyObject **fastlocals, unsigned char **p_next_instr, int n, int na, int nk)
+{
+    PyCodeObject *co = (PyCodeObject *)PyFunction_GET_CODE(func);
+    PyObject *globals = PyFunction_GET_GLOBALS(func);
+    PyObject *argdefs = PyFunction_GET_DEFAULTS(func);
+    PyObject *kwdefs = PyFunction_GET_KW_DEFAULTS(func);
+    PyObject **d = NULL;
+    PyObject **args;
+    PyObject **kws;
+    PyObject *res;
+    int i;
+    int nd = 0;
+    int reg;
+    PyObject *value;
+
+    PCALL(PCALL_FUNCTION);
+    PCALL(PCALL_FAST_FUNCTION);
+    if (argdefs == NULL && co->co_argcount == n &&
+        co->co_kwonlyargcount == 0 && nk==0 &&
+        co->co_flags == (CO_OPTIMIZED | CO_NEWLOCALS | CO_NOFREE)) {
+        PyFrameObject *f;
+        PyObject *retval = NULL;
+        PyThreadState *tstate = PyThreadState_GET();
+        PyObject **f_fastlocals;
+
+        PCALL(PCALL_FASTER_FUNCTION);
+        assert(globals != NULL);
+        /* XXX Perhaps we should create a specialized
+           PyFrame_New() that doesn't take locals, but does
+           take builtins without sanity checking them.
+        */
+        assert(tstate != NULL);
+        f = PyFrame_New(tstate, co, globals, NULL);
+        if (f == NULL)
+            return NULL;
+
+        f_fastlocals = f->f_localsplus;
+
+        for (i = 0; i < n; i++) {
+            if (i == 0 && method_self != NULL) {
+                value = method_self;
+            }
+            else {
+                reg = NEXTREG_PTR(p_next_instr);
+                value = GETLOCAL(reg);
+            }
+            Py_INCREF(value);
+            f_fastlocals[i] = value;
+        }
+        retval = PyEval_EvalFrameEx(f,0);
+        ++tstate->recursion_depth;
+        Py_DECREF(f);
+        --tstate->recursion_depth;
+        return retval;
+    }
+
+    /* FIXME: don't use alloca() if na > 10 */
+    args = alloca(sizeof(PyObject*) * na);
+    for (i=0; i < na; i++) {
+        if (i == 0 && method_self != NULL) {
+            value = method_self;
+        }
+        else {
+            reg = NEXTREG_PTR(p_next_instr);
+            value = GETLOCAL(reg);
+        }
+        /* Py_INCREF(value); */
+        args[i] = value;
+    }
+    /* FIXME: don't use alloca() if nk > 5 */
+    kws = alloca(sizeof(PyObject*) * nk * 2);
+    for (i=0; i < nk; i++) {
+        reg = NEXTREG_PTR(p_next_instr);
+        value = GETLOCAL(reg);
+        /* Py_INCREF(key); */
+        kws[2*i] = value;
+
+        reg = NEXTREG_PTR(p_next_instr);
+        value = GETLOCAL(reg);
+        /* Py_INCREF(value); */
+        kws[2*i+1] = value;
+    }
+    if (argdefs != NULL) {
+        d = &PyTuple_GET_ITEM(argdefs, 0);
+        nd = Py_SIZE(argdefs);
+    }
+
+    res = PyEval_EvalCodeEx((PyObject*)co, globals,
+                            (PyObject *)NULL,
+                            args, na,
+                            kws, nk,
+                            d, nd, kwdefs,
+                            PyFunction_GET_CLOSURE(func));
+    return res;
+}
+
+static PyObject *
 update_keyword_args(PyObject *orig_kwdict, int nk, PyObject ***pp_stack,
                     PyObject *func)
 {
@@ -4279,6 +5773,47 @@ update_keyword_args(PyObject *orig_kwdict, int nk, PyObject ***pp_stack,
         err = PyDict_SetItem(kwdict, key, value);
         Py_DECREF(key);
         Py_DECREF(value);
+        if (err) {
+            Py_DECREF(kwdict);
+            return NULL;
+        }
+    }
+    return kwdict;
+}
+
+static PyObject *
+update_keyword_args_reg(PyObject *orig_kwdict, int nk,
+                        PyObject **fastlocals, unsigned char **p_next_instr,
+                        PyObject *func)
+{
+    PyObject *kwdict = NULL;
+    if (orig_kwdict == NULL)
+        kwdict = PyDict_New();
+    else {
+        kwdict = PyDict_Copy(orig_kwdict);
+        Py_DECREF(orig_kwdict);
+    }
+    if (kwdict == NULL)
+        return NULL;
+    while (--nk >= 0) {
+        int err;
+        PyObject *value, *key;
+        int reg;
+        reg = NEXTREG_PTR(p_next_instr);
+        key = GETLOCAL(reg);
+        reg = NEXTREG_PTR(p_next_instr);
+        value = GETLOCAL(reg);
+        if (PyDict_GetItem(kwdict, key) != NULL) {
+            PyErr_Format(PyExc_TypeError,
+                         "%.200s%s got multiple values "
+                         "for keyword argument '%U'",
+                         PyEval_GetFuncName(func),
+                         PyEval_GetFuncDesc(func),
+                         key);
+            Py_DECREF(kwdict);
+            return NULL;
+        }
+        err = PyDict_SetItem(kwdict, key, value);
         if (err) {
             Py_DECREF(kwdict);
             return NULL;
@@ -4328,6 +5863,25 @@ load_args(PyObject ***pp_stack, int na)
 }
 
 static PyObject *
+load_args_reg(int na, PyObject **fastlocals, unsigned char **p_next_instr)
+{
+    PyObject *args = PyTuple_New(na);
+    PyObject *w;
+    int reg;
+    int i;
+
+    if (args == NULL)
+        return NULL;
+    for (i=0; i < na; i++) {
+        reg = NEXTREG_PTR(p_next_instr);
+        w = GETLOCAL(reg);
+        Py_INCREF(w);
+        PyTuple_SET_ITEM(args, i, w);
+    }
+    return args;
+}
+
+static PyObject *
 do_call(PyObject *func, PyObject ***pp_stack, int na, int nk)
 {
     PyObject *callargs = NULL;
@@ -4342,6 +5896,49 @@ do_call(PyObject *func, PyObject ***pp_stack, int na, int nk)
     callargs = load_args(pp_stack, na);
     if (callargs == NULL)
         goto call_fail;
+#ifdef CALL_PROFILE
+    /* At this point, we have to look at the type of func to
+       update the call stats properly.  Do it here so as to avoid
+       exposing the call stats machinery outside ceval.c
+    */
+    if (PyFunction_Check(func))
+        PCALL(PCALL_FUNCTION);
+    else if (PyMethod_Check(func))
+        PCALL(PCALL_METHOD);
+    else if (PyType_Check(func))
+        PCALL(PCALL_TYPE);
+    else if (PyCFunction_Check(func))
+        PCALL(PCALL_CFUNCTION);
+    else
+        PCALL(PCALL_OTHER);
+#endif
+    if (PyCFunction_Check(func)) {
+        PyThreadState *tstate = PyThreadState_GET();
+        C_TRACE(result, PyCFunction_Call(func, callargs, kwdict));
+    }
+    else
+        result = PyObject_Call(func, callargs, kwdict);
+call_fail:
+    Py_XDECREF(callargs);
+    Py_XDECREF(kwdict);
+    return result;
+}
+
+static PyObject *
+do_call_reg(PyObject *func, PyObject **fastlocals, unsigned char **p_next_instr, int na, int nk)
+{
+    PyObject *callargs = NULL;
+    PyObject *kwdict = NULL;
+    PyObject *result = NULL;
+
+    callargs = load_args_reg(na, fastlocals, p_next_instr);
+    if (callargs == NULL)
+        goto call_fail;
+    if (nk > 0) {
+        kwdict = update_keyword_args_reg(NULL, nk, fastlocals, p_next_instr, func);
+        if (kwdict == NULL)
+            goto call_fail;
+    }
 #ifdef CALL_PROFILE
     /* At this point, we have to look at the type of func to
        update the call stats properly.  Do it here so as to avoid

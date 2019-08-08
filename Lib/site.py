@@ -586,6 +586,27 @@ def main():
     if ENABLE_USER_SITE:
         execusercustomize()
 
+    if 0:
+        try:
+            from registervm import optimize_code, Config
+        except ImportError as err:
+            print("Failed to import registervm module: %s" % err)
+        else:
+            config = Config()
+            config.quiet = False
+            config.enable_unsafe_optimizations()
+
+            def code_optimizer(co):
+                try:
+                    new_code = optimize_code(co, config)
+                except Exception as err:
+                    print("Failed to optimize bytecode: [%s] %s"
+                          % (type(err).__name__, err))
+                    return co
+                return new_code
+            sys.setcodeoptimizer(code_optimizer)
+            print("Enable code optimizer (registervm)")
+
 # Prevent edition of sys.path when python was started with -S and
 # site is imported later.
 if not sys.flags.no_site:

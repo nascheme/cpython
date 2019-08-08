@@ -144,6 +144,35 @@ def show_code(co):
     """Print details of methods, functions, or code to stdout."""
     print(code_info(co))
 
+def format_arg(co, arg_type, oparg, i):
+    text = repr(oparg)
+    if arg_type == 'const':
+        text = '%r (const#%s)' % (co.co_consts[oparg], oparg)
+    elif arg_type == 'name':
+        text = "%r (name#%s)" % (co.co_names[oparg], oparg)
+    elif arg_type == 'jabs':
+        text = '<jump to %s>' % text
+    elif arg_type == 'jrel':
+        text = '<relative jump to %s (%+i)>' % (i + oparg, oparg)
+    elif arg_type == 'local':
+        text += ' (' + co.co_varnames[oparg] + ')'
+    elif arg_type == 'cmp':
+        text = repr(cmp_op[oparg])
+    elif arg_type == 'free':
+        free = co.co_cellvars + co.co_freevars
+        text += ' (' + free[oparg] + ')'
+    elif arg_type in ('nargs', 'call_nargs'):
+        text += ' (%d positional, %d keyword pair)' % (oparg & 0xff, oparg >> 8)
+    return text
+
+def format_reg(co, reg):
+    first_register = co.co_stacksize + co.co_nlocals + len(co.co_cellvars) + len(co.co_freevars) + 1
+    if reg < first_register:
+        return repr(co.co_varnames[reg])
+    else:
+        reg -= first_register
+        return 'R%s' % reg
+
 def disassemble(co, lasti=-1):
     """Disassemble a code object."""
     code = co.co_code
@@ -155,6 +184,9 @@ def disassemble(co, lasti=-1):
     free = None
     while i < n:
         op = code[i]
+        operation = OPERATION_BY_CODE[op]
+        name = opname[op]
+
         if i in linestarts:
             if i > 0:
                 print()
@@ -169,30 +201,55 @@ def disassemble(co, lasti=-1):
         print(repr(i).rjust(4), end=' ')
         print(opname[op].ljust(20), end=' ')
         i = i+1
-        if op >= HAVE_ARGUMENT:
-            oparg = code[i] + code[i+1]*256 + extended_arg
+
+        args = []
+        arg = None
+        for arg_type in operation.arg_types:
+            if arg_type == 'reg':
+                reg = code[i] + code[i+1] * 256
+                args.append(format_reg(co, reg))
+                i += 2
+            elif arg_type == 'nreg8':
+                nreg = code[i]
+                i += 1
+                args.append(format_arg(co, arg_type, nreg, i))
+                for ireg in range(nreg):
+                    reg = code[i] + code[i+1] * 256
+                    args.append(format_reg(co, reg))
+                    i += 2
+            elif arg_type == 'nkwreg8':
+                nreg = code[i]
+                i += 1
+                args.append(format_arg(co, arg_type, nreg, i))
+                for ireg in range(nreg * 2):
+                    reg = code[i] + code[i+1] * 256
+                    args.append(format_reg(co, reg))
+                    i += 2
+            else:
+                arg = code[i] + code[i+1] * 256 + extended_arg
+                i += 2
+                if arg_type == 'nreg':
+                    nreg = arg
+                elif arg_type == 'call_nreg':
+                    na = arg & 0xff
+                    nk = arg >> 8
+                    nreg = na + 2 * nk
+                else:
+                    nreg = None
+                args.append(format_arg(co, arg_type, arg, i))
+                if nreg is not None:
+                    for ireg in range(nreg):
+                        reg = code[i] + code[i+1] * 256
+                        args.append(format_reg(co, reg))
+                        i += 2
+
+        print(', '.join(args), end=' ')
+
+        if op == EXTENDED_ARG:
+            extended_arg = arg * 65536
+        else:
             extended_arg = 0
-            i = i+2
-            if op == EXTENDED_ARG:
-                extended_arg = oparg*65536
-            print(repr(oparg).rjust(5), end=' ')
-            if op in hasconst:
-                print('(' + repr(co.co_consts[oparg]) + ')', end=' ')
-            elif op in hasname:
-                print('(' + co.co_names[oparg] + ')', end=' ')
-            elif op in hasjrel:
-                print('(to ' + repr(i + oparg) + ')', end=' ')
-            elif op in haslocal:
-                print('(' + co.co_varnames[oparg] + ')', end=' ')
-            elif op in hascompare:
-                print('(' + cmp_op[oparg] + ')', end=' ')
-            elif op in hasfree:
-                if free is None:
-                    free = co.co_cellvars + co.co_freevars
-                print('(' + free[oparg] + ')', end=' ')
-            elif op in hasnargs:
-                print('(%d positional, %d keyword pair)'
-                      % (code[i-2], code[i-1]), end=' ')
+
         print()
 
 def _disassemble_bytes(code, lasti=-1, varnames=None, names=None,
@@ -252,20 +309,58 @@ def findlabels(code):
     labels = []
     n = len(code)
     i = 0
+    extended_arg = 0
     while i < n:
         op = code[i]
         i = i+1
-        if op >= HAVE_ARGUMENT:
-            oparg = code[i] + code[i+1]*256
-            i = i+2
-            label = -1
-            if op in hasjrel:
-                label = i+oparg
-            elif op in hasjabs:
-                label = oparg
-            if label >= 0:
-                if label not in labels:
-                    labels.append(label)
+        operation = OPERATION_BY_CODE[op]
+
+        arg = None
+        nreg = None
+        for arg_type in operation.arg_types:
+            if arg_type == 'reg':
+                reg = code[i] + code[i+1] * 256
+                i += 2
+            elif arg_type == 'nreg8':
+                nreg = code[i]
+                i += 1
+                for ireg in range(nreg):
+                    reg = code[i] + code[i+1] * 256
+                    i += 2
+            elif arg_type == 'nkwreg8':
+                nreg = code[i]
+                i += 1
+                for ireg in range(nreg * 2):
+                    reg = code[i] + code[i+1] * 256
+                    i += 2
+            else:
+                arg = code[i] + code[i+1] * 256 + extended_arg
+                i += 2
+                nreg = None
+                label = None
+                if arg_type == 'nreg':
+                    nreg = arg
+                elif arg_type == 'call_nreg':
+                    na = arg & 0xff
+                    nk = arg >> 8
+                    nreg = na + 2 * nk
+                elif arg_type == 'jabs':
+                    label = arg
+                elif arg_type == 'jrel':
+                    label = i + arg
+                if label is not None:
+                    if label not in labels:
+                        labels.append(label)
+                if nreg is not None:
+                    for ireg in range(nreg):
+                        reg = code[i] + code[i+1] * 256
+                        i += 2
+
+        if op == EXTENDED_ARG:
+            extended_arg = arg*65536
+        else:
+            extended_arg = 0
+
     return labels
 
 def findlinestarts(code):

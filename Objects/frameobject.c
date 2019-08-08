@@ -424,6 +424,7 @@ frame_dealloc(PyFrameObject *f)
 {
     PyObject **p, **valuestack;
     PyCodeObject *co;
+    Py_ssize_t i;
 
     PyObject_GC_UnTrack(f);
     Py_TRASHCAN_SAFE_BEGIN(f)
@@ -437,6 +438,9 @@ frame_dealloc(PyFrameObject *f)
         for (p = valuestack; p < f->f_stacktop; p++)
             Py_XDECREF(*p);
     }
+
+    for (i=0; i<FRAME_NREGISTER; i++)
+        Py_CLEAR(f->f_registers[i]);
 
     Py_XDECREF(f->f_back);
     Py_DECREF(f->f_builtins);
@@ -484,6 +488,9 @@ frame_traverse(PyFrameObject *f, visitproc visit, void *arg)
     for (i = slots; --i >= 0; ++fastlocals)
         Py_VISIT(*fastlocals);
 
+    for (i=0; i<FRAME_NREGISTER; i++)
+        Py_VISIT(f->f_registers[i]);
+
     /* stack */
     if (f->f_stacktop != NULL) {
         for (p = f->f_valuestack; p < f->f_stacktop; p++)
@@ -516,6 +523,9 @@ frame_clear(PyFrameObject *f)
     fastlocals = f->f_localsplus;
     for (i = slots; --i >= 0; ++fastlocals)
         Py_CLEAR(*fastlocals);
+
+    for (i=0; i<FRAME_NREGISTER; i++)
+        Py_CLEAR(f->f_registers[i]);
 
     /* stack */
     if (oldtop != NULL) {
@@ -648,7 +658,7 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code, PyObject *globals,
         ncells = PyTuple_GET_SIZE(code->co_cellvars);
         nfrees = PyTuple_GET_SIZE(code->co_freevars);
         extras = code->co_stacksize + code->co_nlocals + ncells +
-            nfrees;
+            nfrees + FRAME_NREGISTER;
         if (free_list == NULL) {
             f = PyObject_GC_NewVar(PyFrameObject, &PyFrame_Type,
             extras);
@@ -682,6 +692,10 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code, PyObject *globals,
         f->f_locals = NULL;
         f->f_trace = NULL;
         f->f_exc_type = f->f_exc_value = f->f_exc_traceback = NULL;
+        f->f_registers = &f->f_localsplus[code->co_stacksize + code->co_nlocals + ncells + nfrees];
+        for (i=0; i<FRAME_NREGISTER; i++)
+            f->f_registers[i] = NULL;
+
     }
     f->f_stacktop = f->f_valuestack;
     f->f_builtins = builtins;

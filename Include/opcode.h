@@ -121,9 +121,9 @@ extern "C" {
 
 #define MAKE_CLOSURE    134     /* same as MAKE_FUNCTION */
 #define LOAD_CLOSURE    135     /* Load free variable from closure */
-#define LOAD_DEREF      136     /* Load and dereference from closure cell */ 
-#define STORE_DEREF     137     /* Store into cell */ 
-#define DELETE_DEREF    138     /* Delete closure cell */ 
+#define LOAD_DEREF      136     /* Load and dereference from closure cell */
+#define STORE_DEREF     137     /* Store into cell */
+#define DELETE_DEREF    138     /* Delete closure cell */
 
 /* The next 3 opcodes must be contiguous and satisfy
    (CALL_FUNCTION_VAR - CALL_FUNCTION) & 3 == 1  */
@@ -140,6 +140,66 @@ extern "C" {
 #define SET_ADD         146
 #define MAP_ADD         147
 
+#define USE_REGISTERS 148       /* Opcodes from here use registers: */
+
+#define UNARY_NOT_REG            148
+#define LOAD_CONST_REG           150     /* Index in const list */
+#define RETURN_VALUE_REG         151
+#define BINARY_ADD_REG           152
+#define POP_REG                  153
+#define MOVE_REG                 154
+#define PUSH_REG                 155
+#define BINARY_MULTIPLY_REG      156
+#define LOAD_GLOBAL_REG          157
+#define BINARY_SUBTRACT_REG      158
+#define FOR_ITER_REG             159
+#define COMPARE_REG              160     /* Comparison operator */
+#define JUMP_IF_FALSE_REG        161
+#define CALL_FUNCTION_REG        162
+#define GET_ITER_REG             163
+#define BINARY_SUBSCR_REG        164
+#define LOAD_ATTR_REG            165
+#define BINARY_FLOOR_DIVIDE_REG  166
+#define JUMP_IF_TRUE_REG         167
+#define UNARY_NEGATIVE_REG       168
+#define BUILD_SLICE2_REG         169
+#define BUILD_LIST_REG           170
+#define UNPACK_SEQUENCE_REG      171
+#define BUILD_TUPLE_REG          172
+#define INPLACE_ADD_REG          173
+#define INPLACE_MULTIPLY_REG     174
+#define INPLACE_SUBTRACT_REG     175
+#define INPLACE_FLOOR_DIVIDE_REG 176
+#define STORE_GLOBAL_REG         177
+#define STORE_ATTR_REG           178
+#define BUILD_MAP_REG            179
+#define STORE_MAP_REG            180
+#define MAKE_FUNCTION_REG        181
+#define LOAD_BUILD_CLASS_REG     182
+#define CALL_PROCEDURE_REG       183
+#define CLEAR_REG                184
+#define MAKE_CLOSURE_REG         185
+#define LOAD_CLOSURE_REG         186
+#define STORE_DEREF_REG          187
+#define DELETE_SUBSCR_REG        188
+#define LOAD_DEREF_REG           189
+#define BINARY_MODULO_REG        190
+#define STORE_SUBSCR_REG         191
+#define BINARY_TRUE_DIVIDE_REG   192
+#define INPLACE_TRUE_DIVIDE_REG  193
+#define INPLACE_MODULO_REG       194
+#define LOAD_NAME_REG            195
+#define LIST_APPEND_REG          196
+#define STORE_NAME_REG           197
+#define IMPORT_NAME_REG          198
+#define IMPORT_FROM_REG          199
+#define IMPORT_STAR_REG          200
+#define YIELD_REG                201
+#define STORE_LOCALS_REG         202
+#define UNARY_POSITIVE_REG       203
+#define MAP_ADD_REG              204
+#define BUILD_SLICE3_REG         205
+#define UNPACK_EX_REG            206
 
 /* EXCEPT_HANDLER is a special, implicit block type which is created when
    entering an except handler. It is not an opcode but we define it here
@@ -151,7 +211,7 @@ extern "C" {
 enum cmp_op {PyCmp_LT=Py_LT, PyCmp_LE=Py_LE, PyCmp_EQ=Py_EQ, PyCmp_NE=Py_NE, PyCmp_GT=Py_GT, PyCmp_GE=Py_GE,
              PyCmp_IN, PyCmp_NOT_IN, PyCmp_IS, PyCmp_IS_NOT, PyCmp_EXC_MATCH, PyCmp_BAD};
 
-#define HAS_ARG(op) ((op) >= HAVE_ARGUMENT)
+#define HAS_ARG(op) ((op) >= HAVE_ARGUMENT && (op) < USE_REGISTERS)
 
 #ifdef __cplusplus
 }

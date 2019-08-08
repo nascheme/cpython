@@ -411,6 +411,29 @@ trace_trampoline(PyObject *self, PyFrameObject *frame,
     return 0;
 }
 
+extern PyObject* Py_CodeOptimizer;
+
+static PyObject *
+sys_setcodeoptimizer(PyObject *self, PyObject *func)
+{
+    if (func == Py_None) {
+        Py_CLEAR(Py_CodeOptimizer);
+    }
+    else {
+        Py_XDECREF(Py_CodeOptimizer);
+        Py_INCREF(func);
+        Py_CodeOptimizer = func;
+    }
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+
+PyDoc_STRVAR(setcodeoptimizer_doc,
+"setcodeoptimizer(function)\n\
+\n\
+Optimize a newly created code object. The function returns a new code object."
+);
+
 static PyObject *
 sys_settrace(PyObject *self, PyObject *args)
 {
@@ -1113,6 +1136,7 @@ static PyMethodDef sys_methods[] = {
 #endif
     {"settrace",        sys_settrace, METH_O, settrace_doc},
     {"gettrace",        sys_gettrace, METH_NOARGS, gettrace_doc},
+    {"setcodeoptimizer", sys_setcodeoptimizer, METH_O, setcodeoptimizer_doc},
     {"call_tracing", sys_call_tracing, METH_VARARGS, call_tracing_doc},
     {"_debugmallocstats", sys_debugmallocstats, METH_VARARGS,
      debugmallocstats_doc},

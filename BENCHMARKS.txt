@@ -1,0 +1,435 @@
+Why registervm is faster
+************************
+
+
+ * NormalInstanceAttribute:
+
+   - 40 ms => 21 ms (1.9x faster)
+   - fewer instructions: 381 => 81
+
+ * SimpleListManipulation:
+
+   - 28 ms => 21 ms (1.3x faster)
+   - fewer instructions: 388 => 114
+
+ * StringPredicates:
+
+   - 42 ms => 24 ms (1.8x faster)
+   - fewer instructions: 303 => 92
+
+
+ * BuiltinMethodLookup (without moving LOAD_ATTR_REG):
+
+   - 24 ms => 1 ms, 24x faster
+   - merge duplicate loads: 390 instructions => 22
+
+ * SpecialInstanceAttribute:
+
+   - 40 ms => 21ms, 1.9x faster
+   - remove duplicate LOAD_ATTR_REG and useless instructions:
+     381 instructions => 81
+
+
+changeset 3ea9aa5ee434 (Dec 14 2012): pybench
+*********************************************
+
+-------------------------------------------------------------------------------
+PYBENCH 2.1
+-------------------------------------------------------------------------------
+* using CPython 3.4.0a0 (default:c5ae95ba2dec+, Dec 14 2012, 18:05:14) [GCC 4.6.3 20120306 (Red Hat 4.6.3-2)]
+* disabled garbage collection
+* system check interval set to maximum: 2147483647
+* using timer: time.perf_counter
+* timer: resolution=1e-09, implementation=clock_gettime(CLOCK_MONOTONIC)
+
+-------------------------------------------------------------------------------
+Benchmark: registervm.pybench
+-------------------------------------------------------------------------------
+
+    Rounds: 10
+    Warp:   10
+    Timer:  time.perf_counter
+
+    Machine Details:
+       Platform ID:    Linux-3.6.2-1.fc16.x86_64-x86_64-with-fedora-16-Verne
+       Processor:      x86_64
+
+    Python:
+       Implementation: CPython
+       Executable:     /home/haypo/prog/python/registervm/python
+       Version:        3.4.0a0
+       Compiler:       GCC 4.6.3 20120306 (Red Hat 4.6.3-2)
+       Bits:           64bit
+       Build:          Dec 14 2012 18:05:14 (#default:c5ae95ba2dec+)
+       Unicode:        UCS4
+
+
+-------------------------------------------------------------------------------
+Comparing with: original.pybench
+-------------------------------------------------------------------------------
+
+    Rounds: 10
+    Warp:   10
+    Timer:  time.perf_counter
+
+    Machine Details:
+       Platform ID:    Linux-3.6.2-1.fc16.x86_64-x86_64-with-fedora-16-Verne
+       Processor:      x86_64
+
+    Python:
+       Implementation: CPython
+       Executable:     /home/haypo/prog/python/registervm/python
+       Version:        3.4.0a0
+       Compiler:       GCC 4.6.3 20120306 (Red Hat 4.6.3-2)
+       Bits:           64bit
+       Build:          Dec 14 2012 18:05:14 (#default:c5ae95ba2dec+)
+       Unicode:        UCS4
+
+
+Test                             minimum run-time        average  run-time
+                                 this    other   diff    this    other   diff
+-------------------------------------------------------------------------------
+          BuiltinFunctionCalls:    33ms    38ms  -13.4%    34ms    39ms  -14.1%
+           BuiltinMethodLookup:     2ms    24ms  -93.4%     2ms    24ms  -93.4%
+                 CompareFloats:    24ms    28ms  -14.8%    25ms    29ms  -14.5%
+         CompareFloatsIntegers:    58ms    60ms   -4.1%    58ms    61ms   -5.4%
+               CompareIntegers:    38ms    44ms  -12.5%    39ms    45ms  -12.8%
+        CompareInternedStrings:    24ms    30ms  -19.2%    25ms    30ms  -18.8%
+                  CompareLongs:    22ms    25ms  -11.8%    23ms    26ms  -12.4%
+                CompareStrings:    21ms    25ms  -14.9%    22ms    26ms  -15.4%
+    ComplexPythonFunctionCalls:    69ms    69ms   -0.6%    70ms    71ms   -1.5%
+                 ConcatStrings:    35ms    37ms   -6.2%    35ms    38ms   -7.1%
+               CreateInstances:    57ms    57ms   +0.9%    58ms    58ms   -0.1%
+            CreateNewInstances:    42ms    43ms   -0.4%    43ms    44ms   -2.4%
+       CreateStringsWithConcat:    56ms    60ms   -6.6%    56ms    61ms   -7.1%
+                  DictCreation:    46ms    47ms   -2.7%    47ms    48ms   -2.5%
+             DictWithFloatKeys:    32ms    37ms  -12.8%    33ms    38ms  -13.0%
+           DictWithIntegerKeys:    23ms    29ms  -21.0%    24ms    30ms  -20.5%
+            DictWithStringKeys:    20ms    26ms  -24.3%    20ms    27ms  -26.0%
+                      ForLoops:    31ms    30ms   +1.1%    31ms    31ms   +1.4%
+                    IfThenElse:    32ms    38ms  -16.6%    32ms    39ms  -16.6%
+                   ListSlicing:    35ms    36ms   -0.2%    36ms    36ms   -0.4%
+                NestedForLoops:    44ms    43ms   +2.3%    45ms    43ms   +2.8%
+      NestedListComprehensions:    44ms    43ms   +2.2%    45ms    44ms   +1.6%
+          NormalClassAttribute:    57ms    74ms  -22.8%    58ms    76ms  -23.6%
+       NormalInstanceAttribute:    21ms    40ms  -48.1%    21ms    42ms  -49.3%
+           PythonFunctionCalls:    79ms    85ms   -7.5%    79ms    87ms   -8.9%
+             PythonMethodCalls:    70ms    80ms  -13.4%    71ms    82ms  -14.1%
+                     Recursion:   201ms   206ms   -2.6%   202ms   212ms   -4.5%
+                  SecondImport:    32ms    32ms   -1.9%    33ms    33ms   -1.5%
+           SecondPackageImport:    33ms    34ms   -2.4%    34ms    35ms   -2.4%
+         SecondSubmoduleImport:    74ms    79ms   -6.6%    74ms    81ms   -8.6%
+       SimpleComplexArithmetic:    23ms    28ms  -17.8%    25ms    29ms  -12.7%
+        SimpleDictManipulation:    96ms   100ms   -4.0%    98ms   103ms   -4.8%
+         SimpleFloatArithmetic:    21ms    28ms  -24.5%    24ms    29ms  -16.7%
+      SimpleIntFloatArithmetic:    26ms    35ms  -24.3%    28ms    36ms  -23.1%
+       SimpleIntegerArithmetic:    26ms    35ms  -24.6%    28ms    36ms  -22.7%
+      SimpleListComprehensions:    36ms    36ms   +1.3%    38ms    37ms   +1.0%
+        SimpleListManipulation:    21ms    28ms  -26.0%    21ms    29ms  -28.2%
+          SimpleLongArithmetic:    19ms    24ms  -22.3%    19ms    25ms  -22.7%
+                    SmallLists:    33ms    40ms  -16.5%    34ms    41ms  -17.6%
+                   SmallTuples:    38ms    48ms  -21.1%    38ms    49ms  -22.5%
+         SpecialClassAttribute:    72ms   112ms  -35.7%    73ms   115ms  -36.5%
+      SpecialInstanceAttribute:    21ms    40ms  -48.3%    21ms    41ms  -48.6%
+                StringMappings:    72ms    79ms   -9.2%    73ms    82ms  -11.1%
+              StringPredicates:    24ms    42ms  -43.2%    24ms    43ms  -43.1%
+                 StringSlicing:    40ms    44ms   -8.1%    41ms    45ms   -8.6%
+                     TryExcept:    25ms    25ms   +1.1%    26ms    26ms   -0.1%
+                    TryFinally:    80ms    79ms   +0.1%    80ms    82ms   -1.8%
+                TryRaiseExcept:    16ms    16ms   -0.0%    16ms    17ms   -1.0%
+                  TupleSlicing:    45ms    45ms   -0.3%    47ms    47ms   +1.0%
+                   WithFinally:    94ms    94ms   +0.8%    96ms    97ms   -0.8%
+               WithRaiseExcept:    69ms    68ms   +0.7%    69ms    70ms   -0.5%
+-------------------------------------------------------------------------------
+Totals:                          2250ms  2545ms  -11.6%  2292ms  2612ms  -12.3%
+
+
+changeset 3ea9aa5ee434 (Dec 14 2012): use_regs.py
+*************************************************
+
+Bench fact_loop
+Stack:     25.4 ms
+Register:  25.1 ms (-1.0%)
+Bench fact
+Stack:     59.3 ms
+Register:  61.1 ms (+3.1%)
+Bench pow2
+Stack:     81.5 ms
+Register:  74.1 ms (-9.1%)
+Bench loop_sum
+Stack:     27.3 ms
+Register:  23.1 ms (-15.6%)
+Bench loop_noop
+Stack:     99.6 ms
+Register:  96.1 ms (-3.5%)
+Bench sieve
+Stack:     43.7 ms
+Register:  43.4 ms (-0.7%)
+Bench bisect
+Stack:     38.7 ms
+Register:  34.5 ms (-10.9%)
+Bench qsort2
+Stack:     124.9 ms
+Register:  124.5 ms (-0.4%)
+
+
+changeset 3dbbc9b29d97 (2012-11-28)
+***********************************
+
+-------------------------------------------------------------------------------
+PYBENCH 2.1
+-------------------------------------------------------------------------------
+* using CPython 3.4.0a0 (default:fd7efb07fe0d+, Nov 28 2012, 00:24:25) [GCC 4.6.3 20120306 (Red Hat 4.6.3-2)]
+* disabled garbage collection
+* system check interval set to maximum: 2147483647
+* using timer: time.perf_counter
+* timer: resolution=1e-09, implementation=clock_gettime(CLOCK_MONOTONIC)
+
+-------------------------------------------------------------------------------
+Benchmark: pybench-registervm
+-------------------------------------------------------------------------------
+
+    Rounds: 10
+    Warp:   10
+    Timer:  time.perf_counter
+
+    Machine Details:
+       Platform ID:    Linux-3.6.2-1.fc16.x86_64-x86_64-with-fedora-16-Verne
+       Processor:      x86_64
+
+    Python:
+       Implementation: CPython
+       Executable:     /home/haypo/prog/python/registervm/python
+       Version:        3.4.0a0
+       Compiler:       GCC 4.6.3 20120306 (Red Hat 4.6.3-2)
+       Bits:           64bit
+       Build:          Nov 28 2012 00:24:25 (#default:fd7efb07fe0d+)
+       Unicode:        UCS4
+
+
+-------------------------------------------------------------------------------
+Comparing with: pybench-orig
+-------------------------------------------------------------------------------
+
+    Rounds: 10
+    Warp:   10
+    Timer:  time.perf_counter
+
+    Machine Details:
+       Platform ID:    Linux-3.6.2-1.fc16.x86_64-x86_64-with-fedora-16-Verne
+       Processor:      x86_64
+
+    Python:
+       Implementation: CPython
+       Executable:     /home/haypo/prog/python/registervm/python
+       Version:        3.4.0a0
+       Compiler:       GCC 4.6.3 20120306 (Red Hat 4.6.3-2)
+       Bits:           64bit
+       Build:          Nov 28 2012 00:24:25 (#default:fd7efb07fe0d+)
+       Unicode:        UCS4
+
+
+Test                             minimum run-time        average  run-time
+                                 this    other   diff    this    other   diff
+-------------------------------------------------------------------------------
+          BuiltinFunctionCalls:    33ms    39ms  -14.4%    34ms    39ms  -13.3%
+           BuiltinMethodLookup:     2ms    23ms  -93.2%     2ms    24ms  -93.1%
+                 CompareFloats:    25ms    29ms  -14.0%    25ms    29ms  -12.9%
+         CompareFloatsIntegers:    55ms    58ms   -5.7%    55ms    58ms   -5.3%
+               CompareIntegers:    38ms    44ms  -12.7%    39ms    44ms  -11.6%
+        CompareInternedStrings:    25ms    30ms  -15.2%    26ms    30ms  -14.2%
+                  CompareLongs:    22ms    26ms  -12.9%    23ms    26ms  -12.3%
+                CompareStrings:    21ms    26ms  -18.2%    22ms    27ms  -17.5%
+    ComplexPythonFunctionCalls:    72ms    71ms   +1.2%    73ms    72ms   +1.4%
+                 ConcatStrings:    34ms    37ms   -6.5%    35ms    37ms   -4.2%
+               CreateInstances:    55ms    59ms   -6.3%    56ms    60ms   -6.6%
+            CreateNewInstances:    42ms    43ms   -2.6%    43ms    44ms   -2.7%
+       CreateStringsWithConcat:    57ms    60ms   -5.6%    67ms    61ms  +11.2%
+                  DictCreation:    44ms    46ms   -5.4%    46ms    47ms   -2.1%
+             DictWithFloatKeys:    34ms    38ms   -9.4%    35ms    38ms   -8.2%
+           DictWithIntegerKeys:    24ms    30ms  -21.1%    25ms    32ms  -23.2%
+            DictWithStringKeys:    20ms    26ms  -20.3%    22ms    26ms  -15.3%
+                      ForLoops:    31ms    30ms   +4.8%    33ms    30ms  +10.4%
+                    IfThenElse:    32ms    39ms  -19.7%    32ms    40ms  -18.0%
+                   ListSlicing:    36ms    36ms   +0.9%    36ms    36ms   +1.4%
+                NestedForLoops:    44ms    47ms   -6.0%    46ms    47ms   -3.0%
+      NestedListComprehensions:    44ms    42ms   +5.1%    45ms    43ms   +5.0%
+          NormalClassAttribute:    55ms    75ms  -26.2%    56ms    75ms  -25.5%
+       NormalInstanceAttribute:    20ms    39ms  -48.9%    20ms    39ms  -48.4%
+           PythonFunctionCalls:    80ms    88ms   -8.8%    81ms    89ms   -9.0%
+             PythonMethodCalls:    70ms    81ms  -13.2%    71ms    82ms  -12.8%
+                     Recursion:   203ms   205ms   -0.8%   206ms   206ms   -0.2%
+                  SecondImport:    32ms    33ms   -3.2%    32ms    33ms   -2.7%
+           SecondPackageImport:    34ms    34ms   -0.4%    35ms    35ms   -0.2%
+         SecondSubmoduleImport:    72ms    77ms   -6.8%    74ms    78ms   -5.2%
+       SimpleComplexArithmetic:    22ms    28ms  -21.7%    23ms    29ms  -18.7%
+        SimpleDictManipulation:    96ms    99ms   -3.1%    97ms   100ms   -2.7%
+         SimpleFloatArithmetic:    21ms    27ms  -24.1%    24ms    28ms  -13.9%
+      SimpleIntFloatArithmetic:    28ms    35ms  -20.6%    28ms    35ms  -19.4%
+       SimpleIntegerArithmetic:    28ms    35ms  -19.5%    28ms    35ms  -19.0%
+      SimpleListComprehensions:    37ms    35ms   +3.8%    38ms    36ms   +4.7%
+        SimpleListManipulation:    21ms    28ms  -26.5%    21ms    28ms  -25.3%
+          SimpleLongArithmetic:    19ms    23ms  -16.5%    20ms    23ms  -12.9%
+                    SmallLists:    32ms    39ms  -17.7%    33ms    40ms  -15.9%
+                   SmallTuples:    38ms    46ms  -17.4%    38ms    46ms  -16.6%
+         SpecialClassAttribute:    71ms   112ms  -36.0%    72ms   112ms  -35.6%
+      SpecialInstanceAttribute:    20ms    40ms  -50.1%    20ms    40ms  -49.1%
+                StringMappings:    73ms    80ms   -8.2%    75ms    80ms   -7.0%
+              StringPredicates:    25ms    44ms  -43.7%    25ms    44ms  -42.7%
+                 StringSlicing:    40ms    43ms   -7.7%    40ms    43ms   -6.5%
+                     TryExcept:    25ms    25ms   +0.9%    25ms    25ms   +1.9%
+                    TryFinally:    81ms    80ms   +0.8%    82ms    81ms   +1.0%
+                TryRaiseExcept:    17ms    16ms   +3.9%    17ms    16ms   +3.7%
+                  TupleSlicing:    48ms    48ms   -0.4%    49ms    49ms   -0.6%
+                   WithFinally:    94ms    93ms   +1.0%    95ms    94ms   +1.5%
+               WithRaiseExcept:    68ms    67ms   +1.2%    69ms    67ms   +2.4%
+-------------------------------------------------------------------------------
+Totals:                          2261ms  2553ms  -11.5%  2317ms  2578ms  -10.1%
+
+(this=pybench-registervm, other=pybench-orig)
+
+changeset bd0f0345d87f (Nov 23 2012): use_regs.py
+*************************************************
+
+Bench fact_loop
+Stack:     25.8 ms
+Register:  23.9 ms (-7.5%)
+Bench fact
+Stack:     59.9 ms
+Register:  61.3 ms (+2.5%)
+Bench pow2
+Stack:     86.2 ms
+Register:  75.6 ms (-12.2%)
+Bench loop_total
+Stack:     27.0 ms
+Register:  24.2 ms (-10.6%)
+Bench loop_noop
+Stack:     105.4 ms
+Register:  106.6 ms (+1.1%)
+Bench sieve
+Stack:     44.7 ms
+Register:  44.6 ms (-0.1%)
+Bench bisect
+Stack:     38.3 ms
+Register:  34.0 ms (-11.3%)
+Bench qsort2
+Stack:     140.1 ms
+Register:  144.7 ms (+3.2%)
+
+
+changeset bd0f0345d87f (Nov 23 2012): pybench
+*********************************************
+
+-------------------------------------------------------------------------------
+PYBENCH 2.1
+-------------------------------------------------------------------------------
+* using CPython 3.4.0a0 (default:4b41e6685a24+, Nov 23 2012, 20:58:33) [GCC 4.6.3 20120306 (Red Hat 4.6.3-2)]
+* disabled garbage collection
+* system check interval set to maximum: 2147483647
+* using timer: time.perf_counter
+* timer: resolution=1e-09, implementation=clock_gettime(CLOCK_MONOTONIC)
+
+-------------------------------------------------------------------------------
+Benchmark: pybench-registervm
+-------------------------------------------------------------------------------
+
+    Rounds: 10
+    Warp:   10
+    Timer:  time.perf_counter
+
+    Machine Details:
+       Platform ID:    Linux-3.6.2-1.fc16.x86_64-x86_64-with-fedora-16-Verne
+       Processor:      x86_64
+
+    Python:
+       Implementation: CPython
+       Executable:     /home/haypo/prog/python/registervm/python
+       Version:        3.4.0a0
+       Compiler:       GCC 4.6.3 20120306 (Red Hat 4.6.3-2)
+       Bits:           64bit
+       Build:          Nov 23 2012 20:58:33 (#default:4b41e6685a24+)
+       Unicode:        UCS4
+
+
+-------------------------------------------------------------------------------
+Comparing with: pybench-orig
+-------------------------------------------------------------------------------
+
+    Rounds: 10
+    Warp:   10
+    Timer:  time.perf_counter
+
+    Machine Details:
+       Platform ID:    Linux-3.6.2-1.fc16.x86_64-x86_64-with-fedora-16-Verne
+       Processor:      x86_64
+
+    Python:
+       Implementation: CPython
+       Executable:     /home/haypo/prog/python/registervm/python
+       Version:        3.4.0a0
+       Compiler:       GCC 4.6.3 20120306 (Red Hat 4.6.3-2)
+       Bits:           64bit
+       Build:          Nov 23 2012 20:58:33 (#default:4b41e6685a24+)
+       Unicode:        UCS4
+
+
+Test                             minimum run-time        average  run-time
+                                 this    other   diff    this    other   diff
+-------------------------------------------------------------------------------
+          BuiltinFunctionCalls:    33ms    39ms  -16.0%    34ms    40ms  -15.3%
+           BuiltinMethodLookup:     1ms    23ms  -93.7%     2ms    24ms  -93.8%
+                 CompareFloats:    24ms    28ms  -13.2%    25ms    29ms  -11.9%
+         CompareFloatsIntegers:    55ms    59ms   -6.2%    56ms    60ms   -5.8%
+               CompareIntegers:    38ms    44ms  -14.8%    39ms    45ms  -12.4%
+        CompareInternedStrings:    24ms    30ms  -18.3%    25ms    30ms  -15.7%
+                  CompareLongs:    22ms    26ms  -13.8%    23ms    26ms  -12.0%
+                CompareStrings:    21ms    25ms  -17.0%    22ms    26ms  -15.4%
+    ComplexPythonFunctionCalls:    67ms    71ms   -5.1%    68ms    72ms   -5.3%
+                 ConcatStrings:    29ms    29ms   +1.8%    29ms    29ms   +2.4%
+               CreateInstances:    54ms    56ms   -3.6%    55ms    58ms   -3.8%
+            CreateNewInstances:    41ms    42ms   -2.3%    41ms    43ms   -3.2%
+       CreateStringsWithConcat:    59ms    62ms   -4.3%    60ms    62ms   -3.6%
+                  DictCreation:    46ms    47ms   -2.6%    47ms    48ms   -1.5%
+             DictWithFloatKeys:    33ms    39ms  -13.6%    34ms    39ms  -12.6%
+           DictWithIntegerKeys:    23ms    30ms  -23.6%    24ms    31ms  -24.5%
+            DictWithStringKeys:    21ms    26ms  -20.5%    21ms    26ms  -20.5%
+                      ForLoops:    34ms    30ms  +10.4%    34ms    31ms  +12.1%
+                    IfThenElse:    32ms    38ms  -16.3%    32ms    38ms  -15.4%
+                   ListSlicing:    36ms    36ms   -0.3%    36ms    36ms   -0.6%
+                NestedForLoops:    44ms    43ms   +1.0%    44ms    44ms   +1.7%
+      NestedListComprehensions:    48ms    45ms   +7.6%    49ms    45ms   +8.1%
+          NormalClassAttribute:    61ms    82ms  -25.1%    62ms    83ms  -25.1%
+       NormalInstanceAttribute:    20ms    38ms  -47.5%    20ms    39ms  -48.0%
+           PythonFunctionCalls:    79ms    86ms   -8.7%    80ms    87ms   -7.5%
+             PythonMethodCalls:    70ms    82ms  -15.3%    71ms    83ms  -14.4%
+                     Recursion:   202ms   205ms   -1.3%   205ms   206ms   -0.7%
+                  SecondImport:    32ms    33ms   -4.7%    33ms    34ms   -3.6%
+           SecondPackageImport:    33ms    35ms   -4.7%    34ms    35ms   -3.8%
+         SecondSubmoduleImport:    74ms    77ms   -4.4%    76ms    80ms   -4.9%
+       SimpleComplexArithmetic:    23ms    29ms  -19.9%    23ms    29ms  -19.5%
+        SimpleDictManipulation:    95ms   102ms   -6.7%    96ms   103ms   -6.2%
+         SimpleFloatArithmetic:    24ms    28ms  -15.8%    24ms    29ms  -16.0%
+      SimpleIntFloatArithmetic:    28ms    33ms  -13.6%    29ms    33ms  -13.2%
+       SimpleIntegerArithmetic:    28ms    33ms  -15.5%    29ms    34ms  -15.1%
+      SimpleListComprehensions:    37ms    36ms   +3.7%    38ms    37ms   +3.8%
+        SimpleListManipulation:    20ms    28ms  -29.4%    20ms    28ms  -29.1%
+          SimpleLongArithmetic:    20ms    24ms  -16.5%    21ms    24ms  -14.8%
+                    SmallLists:    33ms    40ms  -18.2%    34ms    41ms  -19.0%
+                   SmallTuples:    37ms    46ms  -19.8%    38ms    47ms  -18.5%
+         SpecialClassAttribute:    79ms   116ms  -31.6%    81ms   118ms  -31.2%
+      SpecialInstanceAttribute:    20ms    38ms  -47.9%    20ms    39ms  -48.1%
+                StringMappings:    74ms    81ms   -9.4%    75ms    82ms   -8.4%
+              StringPredicates:    24ms    44ms  -45.7%    24ms    45ms  -45.3%
+                 StringSlicing:    40ms    43ms   -6.9%    41ms    44ms   -6.9%
+                     TryExcept:    26ms    26ms   -0.3%    26ms    26ms   +0.1%
+                    TryFinally:    71ms    80ms  -11.5%    71ms    81ms  -11.4%
+                TryRaiseExcept:    16ms    16ms   +0.8%    17ms    16ms   +1.0%
+                  TupleSlicing:    44ms    44ms   +0.5%    46ms    47ms   -3.3%
+                   WithFinally:    93ms    93ms   +0.1%    95ms    94ms   +0.6%
+               WithRaiseExcept:    71ms    71ms   +0.1%    72ms    71ms   +1.4%
+-------------------------------------------------------------------------------
+Totals:                          2260ms  2559ms  -11.7%  2303ms  2595ms  -11.3%
+
+(this=pybench-registervm, other=pybench-orig)
+
+

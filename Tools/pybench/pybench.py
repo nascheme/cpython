@@ -1,4 +1,11 @@
 #!/usr/local/bin/python -O
+from __future__ import print_function
+REGISTERVM_HACK = True
+if REGISTERVM_HACK:
+    import registervm
+    import types
+    REGISTERVM_CONFIG = registervm.Config()
+    REGISTERVM_CONFIG.enable_unsafe_optimizations()
 
 """ A Python Benchmark Suite
 
@@ -10,7 +17,6 @@
 # module Setup.py.
 #
 
-from __future__ import print_function
 
 # pybench Copyright
 __copyright__ = """\
@@ -38,6 +44,9 @@ WITH THE USE OR PERFORMANCE OF THIS SOFTWARE !
 import sys
 import time
 import platform
+if REGISTERVM_HACK:
+    import registervm
+    import dis
 from CommandLine import *
 
 try:
@@ -94,6 +103,25 @@ else:
 _debug = 0
 
 ### Helpers
+
+def optimize(what, obj, func):
+    if not REGISTERVM_HACK:
+        return
+    if isinstance(func, types.MethodType):
+        func = func.__func__
+    print("%s %s..." % (what, obj.__class__.__name__))
+    try:
+        converter = registervm.Converter(func.__code__, REGISTERVM_CONFIG)
+        converter.convert()
+        func.__code__ = converter.compile()
+    except Exception as err:
+        print("FAILED TO OPTIMIZE CALIBRATE %s: %s" % (obj.__class__.__name__, err))
+        if str(err) != 'too much registers!':
+            raise
+    else:
+        converter.check_inefficient_code()
+        #code.dump()
+        #dis.dis(self.calibrate)
 
 def get_timer(timertype):
 
@@ -231,7 +259,8 @@ class Test:
         if warp is not None:
             self.rounds = int(self.rounds / warp)
             if self.rounds == 0:
-                raise ValueError('warp factor set too high')
+                self.rounds = 1
+                #raise ValueError('warp factor set too high')
             self.warp = warp
         if calibration_runs is not None:
             if (not ALLOW_SKIPPING_CALIBRATION and
@@ -277,6 +306,8 @@ class Test:
             return
 
         calibrate = self.calibrate
+        optimize("CALIBRATE", self, self.calibrate)
+
         timer = self.get_timer()
         calibration_loops = range(CALIBRATION_LOOPS)
 
@@ -325,18 +356,22 @@ class Test:
 
         """
         test = self.test
+        optimize("RUN TEST", self, self.test)
+
         timer = self.get_timer()
 
         # Get calibration
         min_overhead = min(self.overhead_times)
+        # FIXME
+        min_overhead = 0
 
         # Test run
         t = timer()
         test()
         t = timer() - t
-        if t < MIN_TEST_RUNTIME:
-            raise ValueError('warp factor too high: '
-                             'test times are < 10ms')
+        #if t < MIN_TEST_RUNTIME:
+        #    raise ValueError('warp factor too high: '
+        #                     'test times are < 10ms')
         eff_time = t - min_overhead
         if eff_time < 0:
             raise ValueError('wrong calibration')
@@ -945,6 +980,7 @@ python pybench.py -s p25.pybench -c p21.pybench
             print()
             print('*** KeyboardInterrupt -- Aborting')
             print()
+            raise
             return
         bench.print_header()
         if compare_to:
