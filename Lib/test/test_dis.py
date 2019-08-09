@@ -12,12 +12,12 @@ class _C:
         self.x = x == 1
 
 dis_c_instance_method = """\
- %-4d         0 LOAD_FAST                1 (x)
-              3 LOAD_CONST               1 (1)
-              6 COMPARE_OP               2 (==)
-              9 LOAD_FAST                0 (self)
-             12 STORE_ATTR               0 (x)
-             15 LOAD_CONST               0 (None)
+ %-4d         0 LOAD_FAST            'x'
+              3 LOAD_CONST           1 (const#1)
+              6 COMPARE_OP           '=='
+              9 LOAD_FAST            'self'
+             12 STORE_ATTR           'x' (name#0)
+             15 LOAD_CONST           None (const#0)
              18 RETURN_VALUE
 """ % (_C.__init__.__code__.co_firstlineno + 1,)
 
@@ -36,12 +36,12 @@ def _f(a):
     return 1
 
 dis_f = """\
- %-4d         0 LOAD_GLOBAL              0 (print)
-              3 LOAD_FAST                0 (a)
-              6 CALL_FUNCTION            1 (1 positional, 0 keyword pair)
+ %-4d         0 LOAD_GLOBAL          'print' (name#0)
+              3 LOAD_FAST            'a'
+              6 CALL_FUNCTION        1 (1 positional, 0 keyword pair)
               9 POP_TOP
 
- %-4d        10 LOAD_CONST               1 (1)
+ %-4d        10 LOAD_CONST           1 (const#1)
              13 RETURN_VALUE
 """ % (_f.__code__.co_firstlineno + 1,
        _f.__code__.co_firstlineno + 2)
@@ -63,19 +63,19 @@ def bug708901():
         pass
 
 dis_bug708901 = """\
- %-4d         0 SETUP_LOOP              23 (to 26)
-              3 LOAD_GLOBAL              0 (range)
-              6 LOAD_CONST               1 (1)
+ %-4d         0 SETUP_LOOP           <relative jump to 26 (+23)>
+              3 LOAD_GLOBAL          'range' (name#0)
+              6 LOAD_CONST           1 (const#1)
 
- %-4d         9 LOAD_CONST               2 (10)
-             12 CALL_FUNCTION            2 (2 positional, 0 keyword pair)
+ %-4d         9 LOAD_CONST           10 (const#2)
+             12 CALL_FUNCTION        2 (2 positional, 0 keyword pair)
              15 GET_ITER
-        >>   16 FOR_ITER                 6 (to 25)
-             19 STORE_FAST               0 (res)
+        >>   16 FOR_ITER             <relative jump to 25 (+6)>
+             19 STORE_FAST           'res'
 
- %-4d        22 JUMP_ABSOLUTE           16
+ %-4d        22 JUMP_ABSOLUTE        <jump to 16>
         >>   25 POP_BLOCK
-        >>   26 LOAD_CONST               0 (None)
+        >>   26 LOAD_CONST           None (const#0)
              29 RETURN_VALUE
 """ % (bug708901.__code__.co_firstlineno + 1,
        bug708901.__code__.co_firstlineno + 2,
@@ -121,11 +121,11 @@ _BIG_LINENO_FORMAT = """\
 
 dis_module_expected_results = """\
 Disassembly of f:
-  4           0 LOAD_CONST               0 (None)
+  4           0 LOAD_CONST           None (const#0)
               3 RETURN_VALUE
 
 Disassembly of g:
-  5           0 LOAD_CONST               0 (None)
+  5           0 LOAD_CONST           None (const#0)
               3 RETURN_VALUE
 
 """
@@ -133,8 +133,8 @@ Disassembly of g:
 expr_str = "x + 1"
 
 dis_expr_str = """\
-  1           0 LOAD_NAME                0 (x)
-              3 LOAD_CONST               0 (1)
+  1           0 LOAD_NAME            'x' (name#0)
+              3 LOAD_CONST           1 (const#0)
               6 BINARY_ADD
               7 RETURN_VALUE
 """
@@ -142,11 +142,11 @@ dis_expr_str = """\
 simple_stmt_str = "x = x + 1"
 
 dis_simple_stmt_str = """\
-  1           0 LOAD_NAME                0 (x)
-              3 LOAD_CONST               0 (1)
+  1           0 LOAD_NAME            'x' (name#0)
+              3 LOAD_CONST           1 (const#0)
               6 BINARY_ADD
-              7 STORE_NAME               0 (x)
-             10 LOAD_CONST               1 (None)
+              7 STORE_NAME           'x' (name#0)
+             10 LOAD_CONST           None (const#1)
              13 RETURN_VALUE
 """
 
@@ -157,17 +157,17 @@ while 1:
 # Trailing newline has been deliberately omitted
 
 dis_compound_stmt_str = """\
-  1           0 LOAD_CONST               0 (0)
-              3 STORE_NAME               0 (x)
+  1           0 LOAD_CONST           0 (const#0)
+              3 STORE_NAME           'x' (name#0)
 
-  2           6 SETUP_LOOP              13 (to 22)
+  2           6 SETUP_LOOP           <relative jump to 22 (+13)>
 
-  3     >>    9 LOAD_NAME                0 (x)
-             12 LOAD_CONST               1 (1)
+  3     >>    9 LOAD_NAME            'x' (name#0)
+             12 LOAD_CONST           1 (const#1)
              15 INPLACE_ADD
-             16 STORE_NAME               0 (x)
-             19 JUMP_ABSOLUTE            9
-        >>   22 LOAD_CONST               2 (None)
+             16 STORE_NAME           'x' (name#0)
+             19 JUMP_ABSOLUTE        <jump to 9>
+        >>   22 LOAD_CONST           None (const#2)
              25 RETURN_VALUE
 """
 
