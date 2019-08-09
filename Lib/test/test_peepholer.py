@@ -36,10 +36,10 @@ class TestTranforms(unittest.TestCase):
 
     def test_elim_inversion_of_is_or_in(self):
         for line, elem in (
-            ('not a is b', '(is not)',),
-            ('not a in b', '(not in)',),
-            ('not a is not b', '(is)',),
-            ('not a not in b', '(in)',),
+            ('not a is b', 'is not',),
+            ('not a in b', 'not in',),
+            ('not a is not b', 'is',),
+            ('not a not in b', 'in',),
             ):
             asm = dis_single(line)
             self.assertIn(elem, asm)
@@ -60,7 +60,7 @@ class TestTranforms(unittest.TestCase):
             asm = disassemble(func)
             for elem in ('LOAD_GLOBAL',):
                 self.assertNotIn(elem, asm)
-            for elem in ('LOAD_CONST', '('+name+')'):
+            for elem in ('LOAD_CONST', name):
                 self.assertIn(elem, asm)
         def f():
             'Adding a docstring made this test fail in Py2.5.0'
@@ -93,11 +93,11 @@ class TestTranforms(unittest.TestCase):
 
     def test_folding_of_tuples_of_constants(self):
         for line, elem in (
-            ('a = 1,2,3', '((1, 2, 3))'),
-            ('("a","b","c")', "(('a', 'b', 'c'))"),
-            ('a,b,c = 1,2,3', '((1, 2, 3))'),
-            ('(None, 1, None)', '((None, 1, None))'),
-            ('((1, 2), 3, 4)', '(((1, 2), 3, 4))'),
+            ('a = 1,2,3', '(1, 2, 3)'),
+            ('("a","b","c")', "('a', 'b', 'c')"),
+            ('a,b,c = 1,2,3', '(1, 2, 3)'),
+            ('(None, 1, None)', '(None, 1, None)'),
+            ('((1, 2), 3, 4)', '((1, 2), 3, 4)'),
             ):
             asm = dis_single(line)
             self.assertIn(elem, asm)
@@ -130,9 +130,9 @@ class TestTranforms(unittest.TestCase):
         for line, elem in (
             # in/not in constants with BUILD_LIST should be folded to a tuple:
             ('a in [1,2,3]', '(1, 2, 3)'),
-            ('a not in ["a","b","c"]', "(('a', 'b', 'c'))"),
-            ('a in [None, 1, None]', '((None, 1, None))'),
-            ('a not in [(1, 2), 3, 4]', '(((1, 2), 3, 4))'),
+            ('a not in ["a","b","c"]', "('a', 'b', 'c')"),
+            ('a in [None, 1, None]', '(None, 1, None)'),
+            ('a not in [(1, 2), 3, 4]', '((1, 2), 3, 4)'),
             ):
             asm = dis_single(line)
             self.assertIn(elem, asm)
@@ -176,21 +176,21 @@ class TestTranforms(unittest.TestCase):
 
     def test_folding_of_binops_on_constants(self):
         for line, elem in (
-            ('a = 2+3+4', '(9)'),                   # chained fold
-            ('"@"*4', "('@@@@')"),                  # check string ops
-            ('a="abc" + "def"', "('abcdef')"),      # check string ops
-            ('a = 3**4', '(81)'),                   # binary power
-            ('a = 3*4', '(12)'),                    # binary multiply
-            ('a = 13//4', '(3)'),                   # binary floor divide
-            ('a = 14%4', '(2)'),                    # binary modulo
-            ('a = 2+3', '(5)'),                     # binary add
-            ('a = 13-4', '(9)'),                    # binary subtract
-            ('a = (12,13)[1]', '(13)'),             # binary subscr
-            ('a = 13 << 2', '(52)'),                # binary lshift
-            ('a = 13 >> 2', '(3)'),                 # binary rshift
-            ('a = 13 & 7', '(5)'),                  # binary and
-            ('a = 13 ^ 7', '(10)'),                 # binary xor
-            ('a = 13 | 7', '(15)'),                 # binary or
+            ('a = 2+3+4', '9'),                     # chained fold
+            ('"@"*4', "'@@@@'"),                    # check string ops
+            ('a="abc" + "def"', "'abcdef'"),        # check string ops
+            ('a = 3**4', '81'),                     # binary power
+            ('a = 3*4', '12'),                      # binary multiply
+            ('a = 13//4', '3'),                     # binary floor divide
+            ('a = 14%4', '2'),                      # binary modulo
+            ('a = 2+3', '5'),                       # binary add
+            ('a = 13-4', '9'),                      # binary subtract
+            ('a = (12,13)[1]', '13'),               # binary subscr
+            ('a = 13 << 2', '52'),                  # binary lshift
+            ('a = 13 >> 2', '3'),                   # binary rshift
+            ('a = 13 & 7', '5'),                    # binary and
+            ('a = 13 ^ 7', '10'),                   # binary xor
+            ('a = 13 | 7', '15'),                   # binary or
             ):
             asm = dis_single(line)
             self.assertIn(elem, asm, asm)
@@ -198,20 +198,20 @@ class TestTranforms(unittest.TestCase):
 
         # Verify that unfoldables are skipped
         asm = dis_single('a=2+"b"')
-        self.assertIn('(2)', asm)
-        self.assertIn("('b')", asm)
+        self.assertIn('2', asm)
+        self.assertIn("'b'", asm)
 
         # Verify that large sequences do not result from folding
         asm = dis_single('a="x"*1000')
-        self.assertIn('(1000)', asm)
+        self.assertIn('1000', asm)
 
     def test_binary_subscr_on_unicode(self):
         # valid code get optimized
         asm = dis_single('"foo"[0]')
-        self.assertIn("('f')", asm)
+        self.assertIn("'f'", asm)
         self.assertNotIn('BINARY_SUBSCR', asm)
         asm = dis_single('"\u0061\uffff"[1]')
-        self.assertIn("('\\uffff')", asm)
+        self.assertIn("'\\uffff'", asm)
         self.assertNotIn('BINARY_SUBSCR', asm)
 
         # invalid code doesn't get optimized
@@ -221,12 +221,12 @@ class TestTranforms(unittest.TestCase):
 
     def test_folding_of_unaryops_on_constants(self):
         for line, elem in (
-            ('-0.5', '(-0.5)'),                     # unary negative
-            ('-0.0', '(-0.0)'),                     # -0.0
-            ('-(1.0-1.0)','(-0.0)'),                # -0.0 after folding
-            ('-0', '(0)'),                          # -0
-            ('~-2', '(1)'),                         # unary invert
-            ('+1', '(1)'),                          # unary positive
+            ('-0.5', '-0.5'),                     # unary negative
+            ('-0.0', '-0.0'),                     # -0.0
+            ('-(1.0-1.0)','-0.0'),                # -0.0 after folding
+            ('-0', '0'),                          # -0
+            ('~-2', '1'),                         # unary invert
+            ('+1', '1'),                          # unary positive
         ):
             asm = dis_single(line)
             self.assertIn(elem, asm, asm)
@@ -241,8 +241,8 @@ class TestTranforms(unittest.TestCase):
 
         # Verify that unfoldables are skipped
         for line, elem in (
-            ('-"abc"', "('abc')"),                  # unary negative
-            ('~"abc"', "('abc')"),                  # unary invert
+            ('-"abc"', "'abc'"),                  # unary negative
+            ('~"abc"', "'abc'"),                  # unary invert
         ):
             asm = dis_single(line)
             self.assertIn(elem, asm, asm)
