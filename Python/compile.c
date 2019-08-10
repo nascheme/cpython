@@ -31,6 +31,9 @@
 #include "opcode.h"
 #include "wordcode_helpers.h"
 
+/* FIXME: should go in runtime struct? */
+PyObject* Py_CodeOptimizer = NULL;
+
 #define DEFAULT_BLOCK_SIZE 16
 #define DEFAULT_BLOCKS 8
 #define DEFAULT_CODE_SIZE 128
@@ -5818,6 +5821,11 @@ makecode(struct compiler *c, struct assembler *a)
                                    maxdepth, flags, bytecode, consts, names,
                                    varnames, freevars, cellvars, c->c_filename,
                                    c->u->u_name, c->u->u_firstlineno, a->a_lnotab);
+    if (co != NULL && Py_CodeOptimizer) {
+        PyObject *newcode = PyObject_CallFunction(Py_CodeOptimizer, "O", co);
+        Py_DECREF(co);
+        co = newcode;
+    }
  error:
     Py_XDECREF(consts);
     Py_XDECREF(names);

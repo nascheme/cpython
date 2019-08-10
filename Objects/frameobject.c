@@ -410,6 +410,7 @@ frame_dealloc(PyFrameObject *f)
 {
     PyObject **p, **valuestack;
     PyCodeObject *co;
+    Py_ssize_t i;
 
     if (_PyObject_GC_IS_TRACKED(f))
         _PyObject_GC_UNTRACK(f);
@@ -424,6 +425,11 @@ frame_dealloc(PyFrameObject *f)
     if (f->f_stacktop != NULL) {
         for (p = valuestack; p < f->f_stacktop; p++)
             Py_XDECREF(*p);
+    }
+
+    /* Free registers */
+    for (Py_ssize_t i=0; i<FRAME_NREGISTER; i++) {
+        Py_CLEAR(f->f_registers[i]);
     }
 
     Py_XDECREF(f->f_back);
@@ -466,6 +472,9 @@ frame_traverse(PyFrameObject *f, visitproc visit, void *arg)
     for (i = slots; --i >= 0; ++fastlocals)
         Py_VISIT(*fastlocals);
 
+    for (i=0; i<FRAME_NREGISTER; i++)
+        Py_VISIT(f->f_registers[i]);
+
     /* stack */
     if (f->f_stacktop != NULL) {
         for (p = f->f_valuestack; p < f->f_stacktop; p++)
@@ -496,6 +505,9 @@ frame_tp_clear(PyFrameObject *f)
     fastlocals = f->f_localsplus;
     for (i = slots; --i >= 0; ++fastlocals)
         Py_CLEAR(*fastlocals);
+
+    for (i=0; i<FRAME_NREGISTER; i++)
+        Py_CLEAR(f->f_registers[i]);
 
     /* stack */
     if (oldtop != NULL) {
@@ -654,7 +666,7 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
         ncells = PyTuple_GET_SIZE(code->co_cellvars);
         nfrees = PyTuple_GET_SIZE(code->co_freevars);
         extras = code->co_stacksize + code->co_nlocals + ncells +
-            nfrees;
+            nfrees + FRAME_NREGISTER;
         if (free_list == NULL) {
             f = PyObject_GC_NewVar(PyFrameObject, &PyFrame_Type,
             extras);
@@ -687,6 +699,9 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
             f->f_localsplus[i] = NULL;
         f->f_locals = NULL;
         f->f_trace = NULL;
+        f->f_registers = &f->f_localsplus[code->co_stacksize + code->co_nlocals + ncells + nfrees];
+        for (i=0; i<FRAME_NREGISTER; i++)
+            f->f_registers[i] = NULL;
     }
     f->f_stacktop = f->f_valuestack;
     f->f_builtins = builtins;

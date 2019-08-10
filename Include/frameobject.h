@@ -42,9 +42,12 @@ typedef struct _frame {
     int f_iblock;               /* index in f_blockstack */
     char f_executing;           /* whether the frame is still executing */
     PyTryBlock f_blockstack[CO_MAXBLOCKS]; /* for try and loop blocks */
+    PyObject **f_registers;     /* points after the first register */
     PyObject *f_localsplus[1];  /* locals+stack, dynamically sized */
 } PyFrameObject;
 
+
+#define FRAME_NREGISTER 256
 
 /* Standard object interface */
 

@@ -129,6 +129,68 @@ extern "C" {
 #define CALL_FINALLY            162
 #define POP_FINALLY             163
 
+#define USE_REGISTERS 		170 /* Opcodes from here use registers: */
+
+#define UNARY_NOT_REG		170
+#define LOAD_CONST_REG		171
+#define RETURN_VALUE_REG	172
+#define BINARY_ADD_REG		173
+#define POP_REG			174
+#define MOVE_REG		175
+#define PUSH_REG		176
+#define BINARY_MULTIPLY_REG	177
+#define LOAD_GLOBAL_REG		178
+#define BINARY_SUBTRACT_REG	179
+#define FOR_ITER_REG		180
+#define COMPARE_REG		181
+#define JUMP_IF_FALSE_REG	182
+#define CALL_FUNCTION_REG	183
+#define GET_ITER_REG		184
+#define BINARY_SUBSCR_REG	185
+#define LOAD_ATTR_REG		186
+#define BINARY_FLOOR_DIVIDE_REG	187
+#define JUMP_IF_TRUE_REG	188
+#define UNARY_NEGATIVE_REG	189
+#define BUILD_SLICE2_REG	190
+#define BUILD_LIST_REG		191
+#define UNPACK_SEQUENCE_REG	192
+#define BUILD_TUPLE_REG		193
+#define INPLACE_ADD_REG		194
+#define INPLACE_MULTIPLY_REG	195
+#define INPLACE_SUBTRACT_REG	196
+#define INPLACE_FLOOR_DIVIDE_REG 197
+#define STORE_GLOBAL_REG	198
+#define STORE_ATTR_REG		199
+#define BUILD_MAP_REG		200
+#define STORE_MAP_REG		201
+#define MAKE_FUNCTION_REG	202
+#define LOAD_BUILD_CLASS_REG	203
+#define CALL_PROCEDURE_REG	204
+#define CLEAR_REG		205
+#define MAKE_CLOSURE_REG	206
+#define LOAD_CLOSURE_REG	207
+#define STORE_DEREF_REG		208
+#define DELETE_SUBSCR_REG	209
+#define LOAD_DEREF_REG		210
+#define BINARY_MODULO_REG	211
+#define STORE_SUBSCR_REG	212
+#define BINARY_TRUE_DIVIDE_REG	213
+#define INPLACE_TRUE_DIVIDE_REG	214
+#define INPLACE_MODULO_REG	215
+#define LOAD_NAME_REG		216
+#define LIST_APPEND_REG		217
+#define STORE_NAME_REG		218
+#define IMPORT_NAME_REG		219
+#define IMPORT_FROM_REG		220
+#define IMPORT_STAR_REG		221
+#define YIELD_REG		222
+#define STORE_LOCALS_REG	223
+#define UNARY_POSITIVE_REG	224
+#define MAP_ADD_REG		225
+#define BUILD_SLICE3_REG	226
+#define UNPACK_EX_REG		227
+
+
 /* EXCEPT_HANDLER is a special, implicit block type which is created when
    entering an except handler. It is not an opcode but we define it here
    as we want it to be available to both frameobject.c and ceval.c, while
@@ -140,7 +202,7 @@ enum cmp_op {PyCmp_LT=Py_LT, PyCmp_LE=Py_LE, PyCmp_EQ=Py_EQ, PyCmp_NE=Py_NE,
                 PyCmp_GT=Py_GT, PyCmp_GE=Py_GE, PyCmp_IN, PyCmp_NOT_IN,
                 PyCmp_IS, PyCmp_IS_NOT, PyCmp_EXC_MATCH, PyCmp_BAD};
 
-#define HAS_ARG(op) ((op) >= HAVE_ARGUMENT)
+#define HAS_ARG(op) ((op) >= HAVE_ARGUMENT && (op) < USE_REGISTERS)
 
 #ifdef __cplusplus
 }
