@@ -22,11 +22,11 @@ from runpy import _run_code, _run_module_code, run_module, run_path
 # See test_cmd_line_script for a test that executes that code path
 
 
-# Used for comparision of module dicts, remove __namespace__ if it exists
+# Used for comparision of module dicts, remove __module_weakref__ if it exists
 def _clean_ns(obj):
-    if isinstance(obj, dict) and '__namespace__' in obj:
+    if isinstance(obj, dict) and '__module_weakref__' in obj:
         obj = obj.copy()
-        del obj['__namespace__']
+        del obj['__module_weakref__']
     return obj
 
 
@@ -88,9 +88,9 @@ class CodeExecutionMixin:
         """
         # Avoid side effects
         result_ns = result_ns.copy()
-        result_ns.pop("__namespace__", None)
+        result_ns.pop("__module_weakref__", None)
         expected_ns = expected_ns.copy()
-        expected_ns.pop("__namespace__", None)
+        expected_ns.pop("__module_weakref__", None)
         # Impls are permitted to add extra names, so filter them out
         for k in list(result_ns):
             if k.startswith("__") and k.endswith("__"):

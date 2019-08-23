@@ -19,7 +19,7 @@ class BareLoader:
 def _mod_ns(m):
     # Return module namespace, remove implementation detail names
     ns = dict(m.__dict__)
-    ns.pop('__namespace__', None)
+    ns.pop('__module_weakref__', None)
     return ns
 
 

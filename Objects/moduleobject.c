@@ -81,12 +81,12 @@ module_find_builtins(PyObject *d)
     return b;
 }
 
-/* follow mod.__dict__.__namespace__ weakref to find module */
+/* follow mod.__dict__.__module_weakref__ weakref to find module */
 static PyObject *
 module_globals_namespace(PyObject *globals)
 {
-    _Py_IDENTIFIER(__namespace__);
-    PyObject *ns_ref = _PyDict_GetItemId(globals, &PyId___namespace__);
+    _Py_IDENTIFIER(__module_weakref__);
+    PyObject *ns_ref = _PyDict_GetItemId(globals, &PyId___module_weakref__);
     if (ns_ref != NULL && PyWeakref_CheckProxy(ns_ref)) {
         /* have a module, return it */
         PyObject *m = PyWeakref_GET_OBJECT(ns_ref);
@@ -105,8 +105,8 @@ module_globals_namespace(PyObject *globals)
 static int
 module_add_namespace(PyObject *dict, PyModuleObject *mod)
 {
-    _Py_IDENTIFIER(__namespace__);
-    _Py_Identifier *name = &PyId___namespace__;
+    _Py_IDENTIFIER(__module_weakref__);
+    _Py_Identifier *name = &PyId___module_weakref__;
     assert(PyDict_Check(dict));
     assert(PyModule_Check(mod));
     if (_PyDict_GetItemId(dict, name) == NULL) {
@@ -236,7 +236,7 @@ module_make_anonymous(PyObject *globals)
 }
 
 /* get namespace (module) for globals dict, returns new reference.  If
- * add_ns_ref is true, add __namespace__ weakref. */
+ * add_ns_ref is true, add __module_weakref__ weakref. */
 PyObject *
 _PyModule_Globals_Namespace(PyObject *globals, int add_ns_ref)
 {

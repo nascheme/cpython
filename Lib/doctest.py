@@ -505,7 +505,7 @@ def _make_namespace(globs):
     for name in set(md):
         del md[name]
     for k, v in globs.items():
-        if k not in {'__namespace__'}:
+        if k not in {'__module_weakref__'}:
             md[k] = v
     return namespace
 

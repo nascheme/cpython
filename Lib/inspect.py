@@ -346,7 +346,7 @@ def getmembers(object, predicate=None):
         # First try to get the value via getattr.  Some descriptors don't
         # like calling their __get__ (see bug #1785), so fall back to
         # looking in the __dict__.
-        if key in {'__namespace__'}:
+        if key in {'__module_weakref__'}:
             continue
         try:
             value = getattr(object, key)
