@@ -87,9 +87,9 @@ module_globals_namespace(PyObject *globals)
 {
     _Py_IDENTIFIER(__namespace__);
     PyObject *ns_ref = _PyDict_GetItemId(globals, &PyId___namespace__);
-    if (ns_ref != NULL && PyWeakref_Check(ns_ref)) {
+    if (ns_ref != NULL && PyWeakref_CheckProxy(ns_ref)) {
         /* have a module, return it */
-        PyObject *m = PyWeakref_GetObject(ns_ref);
+        PyObject *m = PyWeakref_GET_OBJECT(ns_ref);
         if (m == NULL) {
             return NULL; /* failed to follow weakref */
         }
@@ -110,7 +110,7 @@ module_add_namespace(PyObject *dict, PyModuleObject *mod)
     assert(PyDict_Check(dict));
     assert(PyModule_Check(mod));
     if (_PyDict_GetItemId(dict, name) == NULL) {
-        PyObject *ns = PyWeakref_NewRef((PyObject *)mod, NULL);
+        PyObject *ns = PyWeakref_NewProxy((PyObject *)mod, NULL);
         if (ns == NULL) {
             return 0;
         }
