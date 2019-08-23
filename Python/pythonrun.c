@@ -1107,7 +1107,7 @@ run_eval_code_obj(PyCodeObject *co, PyObject *globals, PyObject *locals)
     _Py_UnhandledKeyboardInterrupt = 0;
 
     /* Set globals['__builtins__'] if it doesn't exist */
-    if (globals != NULL && PyDict_GetItemString(globals, "__builtins__") == NULL) {
+    if (PyDict_Check(globals) && PyDict_GetItemString(globals, "__builtins__") == NULL) {
         PyInterpreterState *interp = _PyInterpreterState_Get();
         if (PyDict_SetItemString(globals, "__builtins__", interp->builtins) < 0) {
             return NULL;

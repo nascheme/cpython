@@ -900,7 +900,7 @@ builtin_eval_impl(PyObject *module, PyObject *source, PyObject *globals,
         return NULL;
     }
     if (PyModule_Check(ns)) {
-        globals = PyModule_GetDict(ns);
+        globals = _PyModule_GetDict(ns);
     }
     if (globals != Py_None && !PyDict_Check(globals)) {
         PyErr_SetString(PyExc_TypeError, PyMapping_Check(globals) ?

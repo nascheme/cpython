@@ -927,6 +927,7 @@ class RunStringTests(TestBase):
 
             ns = dict(vars())
             del ns['__builtins__']
+            del ns['__namespace__']
             import pickle
             with open({w}, 'wb') as chan:
                 pickle.dump(ns, chan)
@@ -945,12 +946,14 @@ class RunStringTests(TestBase):
             spam = 'eggs'
             ns1 = dict(vars())
             del ns1['__builtins__']
+            del ns1['__namespace__']
             """))
 
         shared = {'spam': b'ham'}
         script = dedent(f"""
             ns2 = dict(vars())
             del ns2['__builtins__']
+            del ns2['__namespace__']
         """)
         interpreters.run_string(self.id, script, shared)
 
@@ -958,6 +961,7 @@ class RunStringTests(TestBase):
         script = dedent(f"""
             ns = dict(vars())
             del ns['__builtins__']
+            del ns['__namespace__']
             import pickle
             with open({w}, 'wb') as chan:
                 pickle.dump(ns, chan)
@@ -979,6 +983,7 @@ class RunStringTests(TestBase):
 
             ns = dict(vars())
             del ns['__builtins__']
+            del ns['__namespace__']
             import pickle
             with open({w}, 'wb') as chan:
                 pickle.dump(ns, chan)
@@ -996,6 +1001,7 @@ class RunStringTests(TestBase):
 
             ns = dict(vars())
             del ns['__builtins__']
+            del ns['__namespace__']
             import pickle
             with open({w}, 'wb') as chan:
                 pickle.dump(ns, chan)
@@ -1010,6 +1016,7 @@ class RunStringTests(TestBase):
 
             ns = dict(vars())
             del ns['__builtins__']
+            del ns['__namespace__']
             import pickle
             with open({w}, 'wb') as chan:
                 pickle.dump(ns, chan)
@@ -1030,6 +1037,7 @@ class RunStringTests(TestBase):
 
             ns = dict(vars())
             ns['__builtins__'] = str(ns['__builtins__'])
+            del ns['__namespace__']
             import pickle
             with open({w}, 'wb') as chan:
                 pickle.dump(ns, chan)

@@ -1208,7 +1208,7 @@ class SizeofTest(unittest.TestCase):
         check(x, vsize('4P2c4P3ic' + CO_MAXBLOCKS*'3i' + 'P' + extras*'P'))
         # function
         def func(): pass
-        check(func, size('12P'))
+        check(func, size('13P'))
         class c():
             @staticmethod
             def foo():
@@ -1249,7 +1249,7 @@ class SizeofTest(unittest.TestCase):
         check(int(PyLong_BASE**2-1), vsize('') + 2*self.longdigit)
         check(int(PyLong_BASE**2), vsize('') + 3*self.longdigit)
         # module
-        check(unittest, size('PnPPPPi'))
+        check(unittest, size('PnPPPi'))
         # None
         check(None, size(''))
         # NotImplementedType
