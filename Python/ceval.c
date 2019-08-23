@@ -2497,7 +2497,7 @@ main_loop:
                     if (lg->globals_ver ==
                             ((PyDictObject *)GLOBALS(f))->ma_version_tag
                         && lg->builtins_ver ==
-                           ((PyDictObject *)f->f_builtins)->ma_version_tag)
+                           ((PyDictObject *)BUILTINS(f))->ma_version_tag)
                     {
                         PyObject *ptr = lg->ptr;
                         OPCACHE_STAT_GLOBAL_HIT();
@@ -2536,7 +2536,7 @@ main_loop:
                     lg->globals_ver =
                         ((PyDictObject *)GLOBALS(f))->ma_version_tag;
                     lg->builtins_ver =
-                        ((PyDictObject *)f->f_builtins)->ma_version_tag;
+                        ((PyDictObject *)BUILTINS(f))->ma_version_tag;
                     lg->ptr = v; /* borrowed */
                 }
 
