@@ -55,10 +55,13 @@ PyModuleDef_Init(struct PyModuleDef* def)
     return (PyObject*)def;
 }
 
+_Py_IDENTIFIER(__builtins__);
+_Py_IDENTIFIER(__module_weakref__);
+
 static PyObject *
 module_find_builtins(PyObject *d)
 {
-    PyObject *b = PyDict_GetItemString(d, "__builtins__");
+    PyObject *b = _PyDict_GetItemIdWithError(d, &PyId___builtins__);
     if (b != NULL) {
         if (PyModule_Check(b)) {
             b = PyModule_GetDict(b);
@@ -66,6 +69,9 @@ module_find_builtins(PyObject *d)
         }
         Py_INCREF(b);
         return b;
+    }
+    if (PyErr_Occurred()) {
+        return NULL;
     }
     b = PyEval_GetBuiltins();
     if (b != NULL) {
@@ -85,8 +91,8 @@ module_find_builtins(PyObject *d)
 static PyObject *
 module_globals_namespace(PyObject *globals)
 {
-    _Py_IDENTIFIER(__module_weakref__);
-    PyObject *ns_ref = _PyDict_GetItemId(globals, &PyId___module_weakref__);
+    PyObject *ns_ref = _PyDict_GetItemIdWithError(globals,
+                                                  &PyId___module_weakref__);
     if (ns_ref != NULL && PyWeakref_CheckProxy(ns_ref)) {
         /* have a module, return it */
         PyObject *m = PyWeakref_GET_OBJECT(ns_ref);
@@ -105,16 +111,17 @@ module_globals_namespace(PyObject *globals)
 static int
 module_add_namespace(PyObject *dict, PyModuleObject *mod)
 {
-    _Py_IDENTIFIER(__module_weakref__);
-    _Py_Identifier *name = &PyId___module_weakref__;
     assert(PyDict_Check(dict));
     assert(PyModule_Check(mod));
-    if (_PyDict_GetItemId(dict, name) == NULL) {
+    if (_PyDict_GetItemIdWithError(dict, &PyId___module_weakref__) == NULL) {
+        if (PyErr_Occurred()) {
+            return NULL;
+        }
         PyObject *ns = PyWeakref_NewProxy((PyObject *)mod, NULL);
         if (ns == NULL) {
             return 0;
         }
-        if (_PyDict_SetItemId(dict, name, ns) != 0) {
+        if (_PyDict_SetItemId(dict, &PyId___module_weakref__, ns) != 0) {
             Py_DECREF(ns);
             return 0;
         }
@@ -164,6 +171,7 @@ module_init_dict(PyModuleObject *mod, PyObject *md_dict, PyObject *builtins,
 }
 
 
+/* create a module given a globals dict, consumes reference to 'dict' */
 static PyObject *
 module_new_with_dict(PyObject *name, PyObject *dict, int add_ns)
 {
@@ -177,9 +185,9 @@ module_new_with_dict(PyObject *name, PyObject *dict, int add_ns)
     m->md_name = NULL;
     m->md_dict = dict;
     m->md_builtins = module_find_builtins(dict);
-    assert(!PyModule_Check(m->md_builtins));
-    if (m->md_builtins == NULL)
+    if (m->md_builtins == NULL) {
         goto fail;
+    }
     if (add_ns) {
         if (module_init_dict(m, m->md_dict, m->md_builtins, name, NULL) != 0)
             goto fail;
@@ -201,15 +209,10 @@ module_new_with_dict(PyObject *name, PyObject *dict, int add_ns)
 PyObject *
 PyModule_NewObject(PyObject *name)
 {
-    PyObject *m;
     PyObject *dict = PyDict_New();
     if (dict == NULL)
         return NULL;
-    m = module_new_with_dict(name, dict, 1);
-    if (m == NULL) {
-        Py_DECREF(dict);
-    }
-    return m;
+    return module_new_with_dict(name, dict, 1);
 }
 
 /* create module object from 'globals' dict */
