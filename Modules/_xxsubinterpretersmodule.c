@@ -1840,17 +1840,7 @@ _is_running(PyInterpreterState *interp)
                         "interpreter has more than one thread");
         return -1;
     }
-
-    assert(!PyErr_Occurred());
-    PyFrameObject *frame = PyThreadState_GetFrame(tstate);
-    if (frame == NULL) {
-        return 0;
-    }
-
-    int executing = (int)(frame->f_executing);
-    Py_DECREF(frame);
-
-    return executing;
+    return _PyThreadState_IsRunning(tstate);
 }
 
 static int

@@ -8,6 +8,7 @@
 #include "pycore_pyerrors.h"
 #include "pycore_pystate.h"      // _PyThreadState_GET()
 #include "pycore_tupleobject.h"
+#include "code2.h"
 
 _Py_IDENTIFIER(__builtins__);
 _Py_IDENTIFIER(__dict__);
@@ -115,7 +116,7 @@ builtin___build_class__(PyObject *self, PyObject *const *args, Py_ssize_t nargs,
         return NULL;
     }
     func = args[0];   /* Better be callable */
-    if (!PyFunction_Check(func)) {
+    if (!PyFunction_Check(func) && !PyFunc_Check(func)) {
         PyErr_SetString(PyExc_TypeError,
                         "__build_class__: func must be a function");
         return NULL;
@@ -210,9 +211,15 @@ builtin___build_class__(PyObject *self, PyObject *const *args, Py_ssize_t nargs,
                      Py_TYPE(ns)->tp_name);
         goto error;
     }
-    cell = PyEval_EvalCodeEx(PyFunction_GET_CODE(func), PyFunction_GET_GLOBALS(func), ns,
-                             NULL, 0, NULL, 0, NULL, 0, NULL,
-                             PyFunction_GET_CLOSURE(func));
+    if (PyFunc_Check(func)) {
+        cell = _PyEval2_EvalFunc(func, ns);
+    }
+    else {
+        // printf("here: %zd\n", PyDict_GET_SIZE(ns));
+        cell = PyEval_EvalCodeEx(PyFunction_GET_CODE(func), PyFunction_GET_GLOBALS(func), ns,
+                                NULL, 0, NULL, 0, NULL, 0, NULL,
+                                PyFunction_GET_CLOSURE(func));
+    }
     if (cell != NULL) {
         if (bases != orig_bases) {
             if (PyMapping_SetItemString(ns, "__orig_bases__", orig_bases) < 0) {
@@ -936,6 +943,19 @@ builtin_eval_impl(PyObject *module, PyObject *source, PyObject *globals,
         }
         return PyEval_EvalCode(source, globals, locals);
     }
+    else if (PyCode2_Check(source)) {
+        if (PySys_Audit("exec", "O", source) < 0) {
+            return NULL;
+        }
+
+        if (((PyCodeObject2 *)source)->co_nfreevars > 0) {
+            PyErr_SetString(PyExc_TypeError,
+                "code object passed to eval() may not "
+                "contain free variables");
+            return NULL;
+        }
+        return PyEval2_EvalCode(source, globals, locals);
+    }
 
     PyCompilerFlags cf = _PyCompilerFlags_INIT;
     cf.cf_flags = PyCF_SOURCE_IS_UTF8;
@@ -1024,6 +1044,19 @@ builtin_exec_impl(PyObject *module, PyObject *source, PyObject *globals,
             return NULL;
         }
         v = PyEval_EvalCode(source, globals, locals);
+    }
+    else if (PyCode2_Check(source)) {
+        if (PySys_Audit("exec", "O", source) < 0) {
+            return NULL;
+        }
+
+        if (((PyCodeObject2 *)source)->co_nfreevars > 0) {
+            PyErr_SetString(PyExc_TypeError,
+                "code object passed to exec() may not "
+                "contain free variables");
+            return NULL;
+        }
+        v = PyEval2_EvalCode(source, globals, locals);
     }
     else {
         PyObject *source_copy;
@@ -2830,6 +2863,7 @@ _PyBuiltin_Init(PyThreadState *tstate)
     SETBUILTIN("tuple",                 &PyTuple_Type);
     SETBUILTIN("type",                  &PyType_Type);
     SETBUILTIN("zip",                   &PyZip_Type);
+    SETBUILTIN("_code2",                &PyCode2_Type);
     debug = PyBool_FromLong(config->optimization_level == 0);
     if (PyDict_SetItemString(dict, "__debug__", debug) < 0) {
         Py_DECREF(debug);

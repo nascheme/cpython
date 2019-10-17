@@ -40,11 +40,6 @@ struct _ceval_state {
        c_tracefunc.  This speeds up the if statement in
        _PyEval_EvalFrameDefault() after fast_next_opcode. */
     int tracing_possible;
-    /* This single variable consolidates all requests to break out of
-       the fast path in the eval loop. */
-    _Py_atomic_int eval_breaker;
-    /* Request for dropping the GIL */
-    _Py_atomic_int gil_drop_request;
     struct _pending_calls pending;
 };
 
@@ -121,6 +116,9 @@ struct _is {
     /* Initialized to PyEval_EvalFrameDefault(). */
     _PyFrameEvalFunction eval_frame;
 
+    _PyRecursiveMutex consts_mutex;
+    struct _Py_hashtable_t *consts;
+
     Py_ssize_t co_extra_user_count;
     freefunc co_extra_freefuncs[MAX_CO_EXTRA_USERS];
 
@@ -145,15 +143,6 @@ struct _is {
             int atbol;
         } listnode;
     } parser;
-
-#if _PY_NSMALLNEGINTS + _PY_NSMALLPOSINTS > 0
-    /* Small integers are preallocated in this array so that they
-       can be shared.
-       The integers that are preallocated are those in the range
-       -_PY_NSMALLNEGINTS (inclusive) to _PY_NSMALLPOSINTS (not inclusive).
-    */
-    PyLongObject* small_ints[_PY_NSMALLNEGINTS + _PY_NSMALLPOSINTS];
-#endif
 };
 
 /* Used by _PyImport_Cleanup() */
@@ -184,6 +173,7 @@ PyAPI_FUNC(struct _is*) _PyInterpreterState_LookUpID(int64_t);
 PyAPI_FUNC(int) _PyInterpreterState_IDInitref(struct _is *);
 PyAPI_FUNC(void) _PyInterpreterState_IDIncref(struct _is *);
 PyAPI_FUNC(void) _PyInterpreterState_IDDecref(struct _is *);
+PyAPI_FUNC(void) _PyInterpreterState_WaitForThreads(struct _is *);
 
 #ifdef __cplusplus
 }

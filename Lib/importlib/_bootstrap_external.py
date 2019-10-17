@@ -346,7 +346,7 @@ _code_type = type(_write_atomic.__code__)
 # Whenever MAGIC_NUMBER is changed, the ranges in the magic_values array
 # in PC/launcher.c must also be updated.
 
-MAGIC_NUMBER = (3425).to_bytes(2, 'little') + b'\r\n'
+MAGIC_NUMBER = (3427).to_bytes(2, 'little') + b'\r\n'
 _RAW_MAGIC_NUMBER = int.from_bytes(MAGIC_NUMBER, 'little')  # For import.c
 
 _PYCACHE = '__pycache__'
@@ -645,7 +645,7 @@ def _validate_hash_pyc(data, source_hash, name, exc_details):
 def _compile_bytecode(data, name=None, bytecode_path=None, source_path=None):
     """Compile bytecode as found in a pyc."""
     code = marshal.loads(data)
-    if isinstance(code, _code_type):
+    if isinstance(code, _code_type) or type(code).__name__ == 'code':
         _bootstrap._verbose_message('code object from {!r}', bytecode_path)
         if source_path is not None:
             _imp._fix_co_filename(code, source_path)
@@ -910,8 +910,9 @@ class SourceLoader(_LoaderBasics):
 
         The 'data' argument can be any object type that compile() supports.
         """
+        flags = 0x8000  # PyCF_NEW_BYTECODE
         return _bootstrap._call_with_frames_removed(compile, data, path, 'exec',
-                                        dont_inherit=True, optimize=_optimize)
+                                        flags=flags, dont_inherit=True, optimize=_optimize)
 
     def get_code(self, fullname):
         """Concrete implementation of InspectLoader.get_code.

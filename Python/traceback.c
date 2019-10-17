@@ -2,11 +2,15 @@
 /* Traceback implementation */
 
 #include "Python.h"
+#include "pycore_pystate.h"
+#include "ceval2_meta.h"
+#include "pycore_stackwalk.h"
 
 #include "code.h"
 #include "frameobject.h"          // PyFrame_GetBack()
 #include "structmember.h"         // PyMemberDef
 #include "osdefs.h"               // SEP
+#include "code2.h"
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>
 #endif
@@ -560,23 +564,28 @@ tb_printinternal(PyTracebackObject *tb, PyObject *f, long limit)
         tb = tb->tb_next;
     }
     while (tb != NULL && err == 0) {
-        PyCodeObject *code = PyFrame_GetCode(tb->tb_frame);
+        PyFrameObject *frame = tb->tb_frame;
+        PyObject *co_filename = frame->f_code ? frame->f_code->co_filename : frame->f_code2->co_filename;
+        PyObject *co_name = frame->f_code ? frame->f_code->co_name : frame->f_code2->co_name;
+
         if (last_file == NULL ||
-            code->co_filename != last_file ||
+            co_filename != last_file ||
             last_line == -1 || tb->tb_lineno != last_line ||
-            last_name == NULL || code->co_name != last_name) {
+            last_name == NULL || co_name != last_name) {
             if (cnt > TB_RECURSIVE_CUTOFF) {
                 err = tb_print_line_repeated(f, cnt);
             }
-            last_file = code->co_filename;
+            last_file = co_filename;
             last_line = tb->tb_lineno;
-            last_name = code->co_name;
+            last_name = co_name;
             cnt = 0;
         }
         cnt++;
         if (err == 0 && cnt <= TB_RECURSIVE_CUTOFF) {
-            err = tb_displayline(f, code->co_filename, tb->tb_lineno,
-                                 code->co_name);
+            err = tb_displayline(f,
+                                 co_filename,
+                                 tb->tb_lineno,
+                                 co_name);
             if (err == 0) {
                 err = PyErr_CheckSignals();
             }
@@ -752,9 +761,11 @@ _Py_DumpASCII(int fd, PyObject *text)
    This function is signal safe. */
 
 static void
-dump_frame(int fd, PyFrameObject *frame)
+dump_frame(int fd, PyFunc *func, int lineno)
 {
-    PyCodeObject *code = PyFrame_GetCode(frame);
+    PyCodeObject2 *code;
+
+    code = PyCode2_FromFunc(func);
     PUTS(fd, "  File ");
     if (code->co_filename != NULL
         && PyUnicode_Check(code->co_filename))
@@ -767,7 +778,6 @@ dump_frame(int fd, PyFrameObject *frame)
     }
 
     /* PyFrame_GetLineNumber() was introduced in Python 2.7.0 and 3.2.0 */
-    int lineno = PyCode_Addr2Line(code, frame->f_lasti);
     PUTS(fd, ", line ");
     if (lineno >= 0) {
         _Py_DumpDecimal(fd, (unsigned long)lineno);
@@ -792,39 +802,34 @@ dump_frame(int fd, PyFrameObject *frame)
 static void
 dump_traceback(int fd, PyThreadState *tstate, int write_header)
 {
-    PyFrameObject *frame;
     unsigned int depth;
 
     if (write_header) {
         PUTS(fd, "Stack (most recent call first):\n");
     }
 
-    // Use a borrowed reference. Avoid Py_INCREF/Py_DECREF, since this function
-    // can be called in a signal handler by the faulthandler module which must
-    // not modify Python objects.
-    frame = tstate->frame;
-    if (frame == NULL) {
-        PUTS(fd, "<no Python frame>\n");
-        return;
+    depth = 0;
+    if (tstate->active == NULL) {
+        goto done;
     }
 
-    depth = 0;
-    while (1) {
+    struct stack_walk w;
+    vm_stack_walk_init(&w, tstate->active);
+    while (vm_stack_walk(&w)) {
         if (MAX_FRAME_DEPTH <= depth) {
             PUTS(fd, "  ...\n");
             break;
         }
-        if (!PyFrame_Check(frame)) {
-            break;
-        }
-        dump_frame(fd, frame);
-        PyFrameObject *back = frame->f_back;
 
-        if (back == NULL) {
-            break;
-        }
-        frame = back;
+        PyFunc *func = (PyFunc *)AS_OBJ(w.regs[-1]);
+        int lineno = vm_stack_walk_lineno(&w);
+        dump_frame(fd, func, lineno);
         depth++;
+    }
+
+done:
+    if (depth == 0) {
+        PUTS(fd, "<no Python frame>\n");
     }
 }
 

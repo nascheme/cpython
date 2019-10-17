@@ -14,21 +14,16 @@ class tuple "PyTupleObject *" "&PyTuple_Type"
 
 #include "clinic/tupleobject.c.h"
 
-/* Speed optimization to avoid frequent malloc/free of small tuples */
-#ifndef PyTuple_MAXSAVESIZE
-#define PyTuple_MAXSAVESIZE     20  /* Largest tuple to save on free list */
-#endif
-#ifndef PyTuple_MAXFREELIST
-#define PyTuple_MAXFREELIST  2000  /* Maximum number of tuples of each size to save */
-#endif
-
-#if PyTuple_MAXSAVESIZE > 0
-/* Entries 1 up to PyTuple_MAXSAVESIZE are free lists, entry 0 is the empty
-   tuple () of which at most one instance will be allocated.
-*/
-static PyTupleObject *free_list[PyTuple_MAXSAVESIZE];
-static int numfree[PyTuple_MAXSAVESIZE];
-#endif
+static struct {
+    PyGC_Head head;
+    PyTupleObject tuple;
+} _Py_EmptyTupleStruct = {
+    {0, 0},
+    {
+        { _PyObject_STRUCT_INIT(&PyTuple_Type), 0 },
+        { NULL }
+    }
+};
 
 static inline void
 tuple_gc_track(PyTupleObject *op)
@@ -40,17 +35,6 @@ tuple_gc_track(PyTupleObject *op)
 void
 _PyTuple_DebugMallocStats(FILE *out)
 {
-#if PyTuple_MAXSAVESIZE > 0
-    int i;
-    char buf[128];
-    for (i = 1; i < PyTuple_MAXSAVESIZE; i++) {
-        PyOS_snprintf(buf, sizeof(buf),
-                      "free %d-sized PyTupleObject", i);
-        _PyDebugAllocatorStats(out,
-                               buf,
-                               numfree[i], _PyObject_VAR_SIZE(&PyTuple_Type, i));
-    }
-#endif
 }
 
 /* Allocate an uninitialized tuple object. Before making it public following
@@ -58,69 +42,36 @@ _PyTuple_DebugMallocStats(FILE *out)
    - initialize its items
    - call tuple_gc_track() on it
    Because the empty tuple is always reused and it's already tracked by GC,
-   this function must not be called with size == 0 (unless from PyTuple_New()
-   which wraps this function).
+   this function must not be called with size == 0.
 */
 static PyTupleObject *
 tuple_alloc(Py_ssize_t size)
 {
-    PyTupleObject *op;
-    if (size < 0) {
+    if (size <= 0) {
         PyErr_BadInternalCall();
         return NULL;
     }
-#if PyTuple_MAXSAVESIZE > 0
-    if (size < PyTuple_MAXSAVESIZE && (op = free_list[size]) != NULL) {
-        assert(size != 0);
-        free_list[size] = (PyTupleObject *) op->ob_item[0];
-        numfree[size]--;
-        /* Inline PyObject_InitVar */
-#ifdef Py_TRACE_REFS
-        Py_SIZE(op) = size;
-        Py_TYPE(op) = &PyTuple_Type;
-#endif
-        _Py_NewReference((PyObject *)op);
+    /* Check for overflow */
+    if ((size_t)size > ((size_t)PY_SSIZE_T_MAX - (sizeof(PyTupleObject) -
+                sizeof(PyObject *))) / sizeof(PyObject *)) {
+        return (PyTupleObject *)PyErr_NoMemory();
     }
-    else
-#endif
-    {
-        /* Check for overflow */
-        if ((size_t)size > ((size_t)PY_SSIZE_T_MAX - (sizeof(PyTupleObject) -
-                    sizeof(PyObject *))) / sizeof(PyObject *)) {
-            return (PyTupleObject *)PyErr_NoMemory();
-        }
-        op = PyObject_GC_NewVar(PyTupleObject, &PyTuple_Type, size);
-        if (op == NULL)
-            return NULL;
-    }
-    return op;
+    return PyObject_GC_NewVar(PyTupleObject, &PyTuple_Type, size);
 }
 
 PyObject *
 PyTuple_New(Py_ssize_t size)
 {
-    PyTupleObject *op;
-#if PyTuple_MAXSAVESIZE > 0
-    if (size == 0 && free_list[0]) {
-        op = free_list[0];
-        Py_INCREF(op);
-        return (PyObject *) op;
+    if (size == 0) {
+        return (PyObject *) &_Py_EmptyTupleStruct.tuple;
     }
-#endif
-    op = tuple_alloc(size);
+    PyTupleObject *op = tuple_alloc(size);
     if (op == NULL) {
         return NULL;
     }
     for (Py_ssize_t i = 0; i < size; i++) {
         op->ob_item[i] = NULL;
     }
-#if PyTuple_MAXSAVESIZE > 0
-    if (size == 0) {
-        free_list[0] = op;
-        ++numfree[0];
-        Py_INCREF(op);          /* extra INCREF so that this is never freed */
-    }
-#endif
     tuple_gc_track(op);
     return (PyObject *) op;
 }
@@ -235,17 +186,6 @@ tupledealloc(PyTupleObject *op)
         i = len;
         while (--i >= 0)
             Py_XDECREF(op->ob_item[i]);
-#if PyTuple_MAXSAVESIZE > 0
-        if (len < PyTuple_MAXSAVESIZE &&
-            numfree[len] < PyTuple_MAXFREELIST &&
-            Py_IS_TYPE(op, &PyTuple_Type))
-        {
-            op->ob_item[0] = (PyObject *) free_list[len];
-            numfree[len]++;
-            free_list[len] = op;
-            goto done; /* return */
-        }
-#endif
     }
     Py_TYPE(op)->tp_free((PyObject *)op);
 #if PyTuple_MAXSAVESIZE > 0
@@ -929,7 +869,7 @@ _PyTuple_Resize(PyObject **pv, Py_ssize_t newsize)
 
     /* XXX UNREF/NEWREF interface should be more symmetrical */
 #ifdef Py_REF_DEBUG
-    _Py_RefTotal--;
+    _Py_DecRefTotal();
 #endif
     if (_PyObject_GC_IS_TRACKED(v)) {
         _PyObject_GC_UNTRACK(v);
@@ -960,31 +900,11 @@ _PyTuple_Resize(PyObject **pv, Py_ssize_t newsize)
 void
 _PyTuple_ClearFreeList(void)
 {
-#if PyTuple_MAXSAVESIZE > 0
-    for (Py_ssize_t i = 1; i < PyTuple_MAXSAVESIZE; i++) {
-        PyTupleObject *p = free_list[i];
-        free_list[i] = NULL;
-        numfree[i] = 0;
-        while (p) {
-            PyTupleObject *q = p;
-            p = (PyTupleObject *)(p->ob_item[0]);
-            PyObject_GC_Del(q);
-        }
-    }
-    // the empty tuple singleton is only cleared by _PyTuple_Fini()
-#endif
 }
 
 void
 _PyTuple_Fini(void)
 {
-#if PyTuple_MAXSAVESIZE > 0
-    /* empty tuples are used all over the place and applications may
-     * rely on the fact that an empty tuple is a singleton. */
-    Py_CLEAR(free_list[0]);
-
-    _PyTuple_ClearFreeList();
-#endif
 }
 
 /*********************** Tuple Iterator **************************/

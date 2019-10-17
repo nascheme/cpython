@@ -18,6 +18,20 @@
 #include "pycore_sysmodule.h"     // _PySys_ClearAuditHooks()
 #include "pycore_traceback.h"     // _Py_DumpTracebackThreads()
 
+#include "pycore_hamt.h"
+#include "pycore_pymem.h"
+#include "pycore_qsbr.h"
+#include "grammar.h"
+#include "node.h"
+#include "token.h"
+#include "parsetok.h"
+#include "errcode.h"
+#include "code.h"
+#include "symtable.h"
+#include "ast.h"
+#include "marshal.h"
+#include "osdefs.h"
+
 #include "grammar.h"              // PyGrammar_RemoveAccelerators()
 #include <locale.h>               // setlocale()
 
@@ -44,7 +58,6 @@ _Py_IDENTIFIER(name);
 _Py_IDENTIFIER(stdin);
 _Py_IDENTIFIER(stdout);
 _Py_IDENTIFIER(stderr);
-_Py_IDENTIFIER(threading);
 
 #ifdef __cplusplus
 extern "C" {
@@ -58,7 +71,6 @@ static PyStatus init_import_site(void);
 static PyStatus init_set_builtins_open(void);
 static PyStatus init_sys_streams(PyThreadState *tstate);
 static void call_py_exitfuncs(PyThreadState *tstate);
-static void wait_for_thread_shutdown(PyThreadState *tstate);
 static void call_ll_exitfuncs(_PyRuntimeState *runtime);
 
 int _Py_UnhandledKeyboardInterrupt = 0;
@@ -513,6 +525,12 @@ pycore_init_runtime(_PyRuntimeState *runtime,
     if (_PyStatus_EXCEPTION(status)) {
         return status;
     }
+
+    status = _Py_qsbr_init(&runtime->qsbr);
+    if (_PyStatus_EXCEPTION(status)) {
+        return status;
+    }
+
     return _PyStatus_OK();
 }
 
@@ -561,6 +579,7 @@ pycore_create_interpreter(_PyRuntimeState *runtime,
     if (tstate == NULL) {
         return _PyStatus_ERR("can't make first thread");
     }
+    runtime->main_tstate = tstate;
     (void) PyThreadState_Swap(tstate);
 
     status = init_interp_create_gil(tstate);
@@ -721,6 +740,11 @@ pycore_interp_init(PyThreadState *tstate)
 {
     PyStatus status;
     PyObject *sysmod = NULL;
+
+    status = _PyUnicode_InitIntern();
+    if (_PyStatus_EXCEPTION(status)) {
+        goto done;
+    }
 
     status = pycore_init_types(tstate);
     if (_PyStatus_EXCEPTION(status)) {
@@ -1355,7 +1379,7 @@ Py_FinalizeEx(void)
     PyThreadState *tstate = _PyRuntimeState_GetThreadState(runtime);
 
     // Wrap up existing "threading"-module-created, non-daemon threads.
-    wait_for_thread_shutdown(tstate);
+    _PyInterpreterState_WaitForThreads(interp);
 
     // Make any remaining pending calls.
     _Py_FinishPendingCalls(tstate);
@@ -1390,15 +1414,10 @@ Py_FinalizeEx(void)
     runtime->initialized = 0;
     runtime->core_initialized = 0;
 
-    /* Destroy the state of all threads of the interpreter, except of the
-       current thread. In practice, only daemon threads should still be alive,
-       except if wait_for_thread_shutdown() has been cancelled by CTRL+C.
-       Clear frames of other threads to call objects destructors. Destructors
-       will be called in the current Python thread. Since
-       _PyRuntimeState_SetFinalizing() has been called, no other Python thread
-       can take the GIL at this point: if they try, they will exit
-       immediately. */
-    _PyThreadState_DeleteExcept(runtime, tstate);
+    /* Wait until all daemon threads exit */
+    _PyMutex_lock(&runtime->stoptheworld_mutex);
+    _PyRuntimeState_StopTheWorld(runtime);
+    _PyMutex_unlock(&runtime->stoptheworld_mutex);
 
     /* Flush sys.stdout and sys.stderr */
     if (flush_std_files() < 0) {
@@ -1562,6 +1581,9 @@ new_interpreter(PyThreadState **tstate_p, int isolated_subinterpreter)
     }
 
     PyThreadState *save_tstate = PyThreadState_Swap(tstate);
+    if (save_tstate) {
+        assert(save_tstate->fast_thread_id == tstate->fast_thread_id);
+    }
 
     /* Copy the current interpreter config into the new interpreter */
     const PyConfig *config;
@@ -1656,7 +1678,7 @@ Py_EndInterpreter(PyThreadState *tstate)
     interp->finalizing = 1;
 
     // Wrap up existing "threading"-module-created, non-daemon threads.
-    wait_for_thread_shutdown(tstate);
+    _PyInterpreterState_WaitForThreads(interp);
 
     call_py_exitfuncs(tstate);
 
@@ -2373,33 +2395,6 @@ call_py_exitfuncs(PyThreadState *tstate)
 
     (*interp->pyexitfunc)(interp->pyexitmodule);
     _PyErr_Clear(tstate);
-}
-
-/* Wait until threading._shutdown completes, provided
-   the threading module was imported in the first place.
-   The shutdown routine will wait until all non-daemon
-   "threading" threads have completed. */
-static void
-wait_for_thread_shutdown(PyThreadState *tstate)
-{
-    _Py_IDENTIFIER(_shutdown);
-    PyObject *result;
-    PyObject *threading = _PyImport_GetModuleId(&PyId_threading);
-    if (threading == NULL) {
-        if (_PyErr_Occurred(tstate)) {
-            PyErr_WriteUnraisable(NULL);
-        }
-        /* else: threading not imported */
-        return;
-    }
-    result = _PyObject_CallMethodIdNoArgs(threading, &PyId__shutdown);
-    if (result == NULL) {
-        PyErr_WriteUnraisable(threading);
-    }
-    else {
-        Py_DECREF(result);
-    }
-    Py_DECREF(threading);
 }
 
 #define NEXITFUNCS 32

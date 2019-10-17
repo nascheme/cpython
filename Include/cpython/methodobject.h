@@ -22,11 +22,17 @@ PyAPI_DATA(PyTypeObject) PyCMethod_Type;
 
 typedef struct {
     PyObject_HEAD
+    const uint8_t *first_instr;  // can get PyCodeObject2 via offset
+} PyFuncBase;
+
+typedef struct {
+    PyFuncBase   m_base;
     PyMethodDef *m_ml; /* Description of the C function to call */
     PyObject    *m_self; /* Passed as 'self' arg to the C func, can be NULL */
     PyObject    *m_module; /* The __module__ attribute, can be anything */
     PyObject    *m_weakreflist; /* List of weak references */
     vectorcallfunc vectorcall;
+    vectorcallfunc base_vectorcall; /* For synchronized functions. TODO: sgross also see descrobject.h. Should it be separate? */
 } PyCFunctionObject;
 
 typedef struct {

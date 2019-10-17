@@ -66,9 +66,7 @@ _PyObject_INIT(PyObject *op, PyTypeObject *typeobj)
 {
     assert(op != NULL);
     Py_SET_TYPE(op, typeobj);
-    if (PyType_GetFlags(typeobj) & Py_TPFLAGS_HEAPTYPE) {
-        Py_INCREF(typeobj);
-    }
+    Py_INCREF(typeobj);
     _Py_NewReference(op);
     return op;
 }
@@ -123,7 +121,6 @@ PyAPI_FUNC(Py_ssize_t) _PyGC_CollectIfEnabled(void);
 /* Test if an object implements the garbage collector protocol */
 PyAPI_FUNC(int) PyObject_IS_GC(PyObject *obj);
 
-
 /* Code built with Py_BUILD_CORE must include pycore_gc.h instead which
    defines a different _PyGC_FINALIZED() macro. */
 #ifndef Py_BUILD_CORE
@@ -131,6 +128,7 @@ PyAPI_FUNC(int) PyObject_IS_GC(PyObject *obj);
 #  define _PyGC_FINALIZED(o) PyObject_GC_IsFinalized(o)
 #endif
 
+PyAPI_FUNC(int) _PyObject_IsFinalized(PyObject *op);
 PyAPI_FUNC(PyObject *) _PyObject_GC_Malloc(size_t size);
 PyAPI_FUNC(PyObject *) _PyObject_GC_Calloc(size_t size);
 

@@ -1,9 +1,12 @@
 #include "Python.h"
 #include "pycore_initconfig.h"
 #include "pycore_interp.h"        // PyInterpreterState.warnings
+#include "pycore_ceval.h"
 #include "pycore_pyerrors.h"
 #include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "frameobject.h"          // PyFrame_GetBack()
+#include "pycore_generator.h"
+#include "code2.h"
 #include "clinic/_warnings.c.h"
 
 #define MODULE_NAME "_warnings"
@@ -826,11 +829,12 @@ next_external_frame(PyFrameObject *frame)
     return frame;
 }
 
+
 /* filename, module, and registry are new refs, globals is borrowed */
 /* Returns 0 on error (no new refs), 1 on success */
 static int
-setup_context(Py_ssize_t stack_level, PyObject **filename, int *lineno,
-              PyObject **module, PyObject **registry)
+setup_context_old(Py_ssize_t stack_level, PyObject **filename, int *lineno,
+                  PyObject **module, PyObject **registry)
 {
     _Py_IDENTIFIER(__warningregistry__);
     PyObject *globals;
@@ -911,6 +915,82 @@ setup_context(Py_ssize_t stack_level, PyObject **filename, int *lineno,
     Py_XDECREF(*registry);
     Py_XDECREF(*module);
     Py_DECREF(*filename);
+    return 0;
+}
+
+/* filename, module, and registry are new refs, globals is borrowed */
+/* Returns 0 on error (no new refs), 1 on success */
+static int
+setup_context(Py_ssize_t stack_level, PyObject **filename, int *lineno,
+              PyObject **module, PyObject **registry)
+{
+    _Py_IDENTIFIER(__warningregistry__);
+    PyObject *globals;
+
+    /* Setup globals, filename and lineno. */
+    PyFunc *func;
+    int err;
+
+    err = vm_frame_info(&func, lineno, stack_level, true);
+    if (err < 0) {
+        return 0;
+    }
+
+    if (func == NULL) {
+        globals = _PyInterpreterState_GET_UNSAFE()->sysdict;
+        *filename = PyUnicode_FromString("sys");
+        *lineno = 1;
+    }
+    else {
+        PyCodeObject2 *code = PyCode2_FromFunc(func);
+        globals = ((PyFunc *)func)->globals;
+        *filename = code->co_filename;
+        Py_INCREF(*filename);
+    }
+
+    *module = NULL;
+
+    /* Setup registry. */
+    assert(globals != NULL);
+    assert(PyDict_Check(globals));
+    *registry = _PyDict_GetItemIdWithError(globals, &PyId___warningregistry__);
+    if (*registry == NULL) {
+        int rc;
+
+        if (PyErr_Occurred()) {
+            return 0;
+        }
+        *registry = PyDict_New();
+        if (*registry == NULL)
+            return 0;
+
+         rc = _PyDict_SetItemId(globals, &PyId___warningregistry__, *registry);
+         if (rc < 0)
+            goto handle_error;
+    }
+    else
+        Py_INCREF(*registry);
+
+    /* Setup module. */
+    *module = _PyDict_GetItemIdWithError(globals, &PyId___name__);
+    if (*module == Py_None || (*module != NULL && PyUnicode_Check(*module))) {
+        Py_INCREF(*module);
+    }
+    else if (PyErr_Occurred()) {
+        goto handle_error;
+    }
+    else {
+        *module = PyUnicode_FromString("<string>");
+        if (*module == NULL)
+            goto handle_error;
+    }
+
+    return 1;
+
+ handle_error:
+    Py_XDECREF(*registry);
+    Py_XDECREF(*module);
+    Py_XDECREF(*module);
     return 0;
 }
 
@@ -1332,9 +1412,11 @@ _PyErr_WarnUnawaitedCoroutine(PyObject *coro)
         PyErr_WriteUnraisable(coro);
     }
     if (!warned) {
-        if (_PyErr_WarnFormat(coro, PyExc_RuntimeWarning, 1,
-                              "coroutine '%S' was never awaited",
-                              ((PyCoroObject *)coro)->cr_qualname) < 0)
+        PyObject *qualname = PyCoro_CheckExact(coro) ? ((PyCoroObject *)coro)->cr_qualname :
+                             PyCoro2_CheckExact(coro) ? ((PyGenObject2 *)coro)->qualname : NULL;
+        if (PyErr_WarnFormat(coro, PyExc_RuntimeWarning, 1,
+                             "coroutine '%S' was never awaited",
+                             qualname) < 0)
         {
             PyErr_WriteUnraisable(coro);
         }

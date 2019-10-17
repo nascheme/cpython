@@ -7,6 +7,7 @@
 #include "pycore_pystate.h"    // _PyThreadState_GET()
 #include "pycore_sysmodule.h"
 #include "pycore_traceback.h"
+#include "ceval2_meta.h"
 
 #ifndef __STDC__
 #ifndef MS_WINDOWS
@@ -110,6 +111,8 @@ _PyErr_CreateException(PyObject *exception_type, PyObject *value)
     return exc;
 }
 
+PyObject *vm_cur_handled_exc(void);
+
 void
 _PyErr_SetObject(PyThreadState *tstate, PyObject *exception, PyObject *value)
 {
@@ -126,7 +129,7 @@ _PyErr_SetObject(PyThreadState *tstate, PyObject *exception, PyObject *value)
     }
 
     Py_XINCREF(value);
-    exc_value = _PyErr_GetTopmostException(tstate)->exc_value;
+    exc_value = vm_cur_handled_exc();
     if (exc_value != NULL && exc_value != Py_None) {
         /* Implicit exception chaining */
         Py_INCREF(exc_value);
@@ -209,6 +212,13 @@ _PyErr_SetKeyError(PyObject *arg)
     }
     _PyErr_SetObject(tstate, PyExc_KeyError, tup);
     Py_DECREF(tup);
+}
+
+PyObject *
+_PyErr_SetKeyError2(PyObject *arg)
+{
+    _PyErr_SetKeyError(arg);
+    return NULL;
 }
 
 void
@@ -1466,12 +1476,12 @@ _PyErr_WriteUnraisableMsg(const char *err_msg_str, PyObject *obj)
     }
 
     if (exc_tb == NULL) {
-        PyFrameObject *frame = tstate->frame;
+        PyFrameObject *frame = vm_frame(tstate->active);
         if (frame != NULL) {
             exc_tb = _PyTraceBack_FromFrame(NULL, frame);
-            if (exc_tb == NULL) {
-                _PyErr_Clear(tstate);
-            }
+        }
+        if (exc_tb == NULL) {
+            _PyErr_Clear(tstate);
         }
     }
 

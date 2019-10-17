@@ -3,6 +3,7 @@ from test import support
 from test.support import socket_helper
 
 import errno
+import collections
 import io
 import itertools
 import socket
@@ -323,6 +324,7 @@ class ThreadableTest:
 
     def __init__(self):
         # Swap the true setup function
+        self.__dict__ = collections.synchronized(self.__dict__)
         self.__setUp = self.setUp
         self.__tearDown = self.tearDown
         self.setUp = self._setUp

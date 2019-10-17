@@ -8,36 +8,44 @@ extern "C" {
 #  error "this header requires Py_BUILD_CORE define"
 #endif
 
+#include "pycore_pystate.h"
+#include "mimalloc.h"
+#include "mimalloc-internal.h"
+
+#ifdef __cplusplus
+#define _Py_ALIGN_AS alignas
+#elif defined(_MSC_VER)
+#define _Py_ALIGN_AS(n) __declspec(align(n))
+#else
+#define _Py_ALIGN_AS _Alignas
+#endif
+
 /* GC information is stored BEFORE the object structure. */
 typedef struct {
+    // Pointer to previous object in the list.
+    // Lowest two bits are used for flags documented later.
+    _Py_ALIGN_AS(16) uintptr_t _gc_prev;
+
     // Pointer to next object in the list.
     // 0 means the object is not tracked
     uintptr_t _gc_next;
-
-    // Pointer to previous object in the list.
-    // Lowest two bits are used for flags documented later.
-    uintptr_t _gc_prev;
 } PyGC_Head;
 
 #define _Py_AS_GC(o) ((PyGC_Head *)(o)-1)
+#define _Py_FROM_GC(g) ((PyObject *)(((PyGC_Head *)g)+1))
 
-/* True if the object is currently tracked by the GC. */
-#define _PyObject_GC_IS_TRACKED(o) (_Py_AS_GC(o)->_gc_next != 0)
-
-/* True if the object may be tracked by the GC in the future, or already is.
-   This can be useful to implement some optimizations. */
-#define _PyObject_GC_MAY_BE_TRACKED(obj) \
-    (PyObject_IS_GC(obj) && \
-        (!PyTuple_CheckExact(obj) || _PyObject_GC_IS_TRACKED(obj)))
-
+/* See also private _PyObject_GC_IS_TRACKED() macro. */
+// TODO: should this be part of the public C-API and move to object.h?
+PyAPI_FUNC(int) PyObject_GC_IsTracked(void *);
+#define _PyObject_GC_IS_TRACKED(o) PyObject_GC_IsTracked(o)
 
 /* Bit flags for _gc_prev */
 /* Bit 0 is set when tp_finalize is called */
-#define _PyGC_PREV_MASK_FINALIZED  (1)
+// #define _PyGC_PREV_MASK_FINALIZED  (1)
 /* Bit 1 is set when the object is in generation which is GCed currently. */
-#define _PyGC_PREV_MASK_COLLECTING (2)
+// #define _PyGC_PREV_MASK_COLLECTING (2)
 /* The (N-2) most significant bits contain the real address. */
-#define _PyGC_PREV_SHIFT           (2)
+#define _PyGC_PREV_SHIFT           (4)
 #define _PyGC_PREV_MASK            (((uintptr_t) -1) << _PyGC_PREV_SHIFT)
 
 // Lowest bit of _gc_next is used for flags only in GC.
@@ -53,15 +61,151 @@ typedef struct {
         | ((uintptr_t)(p)); \
     } while (0)
 
-#define _PyGCHead_FINALIZED(g) \
-    (((g)->_gc_prev & _PyGC_PREV_MASK_FINALIZED) != 0)
-#define _PyGCHead_SET_FINALIZED(g) \
-    ((g)->_gc_prev |= _PyGC_PREV_MASK_FINALIZED)
 
-#define _PyGC_FINALIZED(o) \
-    _PyGCHead_FINALIZED(_Py_AS_GC(o))
+
+//   0   1   2   3   4   5   6   7
+// *-------------------------------*
+// |  GEN  | U | F | RSRVD         |
+// *-------------------------------*
+
+
+#define _PyObject_GC_TRACK(op) \
+    _PyObject_GC_TRACK_impl(__FILE__, __LINE__, _PyObject_CAST(op))
+
+#define _PyObject_GC_UNTRACK(op) \
+    _PyObject_GC_UNTRACK_impl(__FILE__, __LINE__, _PyObject_CAST(op))
+
+#undef _PyObject_GC_IS_TRACKED
+#define _PyObject_GC_IS_TRACKED(o) \
+    (_PyObject_GC_IS_TRACKED_impl(_Py_AS_GC(o)))
+
+// _PyGC_FINALIZED(o) defined in objimpl.h (used by Cython)
+
 #define _PyGC_SET_FINALIZED(o) \
-    _PyGCHead_SET_FINALIZED(_Py_AS_GC(o))
+    (_PyObject_GC_SET_FINALIZED_impl(_Py_AS_GC(o)))
+
+/* True if the object may be tracked by the GC in the future, or already is.
+   This can be useful to implement some optimizations. */
+#define _PyObject_GC_MAY_BE_TRACKED(obj) \
+    (PyObject_IS_GC(obj) && \
+        (!PyTuple_CheckExact(obj) || _PyObject_GC_IS_TRACKED(obj)))
+
+
+#define GC_TRACKED_SHIFT     (0)
+#define GC_UNREACHABLE_SHIFT (2)
+#define GC_FINALIZED_SHIFT   (3)
+
+#define GC_TRACKED_MASK      (1<<GC_TRACKED_SHIFT)   // 3
+#define GC_UNREACHABLE_MASK  (1<<GC_UNREACHABLE_SHIFT)  // 4
+#define GC_FINALIZED_MASK    (1<<GC_FINALIZED_SHIFT)    // 8
+
+static inline int
+GC_BITS_IS_TRACKED(PyGC_Head *gc)
+{
+    return (gc->_gc_prev & GC_TRACKED_MASK) >> GC_TRACKED_SHIFT;
+}
+
+static inline int
+GC_BITS_IS_UNREACHABLE(PyGC_Head *gc)
+{
+    return (gc->_gc_prev & GC_UNREACHABLE_MASK) >> GC_UNREACHABLE_SHIFT;
+}
+
+static inline int
+GC_BITS_IS_FINALIZED(PyGC_Head *gc)
+{
+    return (gc->_gc_prev & GC_FINALIZED_MASK) >> GC_FINALIZED_SHIFT;
+}
+
+static inline void
+GC_BITS_CLEAR(PyGC_Head *gc, uintptr_t mask)
+{
+    gc->_gc_prev &= ~mask;
+}
+
+static inline void
+GC_BITS_SET(PyGC_Head *gc, uintptr_t mask)
+{
+    gc->_gc_prev |= mask;
+}
+
+static inline int
+_PyObject_GC_IS_TRACKED_impl(PyGC_Head *gc)
+{
+    return GC_BITS_IS_TRACKED(gc) != 0;
+}
+
+static inline int
+_PyObject_GC_FINALIZED_impl(PyGC_Head *gc)
+{
+    return GC_BITS_IS_FINALIZED(gc) != 0;
+}
+
+static inline void
+_PyObject_GC_SET_FINALIZED_impl(PyGC_Head *gc)
+{
+    GC_BITS_SET(gc, GC_FINALIZED_MASK);
+}
+
+/* Tell the GC to track this object.
+ *
+ * NB: While the object is tracked by the collector, it must be safe to call the
+ * ob_traverse method.
+ *
+ * Internal note: _PyRuntime.gc.generation0->_gc_prev doesn't have any bit flags
+ * because it's not object header.  So we don't use _PyGCHead_PREV() and
+ * _PyGCHead_SET_PREV() for it to avoid unnecessary bitwise operations.
+ *
+ * The PyObject_GC_Track() function is the public version of this macro.
+ */
+static inline void
+_PyObject_GC_TRACK_impl(const char *filename, int lineno, PyObject *op)
+{
+    _PyObject_ASSERT_FROM(op, !_PyObject_GC_IS_TRACKED(op),
+                          "object already tracked by the garbage collector",
+                          filename, lineno, "_PyObject_GC_TRACK");
+
+    PyGC_Head *gc = _Py_AS_GC(op);
+
+    gc->_gc_prev |= (1 << GC_TRACKED_SHIFT);
+    assert(GC_BITS_IS_TRACKED(gc) == 1);
+}
+
+static inline int
+_PyGC_ShouldCollect(struct _gc_runtime_state *gcstate)
+{
+    int64_t live = _Py_atomic_load_int64_relaxed(&gcstate->gc_live);
+    return !gcstate->collecting && gcstate->enabled && live >= gcstate->gc_threshold;
+}
+
+void gc_list_remove(PyGC_Head *node);
+
+/* Tell the GC to stop tracking this object.
+ *
+ * Internal note: This may be called while GC. So _PyGC_PREV_MASK_COLLECTING
+ * must be cleared. But _PyGC_PREV_MASK_FINALIZED bit is kept.
+ *
+ * The object must be tracked by the GC.
+ *
+ * The PyObject_GC_UnTrack() function is the public version of this macro.
+ */
+static inline void
+_PyObject_GC_UNTRACK_impl(const char *filename, int lineno, PyObject *op)
+{
+    _PyObject_ASSERT_FROM(op, _PyObject_GC_IS_TRACKED(op),
+                          "object not tracked by the garbage collector",
+                          filename, lineno, "_PyObject_GC_UNTRACK");
+
+    PyGC_Head *gc = _Py_AS_GC(op);
+    if (gc->_gc_next != 0) {
+        assert(gc->_gc_next != 0);
+        assert(gc->_gc_prev != 0);
+        gc_list_remove(gc);
+    }
+    assert(_PyGCHead_PREV(gc) == NULL);
+    gc->_gc_prev &= GC_FINALIZED_MASK;
+    assert(GC_BITS_IS_TRACKED(gc) == 0);
+}
 
 
 /* GC runtime state */
@@ -148,21 +292,23 @@ struct _gc_runtime_state {
     PyObject *garbage;
     /* a list of callbacks to be invoked when collection is performed */
     PyObject *callbacks;
-    /* This is the number of objects that survived the last full
-       collection. It approximates the number of long lived objects
-       tracked by the GC.
 
-       (by "full collection", we mean a collection of the oldest
-       generation). */
-    Py_ssize_t long_lived_total;
-    /* This is the number of objects that survived all "non-full"
-       collections, and are awaiting to undergo a full collection for
-       the first time. */
-    Py_ssize_t long_lived_pending;
+    int64_t gc_live;
+
+    int64_t gc_threshold;
+
+    int gc_scale;
+
+    /* Number of threads that must park themselves to stop-the-world.
+       Protected by HEAD_LOCK(runtime). */
+    int32_t gc_thread_countdown;
+
+    _PyRawEvent gc_stop_event;
 };
 
 PyAPI_FUNC(void) _PyGC_InitState(struct _gc_runtime_state *);
-
+PyAPI_FUNC(void) _PyGC_ResetHeap(void);
+PyAPI_FUNC(Py_ssize_t) _PyGC_Collect(PyThreadState *);
 
 // Functions to clear types free lists
 extern void _PyFrame_ClearFreeList(void);

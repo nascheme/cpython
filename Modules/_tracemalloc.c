@@ -1,9 +1,12 @@
 #include "Python.h"
+#include "ceval2_meta.h"
 #include "pycore_gc.h"            // PyGC_Head
 #include "pycore_pymem.h"         // _Py_tracemalloc_config
+#include "pycore_stackwalk.h"
 #include "pycore_traceback.h"
 #include "pycore_hashtable.h"
 #include "frameobject.h"          // PyFrame_GetBack()
+#include "code2.h"
 
 #include "clinic/_tracemalloc.c.h"
 /*[clinic input]
@@ -31,6 +34,7 @@ static struct {
     PyMemAllocatorEx mem;
     PyMemAllocatorEx raw;
     PyMemAllocatorEx obj;
+    PyMemAllocatorEx gc;
 } allocators;
 
 
@@ -297,28 +301,12 @@ hashtable_compare_traceback(const void *key1, const void *key2)
     return 1;
 }
 
-
 static void
-tracemalloc_get_frame(PyFrameObject *pyframe, frame_t *frame)
+tracemalloc_set_filename(frame_t *frame, PyObject *filename)
 {
+    _Py_hashtable_entry_t *entry;
+
     frame->filename = unknown_filename;
-    int lineno = PyFrame_GetLineNumber(pyframe);
-    if (lineno < 0) {
-        lineno = 0;
-    }
-    frame->lineno = (unsigned int)lineno;
-
-    PyCodeObject *code = PyFrame_GetCode(pyframe);
-    PyObject *filename = code->co_filename;
-    Py_DECREF(code);
-
-    if (filename == NULL) {
-#ifdef TRACE_DEBUG
-        tracemalloc_error("failed to get the filename of the code object");
-#endif
-        return;
-    }
-
     if (!PyUnicode_Check(filename)) {
 #ifdef TRACE_DEBUG
         tracemalloc_error("filename is not a unicode string");
@@ -383,7 +371,6 @@ traceback_hash(traceback_t *traceback)
     return x;
 }
 
-
 static void
 traceback_get_frames(traceback_t *traceback)
 {
@@ -395,26 +382,32 @@ traceback_get_frames(traceback_t *traceback)
         return;
     }
 
-    PyFrameObject *pyframe = PyThreadState_GetFrame(tstate);
-    for (; pyframe != NULL;) {
-        if (traceback->nframe < _Py_tracemalloc_config.max_nframe) {
-            tracemalloc_get_frame(pyframe, &traceback->frames[traceback->nframe]);
-            assert(traceback->frames[traceback->nframe].filename != NULL);
-            traceback->nframe++;
-        }
-        if (traceback->total_nframe < UINT16_MAX) {
-            traceback->total_nframe++;
+    struct stack_walk w;
+    vm_stack_walk_init(&w, tstate->active);
+    while (vm_stack_walk(&w)) {
+        if (traceback->nframe >= _Py_tracemalloc_config.max_nframe) {
+            if (traceback->total_nframe < UINT16_MAX) {
+                traceback->total_nframe++;
+            }
+            continue;
         }
 
-        PyFrameObject *back = PyFrame_GetBack(pyframe);
-        Py_DECREF(pyframe);
-        pyframe = back;
+        PyFunc *func = (PyFunc *)AS_OBJ(w.regs[-1]);
+        PyCodeObject2 *code = PyCode2_FromFunc(func);
+
+        frame_t *frame = &traceback->frames[traceback->nframe];
+        frame->lineno = vm_stack_walk_lineno(&w);
+        tracemalloc_set_filename(frame, code->co_filename);
+
+        assert(traceback->frames[traceback->nframe].filename != NULL);
+        traceback->nframe++;
     }
 }
 
 
 static traceback_t *
 traceback_new(void)
+
 {
     traceback_t *traceback;
     _Py_hashtable_entry_t *entry;
@@ -1008,6 +1001,10 @@ tracemalloc_start(int max_nframe)
     PyMem_GetAllocator(PYMEM_DOMAIN_OBJ, &allocators.obj);
     PyMem_SetAllocator(PYMEM_DOMAIN_OBJ, &alloc);
 
+    alloc.ctx = &allocators.gc;
+    PyMem_GetAllocator(PYMEM_DOMAIN_GC, &allocators.gc);
+    PyMem_SetAllocator(PYMEM_DOMAIN_GC, &alloc);
+
     /* everything is ready: start tracing Python memory allocations */
     _Py_tracemalloc_config.tracing = 1;
 
@@ -1030,6 +1027,7 @@ tracemalloc_stop(void)
 #endif
     PyMem_SetAllocator(PYMEM_DOMAIN_MEM, &allocators.mem);
     PyMem_SetAllocator(PYMEM_DOMAIN_OBJ, &allocators.obj);
+    PyMem_SetAllocator(PYMEM_DOMAIN_GC, &allocators.gc);
 
     tracemalloc_clear_traces();
 

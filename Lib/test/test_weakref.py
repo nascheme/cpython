@@ -77,7 +77,7 @@ class TestBase(unittest.TestCase):
 
 
 @contextlib.contextmanager
-def collect_in_thread(period=0.0001):
+def collect_in_thread(period=0.005):
     """
     Ensure GC collections happen in a different thread, at a high frequency.
     """
@@ -116,7 +116,7 @@ class ReferencesTestCase(TestBase):
 
     def test_basic_callback(self):
         self.check_basic_callback(C)
-        self.check_basic_callback(create_function)
+        self.check_basic_callback(create_function, need_gc=True)
         self.check_basic_callback(create_bound_method)
 
     @support.cpython_only
@@ -191,7 +191,7 @@ class ReferencesTestCase(TestBase):
         self.assertIs(o, o2,
                      "<ref>() should return original object if live")
 
-    def check_basic_callback(self, factory):
+    def check_basic_callback(self, factory, need_gc=False):
         self.cbcalled = 0
         o = factory()
         ref = weakref.ref(o, self.callback)
@@ -486,6 +486,7 @@ class ReferencesTestCase(TestBase):
         self.assertEqual(weakref.getweakrefcount(o), 4,
                      "got wrong number of weak reference objects")
 
+        # NOTE: the root weakref remains alive
         del ref1, ref2, proxy1, proxy2
         gc_collect()  # For PyPy or other GCs.
         self.assertEqual(weakref.getweakrefcount(o), 0,
@@ -1232,7 +1233,7 @@ class MappingTestCase(TestBase):
     def check_len_cycles(self, dict_type, cons):
         N = 20
         items = [RefCycle() for i in range(N)]
-        dct = dict_type(cons(o) for o in items)
+        dct = dict_type(cons(i, o) for i, o in enumerate(items))
         # Keep an iterator alive
         it = dct.items()
         try:
@@ -1250,10 +1251,10 @@ class MappingTestCase(TestBase):
         self.assertEqual(n2, 0)
 
     def test_weak_keyed_len_cycles(self):
-        self.check_len_cycles(weakref.WeakKeyDictionary, lambda k: (k, 1))
+        self.check_len_cycles(weakref.WeakKeyDictionary, lambda _, k: (k, 1))
 
     def test_weak_valued_len_cycles(self):
-        self.check_len_cycles(weakref.WeakValueDictionary, lambda k: (1, k))
+        self.check_len_cycles(weakref.WeakValueDictionary, lambda i, k: (i, k))
 
     def check_len_race(self, dict_type, cons):
         # Extended sanity checks for len() in the face of cyclic collection
@@ -1291,7 +1292,8 @@ class MappingTestCase(TestBase):
         #
         dict, objects = self.make_weak_valued_dict()
         for o in objects:
-            self.assertEqual(weakref.getweakrefcount(o), 1)
+            # Two refs: one root ref and one KeyedRef in dict
+            self.assertEqual(weakref.getweakrefcount(o), 2)
             self.assertIs(o, dict[o.arg],
                          "wrong object returned by weak dict!")
         items1 = list(dict.items())
@@ -1324,7 +1326,8 @@ class MappingTestCase(TestBase):
         #
         dict, objects = self.make_weak_keyed_dict()
         for o in objects:
-            self.assertEqual(weakref.getweakrefcount(o), 1,
+            # Two refs: one root ref and one KeyedRef in dict
+            self.assertEqual(weakref.getweakrefcount(o), 2,
                          "wrong number of weak references to %r!" % o)
             self.assertIs(o.arg, dict[o],
                          "wrong object returned by weak dict!")
@@ -2247,4 +2250,5 @@ def test_main():
 
 
 if __name__ == "__main__":
-    test_main()
+    # test_main()
+    unittest.main()

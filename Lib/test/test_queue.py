@@ -6,12 +6,9 @@ import threading
 import time
 import unittest
 import weakref
+import queue as queuemodule
 from test import support
 from test.support import gc_collect
-
-py_queue = support.import_fresh_module('queue', blocked=['_queue'])
-c_queue = support.import_fresh_module('queue', fresh=['_queue'])
-need_c_queue = unittest.skipUnless(c_queue, "No _queue module found")
 
 QUEUE_SIZE = 5
 
@@ -237,57 +234,34 @@ class BaseQueueTestMixin(BlockingTestMixin):
         with self.assertRaises(self.queue.Full):
             q.put_nowait(4)
 
-class QueueTest(BaseQueueTestMixin):
+class QueueTest(BaseQueueTestMixin, unittest.TestCase):
+    queue = queuemodule
 
     def setUp(self):
         self.type2test = self.queue.Queue
         super().setUp()
 
-class PyQueueTest(QueueTest, unittest.TestCase):
-    queue = py_queue
 
-
-@need_c_queue
-class CQueueTest(QueueTest, unittest.TestCase):
-    queue = c_queue
-
-
-class LifoQueueTest(BaseQueueTestMixin):
+class LifoQueueTest(BaseQueueTestMixin, unittest.TestCase):
+    queue = queuemodule
 
     def setUp(self):
         self.type2test = self.queue.LifoQueue
         super().setUp()
 
-
-class PyLifoQueueTest(LifoQueueTest, unittest.TestCase):
-    queue = py_queue
-
-
-@need_c_queue
-class CLifoQueueTest(LifoQueueTest, unittest.TestCase):
-    queue = c_queue
-
-
-class PriorityQueueTest(BaseQueueTestMixin):
+class PriorityQueueTest(BaseQueueTestMixin, unittest.TestCase):
+    queue = queuemodule
 
     def setUp(self):
         self.type2test = self.queue.PriorityQueue
         super().setUp()
 
 
-class PyPriorityQueueTest(PriorityQueueTest, unittest.TestCase):
-    queue = py_queue
-
-
-@need_c_queue
-class CPriorityQueueTest(PriorityQueueTest, unittest.TestCase):
-    queue = c_queue
-
-
 # A Queue subclass that can provoke failure at a moment's notice :)
 class FailingQueueException(Exception): pass
 
-class FailingQueueTest(BlockingTestMixin):
+class FailingQueueTest(BlockingTestMixin, unittest.TestCase):
+    queue = queuemodule
 
     def setUp(self):
 
@@ -403,16 +377,6 @@ class FailingQueueTest(BlockingTestMixin):
         self.failing_queue_test(q)
 
 
-
-class PyFailingQueueTest(FailingQueueTest, unittest.TestCase):
-    queue = py_queue
-
-
-@need_c_queue
-class CFailingQueueTest(FailingQueueTest, unittest.TestCase):
-    queue = c_queue
-
-
 class BaseSimpleQueueTest:
 
     def setUp(self):
@@ -463,35 +427,54 @@ class BaseSimpleQueueTest:
 
     def run_threads(self, n_feeders, n_consumers, q, inputs,
                     feed_func, consume_func):
-        results = []
         sentinel = None
-        seq = inputs + [sentinel] * n_consumers
-        seq.reverse()
         rnd = random.Random(42)
 
-        exceptions = []
-        def log_exceptions(f):
-            def wrapper(*args, **kwargs):
-                try:
-                    f(*args, **kwargs)
-                except BaseException as e:
-                    exceptions.append(e)
-            return wrapper
+        class Feeder(threading.Thread):
+            def __init__(self):
+                super().__init__()
+                self.exception = None
+                self.seq = []
 
-        feeders = [threading.Thread(target=log_exceptions(feed_func),
-                                    args=(q, seq, rnd))
-                   for i in range(n_feeders)]
-        consumers = [threading.Thread(target=log_exceptions(consume_func),
-                                      args=(q, results, sentinel))
-                     for i in range(n_consumers)]
+            def run(self):
+                try:
+                    feed_func(q, self.seq, rnd)
+                except BaseException as e:
+                    self.exception = e
+
+        class Consumer(threading.Thread):
+            def __init__(self):
+                super().__init__()
+                self.exception = None
+                self.results = []
+
+            def run(self):
+                try:
+                    consume_func(q, self.results, sentinel)
+                except BaseException as e:
+                    self.exception = e
+
+        feeders = [Feeder() for i in range(n_feeders)]
+        consumers = [Consumer() for i in range(n_feeders)]
+
+        # randomly distribute inputs to threads
+        for item in inputs:
+            f = feeders[rnd.randint(0, n_feeders - 1)]
+            f.seq.append(item)
+
+        for f in feeders:
+            f.seq.append(sentinel)
+            f.seq.reverse()
 
         with support.start_threads(feeders + consumers):
             pass
 
-        self.assertFalse(exceptions)
+        for t in (feeders + consumers):
+            self.assertIsNone(t.exception)
         self.assertTrue(q.empty())
         self.assertEqual(q.qsize(), 0)
 
+        results = sum((c.results for c in consumers), [])
         return results
 
     def test_basic(self):
@@ -593,18 +576,8 @@ class BaseSimpleQueueTest:
             self.assertIsNone(wr())
 
 
-class PySimpleQueueTest(BaseSimpleQueueTest, unittest.TestCase):
-
-    queue = py_queue
-    def setUp(self):
-        self.type2test = self.queue._PySimpleQueue
-        super().setUp()
-
-
-@need_c_queue
-class CSimpleQueueTest(BaseSimpleQueueTest, unittest.TestCase):
-
-    queue = c_queue
+class SimpleQueueTest(BaseSimpleQueueTest, unittest.TestCase):
+    queue = queuemodule
 
     def setUp(self):
         self.type2test = self.queue.SimpleQueue

@@ -7,7 +7,9 @@
 #include "pycore_pyerrors.h"
 #include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "frameobject.h"
-#include "structmember.h"         // PyMemberDef
+#include "structmember.h"
+#include "pyatomic.h"
+#include "lock.h"
 
 #include <ctype.h>
 
@@ -29,7 +31,6 @@ class object "PyObject *" "&PyBaseObject_Type"
    MCACHE_MAX_ATTR_SIZE, since it might be a problem if very large
    strings are used as attribute names. */
 #define MCACHE_MAX_ATTR_SIZE    100
-#define MCACHE_SIZE_EXP         12
 #define MCACHE_HASH(version, name_hash)                                 \
         (((unsigned int)(version) ^ (unsigned int)(name_hash))          \
          & ((1 << MCACHE_SIZE_EXP) - 1))
@@ -42,15 +43,7 @@ class object "PyObject *" "&PyBaseObject_Type"
         PyUnicode_IS_READY(name) &&                             \
         PyUnicode_GET_LENGTH(name) <= MCACHE_MAX_ATTR_SIZE
 
-struct method_cache_entry {
-    unsigned int version;
-    PyObject *name;             /* reference to exactly a str or None */
-    PyObject *value;            /* borrowed */
-};
-
-static struct method_cache_entry method_cache[1 << MCACHE_SIZE_EXP];
-static unsigned int next_version_tag = 0;
-#endif
+static uintptr_t next_version_tag = 0;
 
 #define MCACHE_STATS 0
 
@@ -93,6 +86,12 @@ lookup_maybe_method(PyObject *self, _Py_Identifier *attrid, int *unbound);
 
 static int
 slot_tp_setattro(PyObject *self, PyObject *name, PyObject *value);
+
+static struct method_cache_entry *
+get_method_cache(void)
+{
+    return _PyThreadState_GET()->method_cache;
+}
 
 /*
  * finds the beginning of the docstring's introspection signature.
@@ -160,7 +159,7 @@ _PyType_CheckConsistency(PyTypeObject *type)
         return 1;
     }
 
-    CHECK(Py_REFCNT(type) >= 1);
+    // CHECK(Py_REFCNT(type) >= 1);
     CHECK(PyType_Check(type));
 
     CHECK(!(type->tp_flags & Py_TPFLAGS_READYING));
@@ -222,7 +221,7 @@ PyType_ClearCache(void)
 {
 #ifdef MCACHE
     Py_ssize_t i;
-    unsigned int cur_version_tag = next_version_tag - 1;
+    uintptr_t cur_version_tag = _Py_atomic_exchange_uintptr(&next_version_tag, 0) - 1;
 
 #if MCACHE_STATS
     size_t total = method_cache_hits + method_cache_collisions + method_cache_misses;
@@ -233,15 +232,15 @@ PyType_ClearCache(void)
     fprintf(stderr, "-- Method cache collisions  = %zd (%d%%)\n",
             method_cache_collisions, (int) (100.0 * method_cache_collisions / total));
     fprintf(stderr, "-- Method cache size        = %zd KiB\n",
-            sizeof(method_cache) / 1024);
+            sizeof(PyThreadState.method_cache) / 1024);
 #endif
 
+    struct method_cache_entry *method_cache = get_method_cache();
     for (i = 0; i < (1 << MCACHE_SIZE_EXP); i++) {
         method_cache[i].version = 0;
         Py_CLEAR(method_cache[i].name);
         method_cache[i].value = NULL;
     }
-    next_version_tag = 0;
     /* mark all version tags as invalid */
     PyType_Modified(&PyBaseObject_Type);
     return cur_version_tag;
@@ -257,8 +256,8 @@ _PyType_Fini(void)
     clear_slotdefs();
 }
 
-void
-PyType_Modified(PyTypeObject *type)
+static void
+_PyType_ModifiedEx(PyTypeObject *type)
 {
     /* Invalidate any cached data for the specified type and all
        subclasses.  This function is called after the base
@@ -282,8 +281,7 @@ PyType_Modified(PyTypeObject *type)
     PyObject *raw, *ref;
     Py_ssize_t i;
 
-    if (!_PyType_HasFeature(type, Py_TPFLAGS_VALID_VERSION_TAG))
-        return;
+    assert(_PyMutex_is_locked(&_PyRuntime.mutex));
 
     raw = type->tp_subclasses;
     if (raw != NULL) {
@@ -292,12 +290,28 @@ PyType_Modified(PyTypeObject *type)
         while (PyDict_Next(raw, &i, NULL, &ref)) {
             assert(PyWeakref_CheckRef(ref));
             ref = PyWeakref_GET_OBJECT(ref);
-            if (ref != Py_None) {
-                PyType_Modified((PyTypeObject *)ref);
+            if (ref == Py_None) {
+                continue;
+            }
+
+            PyTypeObject *subtype = (PyTypeObject *)ref;
+            if (PyType_HasFeature(subtype, Py_TPFLAGS_VALID_VERSION_TAG)) {
+                _PyType_ModifiedEx(subtype);
             }
         }
     }
     type->tp_flags &= ~Py_TPFLAGS_VALID_VERSION_TAG;
+}
+
+void
+PyType_Modified(PyTypeObject *type)
+{
+    if (!PyType_HasFeature(type, Py_TPFLAGS_VALID_VERSION_TAG))
+        return;
+
+    _PyMutex_lock(&_PyRuntime.mutex);
+    _PyType_ModifiedEx(type);
+    _PyMutex_unlock(&_PyRuntime.mutex);
 }
 
 static void
@@ -377,17 +391,19 @@ assign_version_tag(PyTypeObject *type)
     if (!_PyType_HasFeature(type, Py_TPFLAGS_READY))
         return 0;
 
-    type->tp_version_tag = next_version_tag++;
+
+    unsigned int tp_version_tag = _Py_atomic_add_uintptr(&next_version_tag, 1);
+    type->tp_version_tag = tp_version_tag;
     /* for stress-testing: next_version_tag &= 0xFF; */
 
-    if (type->tp_version_tag == 0) {
+    if (tp_version_tag == 0) {
         /* wrap-around or just starting Python - clear the whole
            cache by filling names with references to Py_None.
            Values are also set to NULL for added protection, as they
            are borrowed reference */
+        struct method_cache_entry *method_cache = get_method_cache();
         for (i = 0; i < (1 << MCACHE_SIZE_EXP); i++) {
             method_cache[i].value = NULL;
-            Py_INCREF(Py_None);
             Py_XSETREF(method_cache[i].name, Py_None);
         }
         /* mark all version tags as invalid */
@@ -1036,6 +1052,125 @@ type_call(PyTypeObject *type, PyObject *args, PyObject *kwds)
     return obj;
 }
 
+struct heap_type_x {
+    union {
+        PyTypeObject *type;
+        Py_ssize_t next;
+    } u;
+    bool allocated;
+};
+
+static _PyMutex heap_type_mutex;
+static Py_ssize_t max_typeid = 0;
+static Py_ssize_t next_typeid;
+static struct heap_type_x *heap_types;
+
+static void
+free_typeid(PyTypeObject *type)
+{
+    _PyMutex_lock(&heap_type_mutex);
+    Py_ssize_t id = type->tp_typeid;
+    heap_types[id].u.next = next_typeid;
+    heap_types[id].allocated = false;
+    next_typeid = id;
+    _PyMutex_unlock(&heap_type_mutex);
+}
+
+static int
+allocate_typeid(PyTypeObject *type)
+{
+    _PyMutex_lock(&heap_type_mutex);
+    if (next_typeid >= max_typeid) {
+        Py_ssize_t new_size = max_typeid * 2;
+        if (new_size < 8) {
+            new_size = 8;
+        }
+        struct heap_type_x *ptr = mi_recalloc(
+            heap_types,
+            new_size,
+            sizeof(struct heap_type_x));
+        if (ptr == NULL) {
+            goto error;
+        }
+        heap_types = ptr;
+        for (Py_ssize_t i = max_typeid; i < new_size; i++) {
+           heap_types[i].u.next = i + 1;
+           heap_types[i].allocated = false;
+        }
+        next_typeid = max_typeid;
+        _Py_atomic_store_ssize_relaxed(&max_typeid, new_size);
+    }
+
+    Py_ssize_t next = heap_types[next_typeid].u.next;
+    heap_types[next_typeid].u.type = type;
+    heap_types[next_typeid].allocated = true;
+    type->tp_typeid = next_typeid;
+    next_typeid = next;
+
+    _PyMutex_unlock(&heap_type_mutex);
+    return 0;
+
+error:
+    _PyMutex_unlock(&heap_type_mutex);
+    return -1;
+}
+
+static void
+resize_type_refcnts(PyThreadState *tstate, PyTypeObject *type)
+{
+    Py_ssize_t *refcnts;
+
+    Py_ssize_t size = _Py_atomic_load_ssize(&max_typeid);
+    assert(size > type->tp_typeid);
+
+    refcnts = mi_reallocn(tstate->type_refcnts, size, sizeof(Py_ssize_t));
+    if (refcnts == NULL) {
+        Py_FatalError("unable to allocate refcount storage for type");
+    }
+
+    Py_ssize_t old_size = tstate->max_type_refcnts;
+    memset(refcnts + old_size, 0, (size - old_size) * sizeof(Py_ssize_t));
+    tstate->type_refcnts = refcnts;
+    tstate->max_type_refcnts = size;
+}
+
+void
+vm_merge_type_refcnt(PyThreadState *tstate)
+{
+    _PyMutex_lock(&heap_type_mutex);
+    Py_ssize_t n = tstate->max_type_refcnts;
+    assert(n <= max_typeid);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        Py_ssize_t refcnt = tstate->type_refcnts[i];
+        if (refcnt == 0) {
+            continue;
+        }
+
+        assert(heap_types[i].allocated);
+        PyObject *type = (PyObject *)heap_types[i].u.type;
+        type->ob_ref_shared += (refcnt << _Py_REF_SHARED_SHIFT);
+        tstate->type_refcnts[i] = 0;
+    }
+    _PyMutex_unlock(&heap_type_mutex);
+}
+
+void
+vm_clear_dead_types(void)
+{
+    // fprintf(stderr, "vm_clear_dead_types\n");
+    for (Py_ssize_t i = 0, n = max_typeid; i < n; i++) {
+        if (!heap_types[i].allocated) {
+            continue;
+        }
+
+        PyObject *type = (PyObject *)heap_types[i].u.type;
+        // fprintf(stderr, "DEALLOC: %s\n", heap_types[i].u.type->tp_name);
+        if (Py_REFCNT(type) == 0) {
+            _Py_Dealloc(type);
+        }
+    }
+}
+
 PyObject *
 PyType_GenericAlloc(PyTypeObject *type, Py_ssize_t nitems)
 {
@@ -1055,13 +1190,26 @@ PyType_GenericAlloc(PyTypeObject *type, Py_ssize_t nitems)
     }
 
     memset(obj, '\0', size);
+    if (type->tp_itemsize != 0) {
+        Py_SET_SIZE(obj, nitems);
+    }
 
-    if (type->tp_itemsize == 0) {
-        (void)PyObject_INIT(obj, type);
+    // PyObject_INIT
+    Py_SET_TYPE(obj, type);
+    if (!_PyObject_IS_IMMORTAL(obj)) {
+        if (type->tp_typeid == 0) {
+            Py_INCREF(type);
+        }
+        else {
+            assert(_PyObject_IS_DEFERRED_RC((PyObject *)type));
+            PyThreadState *tstate = PyThreadState_GET();
+            if (type->tp_typeid >= tstate->max_type_refcnts) {
+                resize_type_refcnts(tstate, type);
+            }
+            tstate->type_refcnts[type->tp_typeid]++;
+        }
     }
-    else {
-        (void) PyObject_INIT_VAR((PyVarObject *)obj, type, nitems);
-    }
+    _Py_NewReference(obj);
 
     if (_PyType_IS_GC(type)) {
         _PyObject_GC_TRACK(obj);
@@ -1304,10 +1452,7 @@ subtype_dealloc(PyObject *self)
            being finalized that has already been destroyed. */
         if (type->tp_weaklistoffset && !base->tp_weaklistoffset) {
             /* Modeled after GET_WEAKREFS_LISTPTR() */
-            PyWeakReference **list = (PyWeakReference **) \
-                _PyObject_GET_WEAKREFS_LISTPTR(self);
-            while (*list)
-                _PyWeakref_ClearRef(*list);
+            _PyObject_ClearWeakRefsFromGC(self);
         }
     }
 
@@ -1355,7 +1500,17 @@ subtype_dealloc(PyObject *self)
        reference counting. Only decref if the base type is not already a heap
        allocated type. Otherwise, basedealloc should have decref'd it already */
     if (type_needs_decref) {
-        Py_DECREF(type);
+        if (type->tp_typeid == 0) {
+            Py_DECREF(type);
+        }
+        else {
+            assert(_PyObject_IS_DEFERRED_RC((PyObject *)type));
+            PyThreadState *tstate = PyThreadState_GET();
+            if (type->tp_typeid >= tstate->max_type_refcnts) {
+                resize_type_refcnts(tstate, type);
+            }
+            tstate->type_refcnts[type->tp_typeid]--;
+        }
     }
 
   endlabel:
@@ -2137,7 +2292,6 @@ solid_base(PyTypeObject *type)
         return base;
 }
 
-static void object_dealloc(PyObject *);
 static int object_init(PyObject *, PyObject *, PyObject *);
 static int update_slot(PyTypeObject *, PyObject *);
 static void fixup_slot_dispatchers(PyTypeObject *);
@@ -2614,6 +2768,10 @@ type_new(PyTypeObject *metatype, PyObject *args, PyObject *kwds)
 
     /* Keep name and slots alive in the extended type object */
     et = (PyHeapTypeObject *)type;
+    if (allocate_typeid(type) < 0) {
+        goto error;
+    }
+    _PyObject_SET_DEFERRED_RC((PyObject *)et);
     Py_INCREF(name);
     et->ht_name = name;
     et->ht_slots = slots;
@@ -2741,7 +2899,7 @@ type_new(PyTypeObject *metatype, PyObject *args, PyObject *kwds)
     /* Special-case __init_subclass__ and __class_getitem__:
        if they are plain functions, make them classmethods */
     tmp = _PyDict_GetItemIdWithError(dict, &PyId___init_subclass__);
-    if (tmp != NULL && PyFunction_Check(tmp)) {
+    if (tmp != NULL && (PyFunction_Check(tmp) || PyFunc_Check(tmp))) {
         tmp = PyClassMethod_New(tmp);
         if (tmp == NULL)
             goto error;
@@ -2756,7 +2914,7 @@ type_new(PyTypeObject *metatype, PyObject *args, PyObject *kwds)
     }
 
     tmp = _PyDict_GetItemIdWithError(dict, &PyId___class_getitem__);
-    if (tmp != NULL && PyFunction_Check(tmp)) {
+    if (tmp != NULL && (PyFunction_Check(tmp) || PyFunc_Check(tmp))) {
         tmp = PyClassMethod_New(tmp);
         if (tmp == NULL)
             goto error;
@@ -2856,7 +3014,7 @@ type_new(PyTypeObject *metatype, PyObject *args, PyObject *kwds)
     fixup_slot_dispatchers(type);
 
     if (type->tp_dictoffset) {
-        et->ht_cached_keys = _PyDict_NewKeysForClass();
+        et->ht_cached_keys = 0;
     }
 
     if (set_names(type) < 0)
@@ -2929,6 +3087,11 @@ PyType_FromModuleAndSpec(PyObject *module, PyType_Spec *spec, PyObject *bases)
     res = (PyHeapTypeObject*)PyType_GenericAlloc(&PyType_Type, nmembers);
     if (res == NULL)
         return NULL;
+
+    if (allocate_typeid((PyTypeObject *)res) < 0) {
+        goto fail;
+    }
+    _PyObject_SET_DEFERRED_RC((PyObject *)res);
     res_start = (char*)res;
 
     if (spec->name == NULL) {
@@ -3067,7 +3230,7 @@ PyType_FromModuleAndSpec(PyObject *module, PyType_Spec *spec, PyObject *bases)
         goto fail;
 
     if (type->tp_dictoffset) {
-        res->ht_cached_keys = _PyDict_NewKeysForClass();
+        res->ht_cached_keys = 0;
     }
 
     if (weaklistoffset) {
@@ -3238,6 +3401,7 @@ _PyType_Lookup(PyTypeObject *type, PyObject *name)
     int error;
 
 #ifdef MCACHE
+    struct method_cache_entry *method_cache = get_method_cache();
     if (MCACHE_CACHEABLE_NAME(name) &&
         _PyType_HasFeature(type, Py_TPFLAGS_VALID_VERSION_TAG)) {
         /* fast path */
@@ -3285,7 +3449,7 @@ _PyType_Lookup(PyTypeObject *type, PyObject *name)
         else
             method_cache_misses++;
 #endif
-        Py_SETREF(method_cache[h].name, name);
+        Py_XSETREF(method_cache[h].name, name);
     }
 #endif
     return res;
@@ -3456,16 +3620,15 @@ type_setattro(PyTypeObject *type, PyObject *name, PyObject *value)
         PyType_Modified(type);
 
         if (is_dunder_name(name)) {
+            _PyMutex_lock(&_PyRuntime.mutex);
             res = update_slot(type, name);
+            _PyMutex_unlock(&_PyRuntime.mutex);
         }
         assert(_PyType_CheckConsistency(type));
     }
     Py_DECREF(name);
     return res;
 }
-
-extern void
-_PyDictKeys_DecRef(PyDictKeysObject *keys);
 
 static void
 type_dealloc(PyTypeObject *type)
@@ -3476,6 +3639,7 @@ type_dealloc(PyTypeObject *type)
     /* Assert this is a heap-allocated type object */
     _PyObject_ASSERT((PyObject *)type, type->tp_flags & Py_TPFLAGS_HEAPTYPE);
     _PyObject_GC_UNTRACK(type);
+    free_typeid(type);
     PyErr_Fetch(&tp, &val, &tb);
     remove_all_subclasses(type, type->tp_bases);
     PyErr_Restore(tp, val, tb);
@@ -3485,7 +3649,6 @@ type_dealloc(PyTypeObject *type)
     Py_XDECREF(type->tp_dict);
     Py_XDECREF(type->tp_bases);
     Py_XDECREF(type->tp_mro);
-    Py_XDECREF(type->tp_cache);
     Py_XDECREF(type->tp_subclasses);
     /* A type's tp_doc is heap allocated, unlike the tp_doc slots
      * of most other objects.  It's okay to cast it to char *.
@@ -3494,10 +3657,12 @@ type_dealloc(PyTypeObject *type)
     Py_XDECREF(et->ht_name);
     Py_XDECREF(et->ht_qualname);
     Py_XDECREF(et->ht_slots);
-    if (et->ht_cached_keys) {
-        _PyDictKeys_DecRef(et->ht_cached_keys);
-    }
     Py_XDECREF(et->ht_module);
+    if (et->ht_cached_dict) {
+        // FIXME: does this need to lock???
+        // PyDictObject *dict = (PyDictObject *)(et->ht_cached_dict);
+        // dict->ma_type_ref = 0;
+    }
     Py_TYPE(type)->tp_free((PyObject *)type);
 }
 
@@ -3683,7 +3848,6 @@ type_traverse(PyTypeObject *type, visitproc visit, void *arg)
     }
 
     Py_VISIT(type->tp_dict);
-    Py_VISIT(type->tp_cache);
     Py_VISIT(type->tp_mro);
     Py_VISIT(type->tp_bases);
     Py_VISIT(type->tp_base);
@@ -3700,7 +3864,6 @@ type_traverse(PyTypeObject *type, visitproc visit, void *arg)
 static int
 type_clear(PyTypeObject *type)
 {
-    PyDictKeysObject *cached_keys;
     /* Because of type_is_gc(), the collector only calls this
        for heaptypes. */
     _PyObject_ASSERT((PyObject *)type, type->tp_flags & Py_TPFLAGS_HEAPTYPE);
@@ -3718,9 +3881,6 @@ type_clear(PyTypeObject *type)
 
        cleared, and here's why:
 
-       tp_cache:
-           Not used; if it were, it would be a dict.
-
        tp_bases, tp_base:
            If these are involved in a cycle, there must be at least
            one other, mutable object in the cycle, e.g. a base
@@ -3735,12 +3895,12 @@ type_clear(PyTypeObject *type)
     */
 
     PyType_Modified(type);
-    cached_keys = ((PyHeapTypeObject *)type)->ht_cached_keys;
-    if (cached_keys != NULL) {
-        ((PyHeapTypeObject *)type)->ht_cached_keys = NULL;
-        _PyDictKeys_DecRef(cached_keys);
-    }
-    if (type->tp_dict) {
+    // cached_keys = ((PyHeapTypeObject *)type)->ht_cached_keys;
+    // if (cached_keys != NULL) {
+    //     ((PyHeapTypeObject *)type)->ht_cached_keys = NULL;
+    //     _PyDictKeys_DecRef(cached_keys);
+    // }
+    if (type->tp_dict)
         PyDict_Clear(type->tp_dict);
     }
     Py_CLEAR(((PyHeapTypeObject *)type)->ht_module);
@@ -3937,8 +4097,8 @@ object_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     return type->tp_alloc(type, 0);
 }
 
-static void
-object_dealloc(PyObject *self)
+void
+_PyObject_Dealloc(PyObject *self)
 {
     Py_TYPE(self)->tp_free(self);
 }
@@ -4945,7 +5105,7 @@ PyTypeObject PyBaseObject_Type = {
     "object",                                   /* tp_name */
     sizeof(PyObject),                           /* tp_basicsize */
     0,                                          /* tp_itemsize */
-    object_dealloc,                             /* tp_dealloc */
+    _PyObject_Dealloc,                          /* tp_dealloc */
     0,                                          /* tp_vectorcall_offset */
     0,                                          /* tp_getattr */
     0,                                          /* tp_setattr */
@@ -5016,6 +5176,14 @@ add_methods(PyTypeObject *type, PyMethodDef *meth)
         }
         if (descr == NULL)
             return -1;
+
+        if (!PyType_HasFeature(type, Py_TPFLAGS_HEAPTYPE)) {
+            // make descriptors immortal if type is immortal
+            assert(_PyObject_IS_IMMORTAL((PyObject *)type));
+            descr->ob_tid = 0;
+            descr->ob_ref_local = _Py_REF_IMMORTAL_MASK;
+            _PyObject_GC_UNTRACK(descr);
+        }
 
         if (isdescr) {
             name = PyDescr_NAME(descr);
@@ -5099,6 +5267,15 @@ add_getset(PyTypeObject *type, PyGetSetDef *gsp)
             Py_DECREF(descr);
             return -1;
         }
+
+        if (!PyType_HasFeature(type, Py_TPFLAGS_HEAPTYPE)) {
+            // make descriptors immortal if type is immortal
+            assert(_PyObject_IS_IMMORTAL((PyObject *)type));
+            descr->ob_tid = 0;
+            descr->ob_ref_local = _Py_REF_IMMORTAL_MASK;
+            _PyObject_GC_UNTRACK(descr);
+        }
+
         if (PyDict_SetItem(dict, PyDescr_NAME(descr), descr) < 0) {
             Py_DECREF(descr);
             return -1;
@@ -5452,6 +5629,11 @@ PyType_Ready(PyTypeObject *type)
         Py_SET_TYPE(type, Py_TYPE(base));
     }
 
+    /* Initialize ob_base for statically allocated types. */
+    if (!(type->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
+        ((PyObject *)type)->ob_ref_local = _Py_REF_IMMORTAL_MASK;
+    }
+
     /* Initialize tp_bases */
     bases = type->tp_bases;
     if (bases == NULL) {
@@ -5619,19 +5801,27 @@ add_subclass(PyTypeObject *base, PyTypeObject *type)
     int result = -1;
     PyObject *dict, *key, *newobj;
 
-    dict = base->tp_subclasses;
+    dict = _Py_atomic_load_ptr(&base->tp_subclasses);
     if (dict == NULL) {
-        base->tp_subclasses = dict = PyDict_New();
+        dict = PyDict_New();
         if (dict == NULL)
             return -1;
+
+        if (!_Py_atomic_compare_exchange_ptr(&base->tp_subclasses, NULL, dict)) {
+            Py_DECREF(dict);
+            dict = _Py_atomic_load_ptr(&base->tp_subclasses);
+        }
     }
+
     assert(PyDict_CheckExact(dict));
     key = PyLong_FromVoidPtr((void *) type);
     if (key == NULL)
         return -1;
     newobj = PyWeakref_NewRef((PyObject *)type, NULL);
     if (newobj != NULL) {
+        _PyMutex_lock(&_PyRuntime.mutex);
         result = PyDict_SetItem(dict, key, newobj);
+        _PyMutex_unlock(&_PyRuntime.mutex);
         Py_DECREF(newobj);
     }
     Py_DECREF(key);
@@ -5660,19 +5850,30 @@ static void
 remove_subclass(PyTypeObject *base, PyTypeObject *type)
 {
     PyObject *dict, *key;
+    int result;
 
-    dict = base->tp_subclasses;
+    dict = _Py_atomic_load_ptr(&base->tp_subclasses);
     if (dict == NULL) {
         return;
     }
     assert(PyDict_CheckExact(dict));
     key = PyLong_FromVoidPtr((void *) type);
-    if (key == NULL || PyDict_DelItem(dict, key)) {
+    if (key == NULL) {
+        PyErr_Clear();
+        return;
+    }
+
+    _PyMutex_lock(&_PyRuntime.mutex);
+    result = PyDict_DelItem(dict, key);
+    _PyMutex_unlock(&_PyRuntime.mutex);
+
+    if (result) {
         /* This can happen if the type initialization errored out before
            the base subclasses were updated (e.g. a non-str __qualname__
            was passed in the type dict). */
         PyErr_Clear();
     }
+
     Py_XDECREF(key);
 }
 
@@ -7373,22 +7574,17 @@ resolve_slotdups(PyTypeObject *type, PyObject *name)
 {
     /* XXX Maybe this could be optimized more -- but is it worth it? */
 
-    /* pname and ptrs act as a little cache */
-    static PyObject *pname;
-    static slotdef *ptrs[MAX_EQUIV];
+    slotdef *ptrs[MAX_EQUIV];
     slotdef *p, **pp;
     void **res, **ptr;
 
-    if (pname != name) {
         /* Collect all slotdefs that match name into ptrs. */
-        pname = name;
-        pp = ptrs;
-        for (p = slotdefs; p->name_strobj; p++) {
-            if (p->name_strobj == name)
-                *pp++ = p;
-        }
-        *pp = NULL;
+    pp = ptrs;
+    for (p = slotdefs; p->name_strobj; p++) {
+        if (p->name_strobj == name)
+            *pp++ = p;
     }
+    *pp = NULL;
 
     /* Look in all slots of the type matching the name. If exactly one of these
        has a filled-in slot, return a pointer to that slot.
@@ -7664,10 +7860,13 @@ update_all_slots(PyTypeObject* type)
     PyType_Modified(type);
 
     assert(slotdefs_initialized);
+
+    _PyMutex_lock(&_PyRuntime.mutex);
     for (p = slotdefs; p->name; p++) {
         /* update_slot returns int but can't actually fail */
         update_slot(type, p->name_strobj);
     }
+    _PyMutex_unlock(&_PyRuntime.mutex);
 }
 
 /* Call __set_name__ on all descriptors in a newly generated type */
@@ -7753,6 +7952,8 @@ static int
 recurse_down_subclasses(PyTypeObject *type, PyObject *name,
                         update_callback callback, void *data)
 {
+    assert(_PyMutex_is_locked(&_PyRuntime.mutex));
+
     PyTypeObject *subclass;
     PyObject *ref, *subclasses, *dict;
     Py_ssize_t i;
@@ -8075,6 +8276,9 @@ super_descr_get(PyObject *self, PyObject *obj, PyObject *type)
     }
 }
 
+int
+vm_super_init(PyObject **obj, PyTypeObject **type);
+
 static int
 super_init_without_args(PyFrameObject *f, PyCodeObject *co,
                         PyTypeObject **type_p, PyObject **obj_p)
@@ -8166,26 +8370,11 @@ super_init(PyObject *self, PyObject *args, PyObject *kwds)
         return -1;
 
     if (type == NULL) {
-        /* Call super(), without args -- fill in from __class__
-           and first local variable on the stack. */
-        PyThreadState *tstate = _PyThreadState_GET();
-        PyFrameObject *frame = PyThreadState_GetFrame(tstate);
-        if (frame == NULL) {
-            PyErr_SetString(PyExc_RuntimeError,
-                            "super(): no current frame");
-            return -1;
-        }
-
-        PyCodeObject *code = PyFrame_GetCode(frame);
-        int res = super_init_without_args(frame, code, &type, &obj);
-        Py_DECREF(frame);
-        Py_DECREF(code);
-
-        if (res < 0) {
+        int err = vm_super_init(&obj, &type);
+        if (err != 0) {
             return -1;
         }
     }
-
     if (obj == Py_None)
         obj = NULL;
     if (obj != NULL) {

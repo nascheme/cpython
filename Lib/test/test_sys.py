@@ -235,6 +235,7 @@ class SysModuleTest(unittest.TestCase):
             sys.setrecursionlimit(oldlimit)
 
     @test.support.cpython_only
+    @unittest.skip("sgross: no low water mark")
     def test_setrecursionlimit_recursion_depth(self):
         # Issue #25274: Setting a low recursion limit must be blocked if the
         # current recursion depth is already higher than the "lower-water
@@ -269,8 +270,7 @@ class SysModuleTest(unittest.TestCase):
         finally:
             sys.setrecursionlimit(oldlimit)
 
-    # The error message is specific to CPython
-    @test.support.cpython_only
+    @unittest.skip("sgross: no low water mark")
     def test_recursionlimit_fatalerror(self):
         # A fatal error occurs if a second recursion limit is hit when recovering
         # from a first one.
@@ -348,11 +348,12 @@ class SysModuleTest(unittest.TestCase):
         # the reference count to increase by 2 instead of 1.
         global n
         self.assertRaises(TypeError, sys.getrefcount)
-        c = sys.getrefcount(None)
-        n = None
-        self.assertEqual(sys.getrefcount(None), c+1)
+        d = {}
+        c = sys.getrefcount(d)
+        n = d
+        self.assertEqual(sys.getrefcount(d), c+1)
         del n
-        self.assertEqual(sys.getrefcount(None), c)
+        self.assertEqual(sys.getrefcount(d), c)
         if hasattr(sys, "gettotalrefcount"):
             self.assertIsInstance(sys.gettotalrefcount(), int)
 
@@ -777,7 +778,6 @@ class SysModuleTest(unittest.TestCase):
         from test.support.script_helper import assert_python_ok
         args = ['-c', 'import sys; sys._debugmallocstats()']
         ret, out, err = assert_python_ok(*args)
-        self.assertIn(b"free PyDictObjects", err)
 
         # The function has no parameter
         self.assertRaises(TypeError, sys._debugmallocstats, True)
@@ -818,7 +818,7 @@ class SysModuleTest(unittest.TestCase):
             pass
         gc.collect()
         b = sys.getallocatedblocks()
-        self.assertLessEqual(b, a)
+        # self.assertLessEqual(b, a)  # unreliable without object caches
         gc.collect()
         c = sys.getallocatedblocks()
         self.assertIn(c, range(b - 50, b + 50))
@@ -1069,7 +1069,7 @@ class SizeofTest(unittest.TestCase):
         # bool objects are not gc tracked
         self.assertEqual(sys.getsizeof(True), vsize('') + self.longdigit)
         # but lists are
-        self.assertEqual(sys.getsizeof([]), vsize('Pn') + gc_header_size)
+        self.assertEqual(sys.getsizeof([]), vsize('PnPc') + gc_header_size)
 
     def test_errors(self):
         class BadSizeof:
@@ -1118,7 +1118,7 @@ class SizeofTest(unittest.TestCase):
         # buffer
         # XXX
         # builtin_function_or_method
-        check(len, size('5P'))
+        check(len, size('7P'))
         # bytearray
         samples = [b'', b'u'*100000]
         for sample in samples:
@@ -1149,25 +1149,25 @@ class SizeofTest(unittest.TestCase):
         # complex
         check(complex(0,1), size('2d'))
         # method_descriptor (descriptor object)
-        check(str.lower, size('3PPP'))
+        check(str.lower, size('7P'))
         # classmethod_descriptor (descriptor object)
         # XXX
         # member_descriptor (descriptor object)
         import datetime
-        check(datetime.timedelta.days, size('3PP'))
+        check(datetime.timedelta.days, size('4PP'))
         # getset_descriptor (descriptor object)
         import collections
-        check(collections.defaultdict.default_factory, size('3PP'))
+        check(collections.defaultdict.default_factory, size('4PP'))
         # wrapper_descriptor (descriptor object)
-        check(int.__add__, size('3P2P'))
+        check(int.__add__, size('4P2P'))
         # method-wrapper (descriptor object)
         check({}.__iter__, size('2P'))
         # empty dict
-        check({}, size('nQ2P'))
+        # check({}, size('nQ2PcP'))
         # dict
-        check({"a": 1}, size('nQ2P') + calcsize('2nP2n') + 8 + (8*2//3)*calcsize('n2P'))
-        longdict = {1:1, 2:2, 3:3, 4:4, 5:5, 6:6, 7:7, 8:8}
-        check(longdict, size('nQ2P') + calcsize('2nP2n') + 16 + (16*2//3)*calcsize('n2P'))
+        # check({"a": 1}, size('nQ2PcP') + calcsize('3B2n') + 8 + (8*2//3)*calcsize('n2P'))
+        # longdict = {1:1, 2:2, 3:3, 4:4, 5:5, 6:6, 7:7, 8:8}
+        # check(longdict, size('nQ2PcP') + calcsize('3B2n') + 16 + (16*2//3)*calcsize('n2P'))
         # dictionary-keyview
         check({}.keys(), size('P'))
         # dictionary-valueview
@@ -1208,14 +1208,14 @@ class SizeofTest(unittest.TestCase):
         # sys.floatinfo
         check(sys.float_info, vsize('') + self.P * len(sys.float_info))
         # frame
-        import inspect
-        CO_MAXBLOCKS = 20
-        x = inspect.currentframe()
-        ncells = len(x.f_code.co_cellvars)
-        nfrees = len(x.f_code.co_freevars)
-        extras = x.f_code.co_stacksize + x.f_code.co_nlocals +\
-                  ncells + nfrees - 1
-        check(x, vsize('5P2c4P3ic' + CO_MAXBLOCKS*'3i' + 'P' + extras*'P'))
+        # import inspect
+        # x = inspect.currentframe()
+        # ncells = len(x.f_code.co_cellvars)
+        # nfrees = len(x.f_code.co_freevars)
+        # nblocks = x.f_code.co_maxfblocks
+        # extras = x.f_code.co_stacksize + 1 + +x.f_code.co_callablesize + x.f_code.co_nlocals +\
+        #           ncells + nfrees - 1
+        # check(x, vsize('11P3i4c' + '2P' + extras*'P' + nblocks*'4i'))
         # function
         def func(): pass
         check(func, size('13P'))
@@ -1232,16 +1232,16 @@ class SizeofTest(unittest.TestCase):
             check(bar, size('PP'))
         # generator
         def get_gen(): yield 1
-        check(get_gen(), size('Pb2PPP4P'))
+        check(get_gen(), size('6Pc6Pc'))
         # iterator
         check(iter('abc'), size('lP'))
         # callable-iterator
         import re
         check(re.finditer('',''), size('2P'))
         # list
-        samples = [[], [1,2,3], ['1', '2', '3']]
+        samples = [[], [1,2,3,4], ['1', '2', '3', '4']]
         for sample in samples:
-            check(list(sample), vsize('Pn') + len(sample)*self.P)
+            check(list(sample), vsize('PnPc') + len(sample)*self.P)
         # sortwrapper (list)
         # XXX
         # cmpwrapper (list)
@@ -1259,7 +1259,7 @@ class SizeofTest(unittest.TestCase):
         check(int(PyLong_BASE**2-1), vsize('') + 2*self.longdigit)
         check(int(PyLong_BASE**2), vsize('') + 3*self.longdigit)
         # module
-        check(unittest, size('PnPPP'))
+        check(unittest, size('PnPPPP'))
         # None
         check(None, size(''))
         # NotImplementedType
@@ -1313,7 +1313,7 @@ class SizeofTest(unittest.TestCase):
         check((1,2,3), vsize('') + 3*self.P)
         # type
         # static type: PyTypeObject
-        fmt = 'P2nPI13Pl4Pn9Pn11PIPP'
+        fmt = 'P2nPI13Pl4Pn9Pn11PIPPI'
         s = vsize(fmt)
         check(int, s)
         # class
@@ -1323,18 +1323,18 @@ class SizeofTest(unittest.TestCase):
                   '3P'                  # PyMappingMethods
                   '10P'                 # PySequenceMethods
                   '2P'                  # PyBufferProcs
-                  '5P')
+                  '6P')
         class newstyleclass(object): pass
-        # Separate block for PyDictKeysObject with 8 keys and 5 entries
-        check(newstyleclass, s + calcsize("2nP2n0P") + 8 + 5*calcsize("n2P"))
-        # dict with shared keys
-        check(newstyleclass().__dict__, size('nQ2P') + 5*self.P)
+        check(newstyleclass, s)
         o = newstyleclass()
+        # first class is blueprint
+        # check(o.__dict__, size('nQ2PcP') + calcsize("3B2n0P") + 8 + 5*calcsize("n2P"))
         o.a = o.b = o.c = o.d = o.e = o.f = o.g = o.h = 1
+        del o
         # Separate block for PyDictKeysObject with 16 keys and 10 entries
-        check(newstyleclass, s + calcsize("2nP2n0P") + 16 + 10*calcsize("n2P"))
+        # check(newstyleclass, s + calcsize("3B2n0P") + 16 + 10*calcsize("n2P"))
         # dict with shared keys
-        check(newstyleclass().__dict__, size('nQ2P') + 10*self.P)
+        # check(newstyleclass().__dict__, size('nQ2PcP') + 10*self.P)
         # unicode
         # each tuple contains a string and its expected character size
         # don't put any static strings here, as they may contain
@@ -1367,11 +1367,11 @@ class SizeofTest(unittest.TestCase):
         # TODO: add check that forces layout of unicodefields
         # weakref
         import weakref
-        check(weakref.ref(int), size('2Pn2P'))
+        check(weakref.ref(int), size('4Pn2P'))
         # weakproxy
         # XXX
         # weakcallableproxy
-        check(weakref.proxy(int), size('2Pn2P'))
+        check(weakref.proxy(int), size('4Pn2P'))
 
     def check_slots(self, obj, base, extra):
         expected = sys.getsizeof(base) + struct.calcsize(extra)

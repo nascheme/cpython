@@ -27,11 +27,14 @@ PyAPI_FUNC(PyCodeObject *) PyNode_Compile(struct _node *, const char *);
 #define PyCF_SOURCE_IS_UTF8  0x0100
 #define PyCF_DONT_IMPLY_DEDENT 0x0200
 #define PyCF_ONLY_AST 0x0400
+#define PyCF_OPTIMIZE_AST 0x4000
 #define PyCF_IGNORE_COOKIE 0x0800
 #define PyCF_TYPE_COMMENTS 0x1000
 #define PyCF_ALLOW_TOP_LEVEL_AWAIT 0x2000
+#define PyCF_NEW_BYTECODE 0x8000
 #define PyCF_COMPILE_MASK (PyCF_ONLY_AST | PyCF_ALLOW_TOP_LEVEL_AWAIT | \
-                           PyCF_TYPE_COMMENTS | PyCF_DONT_IMPLY_DEDENT)
+                           PyCF_TYPE_COMMENTS | PyCF_DONT_IMPLY_DEDENT | \
+                           PyCF_NEW_BYTECODE)
 
 #ifndef Py_LIMITED_API
 typedef struct {
@@ -75,6 +78,12 @@ PyAPI_FUNC(PyCodeObject *) PyAST_CompileObject(
     PyCompilerFlags *flags,
     int optimize,
     PyArena *arena);
+PyAPI_FUNC(PyObject *) PyAST_CompileObject2(
+    struct _mod *mod,
+    PyObject *filename,
+    PyCompilerFlags *flags,
+    int optimize,
+    PyArena *arena);
 PyAPI_FUNC(PyFutureFeatures *) PyFuture_FromAST(
     struct _mod * mod,
     const char *filename        /* decoded from the filesystem encoding */
@@ -90,6 +99,9 @@ PyAPI_FUNC(PyObject*) _Py_Mangle(PyObject *p, PyObject *name);
 #define PY_INVALID_STACK_EFFECT INT_MAX
 PyAPI_FUNC(int) PyCompile_OpcodeStackEffect(int opcode, int oparg);
 PyAPI_FUNC(int) PyCompile_OpcodeStackEffectWithJump(int opcode, int oparg, int jump);
+PyAPI_FUNC(int) PyCompile_CallableStackSize(PyObject *code);
+PyAPI_FUNC(int) PyCompile_BlockDepth(PyObject *code);
+
 
 typedef struct {
     int optimize;

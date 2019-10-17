@@ -1,5 +1,6 @@
 import unittest
 import weakref
+import gc
 
 from test.support import check_syntax_error, cpython_only
 from test.support import gc_collect

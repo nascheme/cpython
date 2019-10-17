@@ -30,7 +30,7 @@ null_error(PyThreadState *tstate)
 
 
 PyObject*
-_Py_CheckFunctionResult(PyThreadState *tstate, PyObject *callable,
+_Py_CheckFunctionResultImpl(PyThreadState *tstate, PyObject *callable,
                         PyObject *result, const char *where)
 {
     assert((callable != NULL) ^ (where != NULL));
@@ -330,8 +330,8 @@ function_code_fastcall(PyThreadState *tstate, PyCodeObject *co,
     PyObject *result = _PyEval_EvalFrame(tstate, f, 0);
 
     if (Py_REFCNT(f) > 1) {
-        Py_DECREF(f);
         _PyObject_GC_TRACK(f);
+        Py_DECREF(f);
     }
     else {
         ++tstate->recursion_depth;

@@ -15,6 +15,9 @@
 #include "errcode.h"
 #include "marshal.h"
 #include "code.h"
+#include "code2.h"
+#include "frameobject.h"
+#include "osdefs.h"
 #include "importdl.h"
 #include "pydtrace.h"
 
@@ -148,51 +151,31 @@ _PyImportZip_Init(PyThreadState *tstate)
    in different threads to return with a partially loaded module.
    These calls are serialized by the global interpreter lock. */
 
-static PyThread_type_lock import_lock = 0;
-static unsigned long import_lock_thread = PYTHREAD_INVALID_THREAD_ID;
-static int import_lock_level = 0;
+#include "pythread.h"
+
+_PyRecursiveMutex import_lock;
 
 void
 _PyImport_AcquireLock(void)
 {
-    unsigned long me = PyThread_get_thread_ident();
-    if (me == PYTHREAD_INVALID_THREAD_ID)
-        return; /* Too bad */
-    if (import_lock == NULL) {
-        import_lock = PyThread_allocate_lock();
-        if (import_lock == NULL)
-            return;  /* Nothing much we can do. */
-    }
-    if (import_lock_thread == me) {
-        import_lock_level++;
-        return;
-    }
-    if (import_lock_thread != PYTHREAD_INVALID_THREAD_ID ||
-        !PyThread_acquire_lock(import_lock, 0))
-    {
-        PyThreadState *tstate = PyEval_SaveThread();
-        PyThread_acquire_lock(import_lock, 1);
-        PyEval_RestoreThread(tstate);
-    }
-    assert(import_lock_level == 0);
-    import_lock_thread = me;
-    import_lock_level = 1;
+    _PyRecursiveMutex_lock(&import_lock);
+}
+
+static inline int
+_PyImport_HoldsLock(void)
+{
+    uintptr_t v = _Py_atomic_load_uintptr(&import_lock.v);
+    return (v & ~3) == _Py_ThreadId();
 }
 
 int
 _PyImport_ReleaseLock(void)
 {
-    unsigned long me = PyThread_get_thread_ident();
-    if (me == PYTHREAD_INVALID_THREAD_ID || import_lock == NULL)
-        return 0; /* Too bad */
-    if (import_lock_thread != me)
+    if (!_PyImport_HoldsLock()) {
+        /* Awkward... but test_imp.py checks for this case. */
         return -1;
-    import_lock_level--;
-    assert(import_lock_level >= 0);
-    if (import_lock_level == 0) {
-        import_lock_thread = PYTHREAD_INVALID_THREAD_ID;
-        PyThread_release_lock(import_lock);
     }
+    _PyRecursiveMutex_unlock(&import_lock);
     return 1;
 }
 
@@ -205,25 +188,15 @@ _PyImport_ReleaseLock(void)
 void
 _PyImport_ReInitLock(void)
 {
-    if (import_lock != NULL) {
-        if (_PyThread_at_fork_reinit(&import_lock) < 0) {
-            _Py_FatalErrorFunc(__func__, "failed to create a new lock");
-        }
+    if (!_PyImport_HoldsLock()) {
+        /* We acquire the import lock before forking, so we should stil be
+         * holding it after the fork. */
+        Py_FatalError("forked thread does not hold import lock");
     }
-    if (import_lock_level > 1) {
-        /* Forked as a side effect of import */
-        unsigned long me = PyThread_get_thread_ident();
-        /* The following could fail if the lock is already held, but forking as
-           a side-effect of an import is a) rare, b) nuts, and c) difficult to
-           do thanks to the lock only being held when doing individual module
-           locks per import. */
-        PyThread_acquire_lock(import_lock, NOWAIT_LOCK);
-        import_lock_thread = me;
-        import_lock_level--;
-    } else {
-        import_lock_thread = PYTHREAD_INVALID_THREAD_ID;
-        import_lock_level = 0;
-    }
+
+    /* This requires that _PyParkingLot_AfterFork() be called before hand.
+     * Otherwise we may try to wake up a dead thread. */
+    _PyRecursiveMutex_unlock(&import_lock);
 }
 #endif
 
@@ -239,7 +212,7 @@ static PyObject *
 _imp_lock_held_impl(PyObject *module)
 /*[clinic end generated code: output=8b89384b5e1963fc input=9b088f9b217d9bdf]*/
 {
-    return PyBool_FromLong(import_lock_thread != PYTHREAD_INVALID_THREAD_ID);
+    return PyBool_FromLong(_PyImport_HoldsLock());
 }
 
 /*[clinic input]
@@ -279,14 +252,30 @@ _imp_release_lock_impl(PyObject *module)
     Py_RETURN_NONE;
 }
 
+/*[clinic input]
+_imp.module_initialized
+
+    mod: object
+    \
+
+Marks the module as initialized.
+[clinic start generated code]*/
+
+static PyObject *
+_imp_module_initialized_impl(PyObject *module, PyObject *mod)
+/*[clinic end generated code: output=3956de30318e242e input=b15d8395732144b2]*/
+{
+    if (PyModule_Check(mod)) {
+        _PyModule_SetInitialized(mod, 1);
+    }
+    Py_RETURN_NONE;
+}
+
 void
 _PyImport_Fini(void)
 {
     Py_CLEAR(extensions);
-    if (import_lock != NULL) {
-        PyThread_free_lock(import_lock);
-        import_lock = NULL;
-    }
+    memset(&import_lock, 0, sizeof(import_lock));
 }
 
 void
@@ -369,8 +358,7 @@ import_get_module(PyThreadState *tstate, PyObject *name)
     PyObject *m;
     Py_INCREF(modules);
     if (PyDict_CheckExact(modules)) {
-        m = PyDict_GetItemWithError(modules, name);  /* borrowed */
-        Py_XINCREF(m);
+        m = PyDict_GetItemWithError2(modules, name);
     }
     else {
         m = PyObject_GetItem(modules, name);
@@ -387,7 +375,6 @@ static int
 import_ensure_initialized(PyThreadState *tstate, PyObject *mod, PyObject *name)
 {
     PyInterpreterState *interp = tstate->interp;
-    PyObject *spec;
 
     _Py_IDENTIFIER(_lock_unlock_module);
 
@@ -396,10 +383,7 @@ import_ensure_initialized(PyThreadState *tstate, PyObject *mod, PyObject *name)
        NOTE: because of this, initializing must be set *before*
        stuffing the new module in sys.modules.
     */
-    spec = _PyObject_GetAttrId(mod, &PyId___spec__);
-    int busy = _PyModuleSpec_IsInitializing(spec);
-    Py_XDECREF(spec);
-    if (busy) {
+    if (!PyModule_Check(mod) || !_PyModule_IsInitialized(mod)) {
         /* Wait until module is done importing. */
         PyObject *value = _PyObject_CallMethodIdOneArg(
             interp->importlib, &PyId__lock_unlock_module, name);
@@ -1043,6 +1027,7 @@ exec_code_in_module(PyThreadState *tstate, PyObject *name,
 {
     PyObject *v, *m;
 
+    assert(PyCode_Check(code_object) || PyCode2_Check(code_object));
     v = PyEval_EvalCode(code_object, module_dict, module_dict);
     if (v == NULL) {
         remove_module(tstate, name);
@@ -1128,10 +1113,48 @@ update_compiled_module(PyCodeObject *co, PyObject *newname)
     Py_DECREF(oldname);
 }
 
+static void
+update_code_filenames2(PyCodeObject2 *co, PyObject *oldname, PyObject *newname)
+{
+    PyObject *tmp;
+    Py_ssize_t i, n;
+
+    if (PyUnicode_Compare(co->co_filename, oldname))
+        return;
+
+    Py_INCREF(newname);
+    Py_XSETREF(co->co_filename, newname);
+
+    n = co->co_nconsts;
+    for (i = 0; i < n; i++) {
+        tmp = co->co_constants[i];
+        if (PyCode2_Check(tmp))
+            update_code_filenames2((PyCodeObject2 *)tmp,
+                                  oldname, newname);
+    }
+}
+
+static void
+update_compiled_module2(PyCodeObject2 *co, PyObject *newname)
+{
+    PyObject *oldname;
+
+    if (PyUnicode_Compare(co->co_filename, newname) == 0)
+        return;
+
+    oldname = co->co_filename;
+    Py_INCREF(oldname);
+    update_code_filenames2(co, oldname, newname);
+    Py_DECREF(oldname);
+}
+
+
+// code: object(type="PyCodeObject *", subclass_of="&PyCode_Type")
+
 /*[clinic input]
 _imp._fix_co_filename
 
-    code: object(type="PyCodeObject *", subclass_of="&PyCode_Type")
+    code: object
         Code object to change.
 
     path: unicode
@@ -1142,12 +1165,19 @@ Changes code.co_filename to specify the passed-in file path.
 [clinic start generated code]*/
 
 static PyObject *
-_imp__fix_co_filename_impl(PyObject *module, PyCodeObject *code,
-                           PyObject *path)
-/*[clinic end generated code: output=1d002f100235587d input=895ba50e78b82f05]*/
+_imp__fix_co_filename_impl(PyObject *module, PyObject *code, PyObject *path)
+/*[clinic end generated code: output=d8691c9e15438f30 input=1ef0775f5d60eea6]*/
 
 {
-    update_compiled_module(code, path);
+    if (PyCode_Check(code)) {
+        update_compiled_module((PyCodeObject *)code, path);
+    }
+    else if (PyCode2_Check(code)) {
+        update_compiled_module2((PyCodeObject2 *)code, path);
+    }
+    else {
+        PyErr_SetString(PyExc_TypeError, "not a code object");
+    }
 
     Py_RETURN_NONE;
 }
@@ -1422,7 +1452,7 @@ PyImport_ImportFrozenModuleObject(PyObject *name)
     co = PyMarshal_ReadObjectFromString((const char *)p->code, size);
     if (co == NULL)
         return -1;
-    if (!PyCode_Check(co)) {
+    if (!PyCode_Check(co) && !PyCode2_Check(co)) {
         _PyErr_Format(tstate, PyExc_TypeError,
                       "frozen object %R is not a code object",
                       name);
@@ -1542,12 +1572,13 @@ remove_importlib_frames(PyThreadState *tstate)
         PyTracebackObject *traceback = (PyTracebackObject *)tb;
         PyObject *next = (PyObject *) traceback->tb_next;
         PyFrameObject *frame = traceback->tb_frame;
-        PyCodeObject *code = PyFrame_GetCode(frame);
+        PyObject *filename = frame->f_code ? frame->f_code->co_filename : frame->f_code2->co_filename;
+        PyObject *name = frame->f_code ? frame->f_code->co_name : frame->f_code2->co_name;
         int now_in_importlib;
 
         assert(PyTraceBack_Check(tb));
-        now_in_importlib = _PyUnicode_EqualToASCIIString(code->co_filename, importlib_filename) ||
-                           _PyUnicode_EqualToASCIIString(code->co_filename, external_filename);
+        now_in_importlib = _PyUnicode_EqualToASCIIString(filename, importlib_filename) ||
+                           _PyUnicode_EqualToASCIIString(filename, external_filename);
         if (now_in_importlib && !in_importlib) {
             /* This is the link to this chunk of importlib tracebacks */
             outer_link = prev_link;
@@ -1556,7 +1587,7 @@ remove_importlib_frames(PyThreadState *tstate)
 
         if (in_importlib &&
             (always_trim ||
-             _PyUnicode_EqualToASCIIString(code->co_name, remove_frames))) {
+             _PyUnicode_EqualToASCIIString(name, remove_frames))) {
             Py_XINCREF(next);
             Py_XSETREF(*outer_link, next);
             prev_link = outer_link;
@@ -2389,6 +2420,7 @@ static PyMethodDef imp_methods[] = {
     _IMP_EXEC_BUILTIN_METHODDEF
     _IMP__FIX_CO_FILENAME_METHODDEF
     _IMP_SOURCE_HASH_METHODDEF
+    _IMP_MODULE_INITIALIZED_METHODDEF
     {NULL, NULL}  /* sentinel */
 };
 

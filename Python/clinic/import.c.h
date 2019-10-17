@@ -63,6 +63,38 @@ _imp_release_lock(PyObject *module, PyObject *Py_UNUSED(ignored))
     return _imp_release_lock_impl(module);
 }
 
+PyDoc_STRVAR(_imp_module_initialized__doc__,
+"module_initialized($module, /, mod)\n"
+"--\n"
+"\n"
+"Marks the module as initialized.");
+
+#define _IMP_MODULE_INITIALIZED_METHODDEF    \
+    {"module_initialized", (PyCFunction)(void(*)(void))_imp_module_initialized, METH_FASTCALL|METH_KEYWORDS, _imp_module_initialized__doc__},
+
+static PyObject *
+_imp_module_initialized_impl(PyObject *module, PyObject *mod);
+
+static PyObject *
+_imp_module_initialized(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
+{
+    PyObject *return_value = NULL;
+    static const char * const _keywords[] = {"mod", NULL};
+    static _PyArg_Parser _parser = {NULL, _keywords, "module_initialized", 0};
+    PyObject *argsbuf[1];
+    PyObject *mod;
+
+    args = _PyArg_UnpackKeywords(args, nargs, NULL, kwnames, &_parser, 1, 1, 0, argsbuf);
+    if (!args) {
+        goto exit;
+    }
+    mod = args[0];
+    return_value = _imp_module_initialized_impl(module, mod);
+
+exit:
+    return return_value;
+}
+
 PyDoc_STRVAR(_imp__fix_co_filename__doc__,
 "_fix_co_filename($module, code, path, /)\n"
 "--\n"
@@ -78,24 +110,19 @@ PyDoc_STRVAR(_imp__fix_co_filename__doc__,
     {"_fix_co_filename", (PyCFunction)(void(*)(void))_imp__fix_co_filename, METH_FASTCALL, _imp__fix_co_filename__doc__},
 
 static PyObject *
-_imp__fix_co_filename_impl(PyObject *module, PyCodeObject *code,
-                           PyObject *path);
+_imp__fix_co_filename_impl(PyObject *module, PyObject *code, PyObject *path);
 
 static PyObject *
 _imp__fix_co_filename(PyObject *module, PyObject *const *args, Py_ssize_t nargs)
 {
     PyObject *return_value = NULL;
-    PyCodeObject *code;
+    PyObject *code;
     PyObject *path;
 
     if (!_PyArg_CheckPositional("_fix_co_filename", nargs, 2, 2)) {
         goto exit;
     }
-    if (!PyObject_TypeCheck(args[0], &PyCode_Type)) {
-        _PyArg_BadArgument("_fix_co_filename", "argument 1", (&PyCode_Type)->tp_name, args[0]);
-        goto exit;
-    }
-    code = (PyCodeObject *)args[0];
+    code = args[0];
     if (!PyUnicode_Check(args[1])) {
         _PyArg_BadArgument("_fix_co_filename", "argument 2", "str", args[1]);
         goto exit;
@@ -454,4 +481,4 @@ exit:
 #ifndef _IMP_EXEC_DYNAMIC_METHODDEF
     #define _IMP_EXEC_DYNAMIC_METHODDEF
 #endif /* !defined(_IMP_EXEC_DYNAMIC_METHODDEF) */
-/*[clinic end generated code: output=3dc495e9c64d944e input=a9049054013a1b77]*/
+/*[clinic end generated code: output=c582c992daa3bedb input=a9049054013a1b77]*/

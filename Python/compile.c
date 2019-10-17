@@ -23,12 +23,15 @@
 
 #include "Python.h"
 
+#include "pycore_pystate.h"   /* _PyInterpreterState_GET_UNSAFE() */
+#include "pycore_code.h"
 #include "Python-ast.h"
 #include "ast.h"
 #include "code.h"
 #include "symtable.h"
 #include "opcode.h"
 #include "wordcode_helpers.h"
+#include "code2.h"
 
 #define DEFAULT_BLOCK_SIZE 16
 #define DEFAULT_BLOCKS 8
@@ -318,61 +321,17 @@ PyCodeObject *
 PyAST_CompileObject(mod_ty mod, PyObject *filename, PyCompilerFlags *flags,
                    int optimize, PyArena *arena)
 {
-    struct compiler c;
-    PyCodeObject *co = NULL;
     PyCompilerFlags local_flags = _PyCompilerFlags_INIT;
     int merged;
+    PyConfig *config = &_PyInterpreterState_GET_UNSAFE()->config;
+    if (optimize == -1) {
+        optimize = config->optimization_level;
+    }
 
-    if (!__doc__) {
-        __doc__ = PyUnicode_InternFromString("__doc__");
-        if (!__doc__)
-            return NULL;
-    }
-    if (!__annotations__) {
-        __annotations__ = PyUnicode_InternFromString("__annotations__");
-        if (!__annotations__)
-            return NULL;
-    }
-    if (!compiler_init(&c))
+    if (!_PyAST_Optimize(mod, arena, optimize)) {
         return NULL;
-    Py_INCREF(filename);
-    c.c_filename = filename;
-    c.c_arena = arena;
-    c.c_future = PyFuture_FromASTObject(mod, filename);
-    if (c.c_future == NULL)
-        goto finally;
-    if (!flags) {
-        flags = &local_flags;
     }
-    merged = c.c_future->ff_features | flags->cf_flags;
-    c.c_future->ff_features = merged;
-    flags->cf_flags = merged;
-    c.c_flags = flags;
-    c.c_optimize = (optimize == -1) ? _Py_GetConfig()->optimization_level : optimize;
-    c.c_nestlevel = 0;
-    c.c_do_not_emit_bytecode = 0;
-
-    _PyASTOptimizeState state;
-    state.optimize = c.c_optimize;
-    state.ff_features = merged;
-
-    if (!_PyAST_Optimize(mod, arena, &state)) {
-        goto finally;
-    }
-
-    c.c_st = PySymtable_BuildObject(mod, filename, c.c_future);
-    if (c.c_st == NULL) {
-        if (!PyErr_Occurred())
-            PyErr_SetString(PyExc_SystemError, "no symtable");
-        goto finally;
-    }
-
-    co = compiler_mod(&c, mod);
-
- finally:
-    compiler_free(&c);
-    assert(co || PyErr_Occurred());
-    return co;
+    return (PyCodeObject *)PyAST_CompileObject2(mod, filename, flags, optimize, arena);
 }
 
 PyCodeObject *
@@ -708,6 +667,7 @@ compiler_set_qualname(struct compiler *c)
             if (!mangled)
                 return 0;
             scope = PyST_GetScope(parent->u_ste, mangled);
+
             Py_DECREF(mangled);
             assert(scope != GLOBAL_IMPLICIT);
             if (scope == GLOBAL_EXPLICIT)
@@ -888,6 +848,12 @@ stack_effect(int opcode, int oparg, int jump)
         case DUP_TOP_TWO:
             return 2;
 
+        case DEFER_REFCOUNT:
+            return -1;
+        case LOAD_GLOBAL_FOR_CALL:
+        case LOAD_FAST_FOR_CALL:
+            return 0;
+
         /* Unary operators */
         case UNARY_POSITIVE:
         case UNARY_NEGATIVE:
@@ -1055,13 +1021,13 @@ stack_effect(int opcode, int oparg, int jump)
 
         /* Functions and calls */
         case CALL_FUNCTION:
-            return -oparg;
+            return -oparg + 1;
         case CALL_METHOD:
-            return -oparg-1;
+            return -oparg;
         case CALL_FUNCTION_KW:
-            return -oparg-1;
+            return -oparg;
         case CALL_FUNCTION_EX:
-            return -1 - ((oparg & 0x01) != 0);
+            return -((oparg & 0x01) != 0);
         case MAKE_FUNCTION:
             return -1 - ((oparg & 0x01) != 0) - ((oparg & 0x02) != 0) -
                 ((oparg & 0x04) != 0) - ((oparg & 0x08) != 0);
@@ -1106,7 +1072,7 @@ stack_effect(int opcode, int oparg, int jump)
                else 1->1. */
             return (oparg & FVS_MASK) == FVS_HAVE_SPEC ? -1 : 0;
         case LOAD_METHOD:
-            return 1;
+            return 0;
         case LOAD_ASSERTION_ERROR:
             return 1;
         case LIST_TO_TUPLE:
@@ -1132,6 +1098,150 @@ int
 PyCompile_OpcodeStackEffect(int opcode, int oparg)
 {
     return stack_effect(opcode, oparg, -1);
+}
+
+int
+PyCompile_CallableStackSize(PyObject *bytecode)
+{
+    assert(PyBytes_Check(bytecode));
+    Py_ssize_t size = Py_SIZE(bytecode) / sizeof(_Py_CODEUNIT);
+    _Py_CODEUNIT *code = (_Py_CODEUNIT *)PyBytes_AS_STRING(bytecode);
+
+    static int8_t fn_stack_effect[256];
+
+    // initialize table of callable stack effects
+    static _PyOnceFlag once;
+    if (_PyBeginOnce(&once)) {
+        fn_stack_effect[DEFER_REFCOUNT] = 1;
+        fn_stack_effect[LOAD_FAST_FOR_CALL] = 1;
+        fn_stack_effect[LOAD_GLOBAL_FOR_CALL] = 1;
+        fn_stack_effect[LOAD_METHOD] = 1;
+        fn_stack_effect[CALL_METHOD] = -1;
+        fn_stack_effect[CALL_FUNCTION] = -1;
+        fn_stack_effect[CALL_FUNCTION_KW] = -1;
+        fn_stack_effect[CALL_FUNCTION_EX] = -1;
+        _PyEndOnce(&once);
+    }
+
+    // The callable stack effect is easier to compute than the normal stack
+    // effect. The relevant instructions are only generated from function
+    // call experssions. We don't even need to take into account jumps because
+    // expressions can't contain statements in Python.
+    int curdepth = 0;
+    int maxdepth = 0;
+    for (Py_ssize_t i = 0; i < size; i++) {
+        int opcode = _Py_OPCODE(code[i]);
+        curdepth += fn_stack_effect[opcode];
+        if (curdepth > maxdepth) {
+            maxdepth = curdepth;
+        }
+    }
+
+    return maxdepth;
+}
+
+struct BlockEffect {
+    signed block_stack : 2;
+    unsigned jabs : 1;
+    unsigned jrel : 1;
+    unsigned uncond_jmp : 1;
+};
+
+int
+PyCompile_BlockDepth(PyObject *bytecode)
+{
+    assert(PyBytes_Check(bytecode));
+    Py_ssize_t size = Py_SIZE(bytecode) / sizeof(_Py_CODEUNIT);
+    _Py_CODEUNIT *code = (_Py_CODEUNIT *)PyBytes_AS_STRING(bytecode);
+
+    static struct BlockEffect block_effect[256];
+
+    // initialize table of callable stack effects
+    static _PyOnceFlag once;
+    if (_PyBeginOnce(&once)) {
+        // These opcodes push onto the block stack
+        block_effect[SETUP_FINALLY].block_stack = 1;
+        block_effect[SETUP_ASYNC_WITH].block_stack = 1;
+        block_effect[SETUP_WITH].block_stack = 1;
+
+        // These opcodes pop from the block stack
+        block_effect[POP_EXCEPT].block_stack = -1;
+        block_effect[POP_BLOCK].block_stack = -1;
+        block_effect[END_ASYNC_FOR].block_stack = -1;
+
+        // These opcodes may jump to an absolute address
+        block_effect[POP_JUMP_IF_FALSE].jabs = 1;
+        block_effect[POP_JUMP_IF_TRUE].jabs = 1;
+        block_effect[JUMP_IF_FALSE_OR_POP].jabs = 1;
+        block_effect[JUMP_IF_TRUE_OR_POP].jabs = 1;
+        block_effect[JUMP_ABSOLUTE].jabs = 1;
+        block_effect[JUMP_IF_NOT_EXC_MATCH].jabs = 1;
+
+        // These opcodes may jump to a relative address
+        block_effect[JUMP_FORWARD].jrel = 1;
+        block_effect[FOR_ITER].jrel = 1;
+        block_effect[SETUP_FINALLY].jrel = 1;
+        block_effect[SETUP_ASYNC_WITH].jrel = 1;
+        block_effect[SETUP_WITH].jrel = 1;
+
+        // These opcodes unconditionally jump or return; i.e.
+        // the subsequent opcode is not directly reached from here.
+        block_effect[JUMP_ABSOLUTE].uncond_jmp = 1;
+        block_effect[JUMP_FORWARD].uncond_jmp = 1;
+        block_effect[RETURN_VALUE].uncond_jmp = 1;
+        block_effect[RAISE_VARARGS].uncond_jmp = 1;
+        block_effect[RERAISE].uncond_jmp = 1;
+
+        _PyEndOnce(&once);
+    }
+
+    int *entry_depth = (int *)PyMem_RawMalloc(size * sizeof(int));
+    if (!entry_depth) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    memset(entry_depth, 0, size * sizeof(int));
+
+    int curdepth = 0;
+    int maxdepth = 0;
+    for (Py_ssize_t i = 0; i < size; i++) {
+        int opcode = _Py_OPCODE(code[i]);
+        int oparg = _Py_OPARG(code[i]);
+        while (opcode == EXTENDED_ARG) {
+            i++;
+            opcode = _Py_OPCODE(code[i]);
+            oparg = (oparg << 8) | _Py_OPARG(code[i]);
+        }
+
+        if (entry_depth[i] > curdepth) {
+            curdepth = entry_depth[i];
+        }
+
+        struct BlockEffect effect = block_effect[opcode];
+        curdepth += effect.block_stack;
+
+        // assert(curdepth >= 0);
+        if (curdepth > maxdepth) {
+            maxdepth = curdepth;
+        }
+
+        if (effect.jabs | effect.jrel) {
+            int target = oparg / sizeof(_Py_CODEUNIT);
+            if (effect.jrel) {
+                // relative jumps are relative to next instruction
+                target += i + 1;
+            }
+            if (curdepth > entry_depth[target]) {
+                entry_depth[target] = curdepth;
+            }
+        }
+        if (effect.uncond_jmp) {
+            curdepth = 0;
+        }
+    }
+
+    PyMem_RawFree(entry_depth);
+    return maxdepth;
 }
 
 /* Add an opcode with no argument.
@@ -1646,6 +1756,7 @@ compiler_pop_fblock(struct compiler *c, enum fblocktype t, basicblock *b)
 
 static int
 compiler_call_exit_with_nones(struct compiler *c) {
+    ADDOP(c, DEFER_REFCOUNT);
     ADDOP_O(c, LOAD_CONST, Py_None, consts);
     ADDOP(c, DUP_TOP);
     ADDOP(c, DUP_TOP);
@@ -1954,6 +2065,7 @@ compiler_decorators(struct compiler *c, asdl_seq* decos)
 
     for (i = 0; i < asdl_seq_LEN(decos); i++) {
         VISIT(c, expr, (expr_ty)asdl_seq_GET(decos, i));
+        ADDOP(c, DEFER_REFCOUNT);
     }
     return 1;
 }
@@ -2409,6 +2521,7 @@ compiler_class(struct compiler *c, stmt_ty s)
 
     /* 2. load the 'build_class' function */
     ADDOP(c, LOAD_BUILD_CLASS);
+    ADDOP(c, DEFER_REFCOUNT); // FIXME: make load_build_class defer rc
 
     /* 3. load a function (or closure) made from the code object */
     compiler_make_closure(c, co, 0, NULL);
@@ -3353,6 +3466,7 @@ compiler_assert(struct compiler *c, stmt_ty s)
         return 0;
     ADDOP(c, LOAD_ASSERTION_ERROR);
     if (s->v.Assert.msg) {
+        ADDOP(c, DEFER_REFCOUNT); // PyExc_AssertionError is immortal, but whatever
         VISIT(c, expr, s->v.Assert.msg);
         ADDOP_I(c, CALL_FUNCTION, 1);
     }
@@ -3646,7 +3760,8 @@ compiler_nameop(struct compiler *c, identifier name, expr_context_ty ctx)
     Py_DECREF(mangled);
     if (arg < 0)
         return 0;
-    return compiler_addop_i(c, op, arg);
+    ADDOP_I(c, op, arg);
+    return 1;
 }
 
 static int
@@ -4146,7 +4261,8 @@ validate_keywords(struct compiler *c, asdl_seq *keywords)
 static int
 compiler_call(struct compiler *c, expr_ty e)
 {
-    int ret = maybe_optimize_method_call(c, e);
+    int ret;
+    ret = maybe_optimize_method_call(c, e);
     if (ret >= 0) {
         return ret;
     }
@@ -4675,6 +4791,8 @@ compiler_comprehension(struct compiler *c, expr_ty e, int type,
 
     if (!compiler_make_closure(c, co, 0, qualname))
         goto error;
+
+    ADDOP(c, DEFER_REFCOUNT);
     Py_DECREF(qualname);
     Py_DECREF(co);
 
@@ -5913,7 +6031,8 @@ makecode(struct compiler *c, struct assembler *a)
     Py_ssize_t nlocals;
     int nlocals_int;
     int flags;
-    int posorkeywordargcount, posonlyargcount, kwonlyargcount, maxdepth;
+    int posorkeywordargcount, posonlyargcount, kwonlyargcount;
+    int maxdepth, maxfndepth, maxfblocks;
 
     consts = consts_dict_keys_inorder(c->u->u_consts);
     names = dict_keys_inorder(c->u->u_names, 0);
@@ -5964,11 +6083,19 @@ makecode(struct compiler *c, struct assembler *a)
     if (maxdepth < 0) {
         goto error;
     }
-    co = PyCode_NewWithPosOnlyArgs(posonlyargcount+posorkeywordargcount,
-                                   posonlyargcount, kwonlyargcount, nlocals_int,
-                                   maxdepth, flags, bytecode, consts, names,
-                                   varnames, freevars, cellvars, c->c_filename,
-                                   c->u->u_name, c->u->u_firstlineno, a->a_lnotab);
+    maxfndepth = PyCompile_CallableStackSize(bytecode);
+    if (maxfndepth < 0) {
+        goto error;
+    }
+    maxfblocks = PyCompile_BlockDepth(bytecode);
+    if (maxfblocks < 0) {
+        goto error;
+    }
+    co = PyCode_NewInternal(posonlyargcount+posorkeywordargcount,
+                            posonlyargcount, kwonlyargcount, nlocals_int,
+                            maxdepth, maxfndepth, maxfblocks, flags, bytecode, consts, names,
+                            varnames, freevars, cellvars, c->c_filename,
+                            c->u->u_name, c->u->u_firstlineno, a->a_lnotab);
  error:
     Py_XDECREF(consts);
     Py_XDECREF(names);

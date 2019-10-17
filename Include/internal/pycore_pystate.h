@@ -49,10 +49,32 @@ _Py_ThreadCanHandlePendingCalls(void)
 /* Variable and macro for in-line access to current thread
    and interpreter state */
 
-static inline PyThreadState*
+#if defined(__GNUC__) && !defined(Py_ENABLE_SHARED)
+__attribute__((tls_model("local-exec")))
+#endif
+extern Py_DECL_THREAD PyThreadState *_Py_current_tstate;
+
+static inline PyThreadState *
 _PyRuntimeState_GetThreadState(_PyRuntimeState *runtime)
 {
-    return (PyThreadState*)_Py_atomic_load_relaxed(&runtime->gilstate.tstate_current);
+    return _Py_current_tstate;
+}
+
+static inline void
+_PyRuntimeState_SetThreadState(_PyRuntimeState *runtime, PyThreadState *tstate)
+{
+    _Py_current_tstate = tstate;
+}
+
+PyAPI_FUNC(void) _PyThreadState_Shutdown(PyThreadState *tstate);
+
+static inline void
+_PyThreadState_CheckForShutdown(PyThreadState *tstate)
+{
+    PyThreadState *finalizing = _Py_atomic_load_ptr_relaxed(&_PyRuntime.finalizing);
+    if (finalizing != NULL && finalizing != tstate) {
+        _PyThreadState_Shutdown(tstate);
+    }
 }
 
 /* Get the current Python thread state.
@@ -107,12 +129,28 @@ static inline PyInterpreterState* _PyInterpreterState_GET(void) {
 
 
 /* Other */
+struct brc_queued_object;
+
+struct PyThreadStateOS {
+    PyThreadState *tstate;
+
+    struct _PyBrcState {
+        struct llist_node node;
+        uintptr_t thread_id;
+        struct brc_queued_object *queue;
+    } brc;
+};
 
 PyAPI_FUNC(void) _PyThreadState_Init(
     PyThreadState *tstate);
-PyAPI_FUNC(void) _PyThreadState_DeleteExcept(
-    _PyRuntimeState *runtime,
-    PyThreadState *tstate);
+PyAPI_FUNC(PyThreadState *) _PyThreadState_UnlinkExceptCurrent(
+    _PyRuntimeState *runtime);
+PyAPI_FUNC(void) _PyThreadState_DeleteGarbage(PyThreadState *garbage);
+PyAPI_FUNC(int) _PyThreadState_GetStatus(PyThreadState *tstate);
+PyAPI_FUNC(void) _PyThreadState_GC_Park(PyThreadState *tstate);
+PyAPI_FUNC(void) _PyThreadState_GC_Stop(PyThreadState *tstate);
+PyAPI_FUNC(void) _PyThreadState_Signal(PyThreadState *tstate, uintptr_t bit);
+PyAPI_FUNC(void) _PyThreadState_Unsignal(PyThreadState *tstate, uintptr_t bit);
 
 PyAPI_FUNC(PyThreadState *) _PyThreadState_Swap(
     struct _gilstate_runtime_state *gilstate,

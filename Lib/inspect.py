@@ -167,7 +167,7 @@ def isfunction(object):
         __globals__     global namespace in which this function was defined
         __annotations__ dict of parameter annotations
         __kwdefaults__  dict of keyword only parameters with defaults"""
-    return isinstance(object, types.FunctionType)
+    return isinstance(object, types.FunctionTypes)
 
 def _has_code_flag(f, flag):
     """Return true if ``f`` is a function (or a method or functools.partial
@@ -281,7 +281,7 @@ def iscode(object):
         co_nlocals          number of local variables
         co_stacksize        virtual machine stack space required
         co_varnames         tuple of names of arguments and local variables"""
-    return isinstance(object, types.CodeType)
+    return isinstance(object, types.CodeTypes)
 
 def isbuiltin(object):
     """Return true if the object is a built-in function or method.
@@ -1460,11 +1460,10 @@ def getclosurevars(func):
     global_vars = {}
     builtin_vars = {}
     unbound_names = set()
-    for name in code.co_names:
-        if name in ("None", "True", "False"):
-            # Because these used to be builtins instead of keywords, they
-            # may still show up as name references. We ignore them.
+    for instr in dis.get_instructions(func):
+        if instr.opname not in ("LOAD_GLOBAL", "LOAD_NAME"):
             continue
+        name = code.co_consts[instr.imm[0]]
         try:
             global_vars[name] = global_ns[name]
         except KeyError:
@@ -1664,13 +1663,7 @@ def getgeneratorstate(generator):
       GEN_SUSPENDED: Currently suspended at a yield expression.
       GEN_CLOSED: Execution has completed.
     """
-    if generator.gi_running:
-        return GEN_RUNNING
-    if generator.gi_frame is None:
-        return GEN_CLOSED
-    if generator.gi_frame.f_lasti == -1:
-        return GEN_CREATED
-    return GEN_SUSPENDED
+    return generator._genstate
 
 
 def getgeneratorlocals(generator):
@@ -1706,13 +1699,7 @@ def getcoroutinestate(coroutine):
       CORO_SUSPENDED: Currently suspended at an await expression.
       CORO_CLOSED: Execution has completed.
     """
-    if coroutine.cr_running:
-        return CORO_RUNNING
-    if coroutine.cr_frame is None:
-        return CORO_CLOSED
-    if coroutine.cr_frame.f_lasti == -1:
-        return CORO_CREATED
-    return CORO_SUSPENDED
+    return coroutine._corostate
 
 
 def getcoroutinelocals(coroutine):

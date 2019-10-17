@@ -1,6 +1,8 @@
 /* ABCMeta implementation */
 
 #include "Python.h"
+#include "lock.h"
+#include "structmember.h"
 #include "clinic/_abc.c.h"
 
 /*[clinic input]
@@ -21,7 +23,7 @@ _Py_IDENTIFIER(__subclasshook__);
 
 typedef struct {
     PyTypeObject *_abc_data_type;
-    unsigned long long abc_invalidation_counter;
+    uint64_t abc_invalidation_counter;
 } _abcmodule_state;
 
 static inline _abcmodule_state*
@@ -37,10 +39,11 @@ get_abc_state(PyObject *module)
    since they are never iterated over. */
 typedef struct {
     PyObject_HEAD
+    _PyRecursiveMutex _abc_mutex;
     PyObject *_abc_registry;
     PyObject *_abc_cache; /* Normal set of weak references. */
     PyObject *_abc_negative_cache; /* Normal set of weak references. */
-    unsigned long long _abc_negative_cache_version;
+    uint64_t _abc_negative_cache_version;
 } _abc_data;
 
 static int
@@ -89,7 +92,8 @@ abc_data_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     self->_abc_registry = NULL;
     self->_abc_cache = NULL;
     self->_abc_negative_cache = NULL;
-    self->_abc_negative_cache_version = state->abc_invalidation_counter;
+    self->_abc_negative_cache_version = _Py_atomic_load_uint64(
+        &state->abc_invalidation_counter);
     return (PyObject *) self;
 }
 
@@ -221,12 +225,17 @@ _abc__reset_registry(PyObject *module, PyObject *self)
     if (impl == NULL) {
         return NULL;
     }
+    PyObject *result = Py_None;
+    _PyRecursiveMutex_lock(&impl->_abc_mutex);
     if (impl->_abc_registry != NULL && PySet_Clear(impl->_abc_registry) < 0) {
-        Py_DECREF(impl);
-        return NULL;
+        result = NULL;
+        goto end;
     }
+end:
+    _PyRecursiveMutex_unlock(&impl->_abc_mutex);
     Py_DECREF(impl);
-    Py_RETURN_NONE;
+    return result;
+
 }
 
 /*[clinic input]
@@ -248,18 +257,23 @@ _abc__reset_caches(PyObject *module, PyObject *self)
     if (impl == NULL) {
         return NULL;
     }
+
+    PyObject *result = Py_None;
+   _PyRecursiveMutex_lock(&impl->_abc_mutex);
     if (impl->_abc_cache != NULL && PySet_Clear(impl->_abc_cache) < 0) {
-        Py_DECREF(impl);
-        return NULL;
+        result = NULL;
+        goto end;
     }
     /* also the second cache */
     if (impl->_abc_negative_cache != NULL &&
             PySet_Clear(impl->_abc_negative_cache) < 0) {
-        Py_DECREF(impl);
-        return NULL;
+        result = NULL;
+        goto end;
     }
+end:
+    _PyRecursiveMutex_unlock(&impl->_abc_mutex);
     Py_DECREF(impl);
-    Py_RETURN_NONE;
+    return result;
 }
 
 /*[clinic input]
@@ -283,11 +297,13 @@ _abc__get_dump(PyObject *module, PyObject *self)
     if (impl == NULL) {
         return NULL;
     }
+    _PyRecursiveMutex_lock(&impl->_abc_mutex);
     PyObject *res = Py_BuildValue("NNNK",
                                   PySet_New(impl->_abc_registry),
                                   PySet_New(impl->_abc_cache),
                                   PySet_New(impl->_abc_negative_cache),
                                   impl->_abc_negative_cache_version);
+    _PyRecursiveMutex_unlock(&impl->_abc_mutex);
     Py_DECREF(impl);
     return res;
 }
@@ -489,14 +505,17 @@ _abc__abc_register_impl(PyObject *module, PyObject *self, PyObject *subclass)
     if (impl == NULL) {
         return NULL;
     }
+    _PyRecursiveMutex_lock(&impl->_abc_mutex);
     if (_add_to_weak_set(&impl->_abc_registry, subclass) < 0) {
+        _PyRecursiveMutex_unlock(&impl->_abc_mutex);
         Py_DECREF(impl);
         return NULL;
     }
+    _PyRecursiveMutex_unlock(&impl->_abc_mutex);
     Py_DECREF(impl);
 
     /* Invalidate negative cache */
-    get_abc_state(module)->abc_invalidation_counter++;
+    _Py_atomic_add_uint64(&get_abc_state(module)->abc_invalidation_counter, 1);
 
     Py_INCREF(subclass);
     return subclass;
@@ -529,6 +548,8 @@ _abc__abc_instancecheck_impl(PyObject *module, PyObject *self,
         Py_DECREF(impl);
         return NULL;
     }
+
+    _PyRecursiveMutex_lock(&impl->_abc_mutex);
     /* Inline the cache checking. */
     int incache = _in_weak_set(impl->_abc_cache, subclass);
     if (incache < 0) {
@@ -541,7 +562,7 @@ _abc__abc_instancecheck_impl(PyObject *module, PyObject *self,
     }
     subtype = (PyObject *)Py_TYPE(instance);
     if (subtype == subclass) {
-        if (impl->_abc_negative_cache_version == get_abc_state(module)->abc_invalidation_counter) {
+        if (impl->_abc_negative_cache_version == _Py_atomic_load_uint64(&get_abc_state(module)->abc_invalidation_counter)) {
             incache = _in_weak_set(impl->_abc_negative_cache, subclass);
             if (incache < 0) {
                 goto end;
@@ -580,7 +601,8 @@ _abc__abc_instancecheck_impl(PyObject *module, PyObject *self,
     }
 
 end:
-    Py_XDECREF(impl);
+    _PyRecursiveMutex_unlock(&impl->_abc_mutex);
+    Py_DECREF(impl);
     Py_XDECREF(subclass);
     return result;
 }
@@ -621,6 +643,9 @@ _abc__abc_subclasscheck_impl(PyObject *module, PyObject *self,
         return NULL;
     }
 
+    /* 0. Lock mutex */
+    _PyRecursiveMutex_lock(&impl->_abc_mutex);
+
     /* 1. Check cache. */
     incache = _in_weak_set(impl->_abc_cache, subclass);
     if (incache < 0) {
@@ -633,14 +658,14 @@ _abc__abc_subclasscheck_impl(PyObject *module, PyObject *self,
 
     state = get_abc_state(module);
     /* 2. Check negative cache; may have to invalidate. */
-    if (impl->_abc_negative_cache_version < state->abc_invalidation_counter) {
+    if (impl->_abc_negative_cache_version < _Py_atomic_load_uint64(&state->abc_invalidation_counter)) {
         /* Invalidate the negative cache. */
         if (impl->_abc_negative_cache != NULL &&
                 PySet_Clear(impl->_abc_negative_cache) < 0)
         {
             goto end;
         }
-        impl->_abc_negative_cache_version = state->abc_invalidation_counter;
+        impl->_abc_negative_cache_version = _Py_atomic_load_uint64(&state->abc_invalidation_counter);
     }
     else {
         incache = _in_weak_set(impl->_abc_negative_cache, subclass);
@@ -737,9 +762,9 @@ _abc__abc_subclasscheck_impl(PyObject *module, PyObject *self,
     result = Py_False;
 
 end:
+    _PyRecursiveMutex_unlock(&impl->_abc_mutex);
     Py_DECREF(impl);
     Py_XDECREF(subclasses);
-    Py_XINCREF(result);
     return result;
 }
 
@@ -834,7 +859,8 @@ _abc_get_cache_token_impl(PyObject *module)
 /*[clinic end generated code: output=c7d87841e033dacc input=70413d1c423ad9f9]*/
 {
     _abcmodule_state *state = get_abc_state(module);
-    return PyLong_FromUnsignedLongLong(state->abc_invalidation_counter);
+    uint64_t counter = _Py_atomic_load_uint64(&state->abc_invalidation_counter);
+    return PyLong_FromUnsignedLongLong((unsigned long long) counter);
 }
 
 static struct PyMethodDef _abcmodule_methods[] = {

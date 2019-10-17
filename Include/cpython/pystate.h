@@ -2,6 +2,8 @@
 #  error "this header file must not be included directly"
 #endif
 
+#include "lock.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -47,6 +49,24 @@ typedef struct _err_stackitem {
 } _PyErr_StackItem;
 
 
+struct mi_heap_s;
+typedef struct mi_heap_s mi_heap_t;
+
+// See pycore_pystate.h
+struct PyThreadStateOS;
+typedef struct PyThreadStateOS PyThreadStateOS;
+
+struct Waiter;
+typedef struct _PyEventRC _PyEventRC;
+
+struct ThreadState;
+
+// Forward declared from pycore_qsbr.h
+struct qsbr;
+
+// must match MI_NUM_HEAPS in mimalloc.h
+#define Py_NUM_HEAPS 5
+
 // The PyThreadState typedef is in Include/pystate.h.
 struct _ts {
     /* See Python/ceval.c for comments explaining most fields */
@@ -55,8 +75,18 @@ struct _ts {
     struct _ts *next;
     PyInterpreterState *interp;
 
-    /* Borrowed reference to the current frame (it can be NULL) */
+    /* OS-specific state (for locking and parking) */
+    PyThreadStateOS *os;
+    uintptr_t _unused_handoff_elem; // TODO: delete before release, but gonna require recompiling conda binaries
+
+    /* thread status */
+    int32_t status;
+    int use_deferred_rc;
+
+    mi_heap_t *heaps[Py_NUM_HEAPS];
+
     PyFrameObject *frame;
+    struct ThreadState *active;
     int recursion_depth;
     char overflowed; /* The stack has overflowed. Allow 50 more calls
                         to handle the runtime error. */
@@ -69,6 +99,11 @@ struct _ts {
        the trace/profile. */
     int tracing;
     int use_tracing;
+
+    /* The thread will not stop for GC or other stop-the-world requests.
+     * Used for *short* critical sections that to prevent deadlocks between
+     * finalizers and stopped threads. */
+    int32_t cant_stop_wont_stop;
 
     Py_tracefunc c_profilefunc;
     Py_tracefunc c_tracefunc;
@@ -96,34 +131,21 @@ struct _ts {
     PyObject *async_exc; /* Asynchronous exception to raise */
     unsigned long thread_id; /* Thread id where this tstate was created */
 
+    uint64_t fast_thread_id; /* Thread id used for object ownership */
+    PyObject *object_queue;
+
     int trash_delete_nesting;
     PyObject *trash_delete_later;
 
-    /* Called when a thread state is deleted normally, but not when it
-     * is destroyed after fork().
-     * Pain:  to prevent rare but fatal shutdown errors (issue 18808),
-     * Thread.join() must wait for the join'ed thread's tstate to be unlinked
-     * from the tstate chain.  That happens at the end of a thread's life,
-     * in pystate.c.
-     * The obvious way doesn't quite work:  create a lock which the tstate
-     * unlinking code releases, and have Thread.join() wait to acquire that
-     * lock.  The problem is that we _are_ at the end of the thread's life:
-     * if the thread holds the last reference to the lock, decref'ing the
-     * lock will delete the lock, and that may trigger arbitrary Python code
-     * if there's a weakref, with a callback, to the lock.  But by this time
-     * _PyRuntime.gilstate.tstate_current is already NULL, so only the simplest
-     * of C code can be allowed to run (in particular it must not be possible to
-     * release the GIL).
-     * So instead of holding the lock directly, the tstate holds a weakref to
-     * the lock:  that's the value of on_delete_data below.  Decref'ing a
-     * weakref is harmless.
-     * on_delete points to _threadmodule.c's static release_sentinel() function.
-     * After the tstate is unlinked, release_sentinel is called with the
-     * weakref-to-lock (on_delete_data) argument, and release_sentinel releases
-     * the indirectly held lock.
+    _PyEventRC *join_event;
+    int daemon;
+    int from_threading_module;
+
+    struct qsbr *qsbr;
+
+    /* Version counters
      */
-    void (*on_delete)(void *);
-    void *on_delete_data;
+    uint64_t pydict_next_version;
 
     int coroutine_origin_tracking_depth;
 
@@ -133,11 +155,26 @@ struct _ts {
     PyObject *context;
     uint64_t context_ver;
 
+    intptr_t thread_ref_total;
+
     /* Unique thread state id. */
     uint64_t id;
 
-    /* XXX signal handlers should also be here */
+    struct Waiter *waiter;
 
+    uintptr_t eval_breaker;
+    void *opcode_targets[256];
+#ifdef HAVE_COMPUTED_GOTOS
+    void *trace_target;
+    void *trace_cfunc_target;
+    void **opcode_targets_base;
+#endif
+
+    Py_ssize_t *type_refcnts;
+    Py_ssize_t max_type_refcnts;
+
+    /* XXX signal handlers should also be here */
+    struct method_cache_entry method_cache[(1 << MCACHE_SIZE_EXP)];
 };
 
 // Alias for backward compatibility with Python 3.8
@@ -173,6 +210,9 @@ PyAPI_FUNC(PyInterpreterState *) _PyGILState_GetInterpreterStateUnsafe(void);
 */
 PyAPI_FUNC(PyObject *) _PyThread_CurrentFrames(void);
 
+
+PyAPI_FUNC(void) _Py_explicit_merge_all(void);
+
 /* Routines for advanced debuggers, requested by David Beazley.
    Don't use unless you know what you are doing! */
 PyAPI_FUNC(PyInterpreterState *) PyInterpreterState_Main(void);
@@ -181,6 +221,7 @@ PyAPI_FUNC(PyInterpreterState *) PyInterpreterState_Next(PyInterpreterState *);
 PyAPI_FUNC(PyThreadState *) PyInterpreterState_ThreadHead(PyInterpreterState *);
 PyAPI_FUNC(PyThreadState *) PyThreadState_Next(PyThreadState *);
 PyAPI_FUNC(void) PyThreadState_DeleteCurrent(void);
+PyAPI_FUNC(int) _PyThreadState_IsRunning(PyThreadState *tstate);
 
 /* Frame evaluation API */
 
@@ -251,12 +292,25 @@ PyAPI_FUNC(void) _PyCrossInterpreterData_Release(_PyCrossInterpreterData *);
 
 PyAPI_FUNC(int) _PyObject_CheckCrossInterpreterData(PyObject *);
 
+PyAPI_FUNC(long) _PyInterpreterState_GetNumThreads(PyInterpreterState *);
+
 /* cross-interpreter data registry */
 
 typedef int (*crossinterpdatafunc)(PyObject *, struct _xid *);
 
 PyAPI_FUNC(int) _PyCrossInterpreterData_RegisterClass(PyTypeObject *, crossinterpdatafunc);
 PyAPI_FUNC(crossinterpdatafunc) _PyCrossInterpreterData_Lookup(PyObject *);
+
+/* Refcounted thread-safe events */
+
+struct _PyEventRC {
+    _PyEvent event;
+    intptr_t refcnt;
+};
+
+PyAPI_FUNC(void) _PyEventRC_Incref(_PyEventRC *);
+PyAPI_FUNC(void) _PyEventRC_Decref(_PyEventRC *);
+PyAPI_FUNC(_PyEventRC *) _PyEventRC_New(void);
 
 #ifdef __cplusplus
 }

@@ -699,6 +699,32 @@ exit:
     return return_value;
 }
 
+PyDoc_STRVAR(sys_getfullrefcount__doc__,
+"getfullrefcount($module, object, /)\n"
+"--\n"
+"\n"
+"Return the reference count of object.\n"
+"\n"
+"The count returned is generally one higher than you might expect,\n"
+"because it includes the (temporary) reference as an argument to\n"
+"getrefcount().");
+
+#define SYS_GETFULLREFCOUNT_METHODDEF    \
+    {"getfullrefcount", (PyCFunction)sys_getfullrefcount, METH_O, sys_getfullrefcount__doc__},
+
+PyDoc_STRVAR(sys_mergerefcount__doc__,
+"mergerefcount($module, object, /)\n"
+"--\n"
+"\n"
+"Return the reference count of object.\n"
+"\n"
+"The count returned is generally one higher than you might expect,\n"
+"because it includes the (temporary) reference as an argument to\n"
+"getrefcount().");
+
+#define SYS_MERGEREFCOUNT_METHODDEF    \
+    {"mergerefcount", (PyCFunction)sys_mergerefcount, METH_O, sys_mergerefcount__doc__},
+
 #if defined(Py_REF_DEBUG)
 
 PyDoc_STRVAR(sys_gettotalrefcount__doc__,
@@ -921,6 +947,24 @@ sys_is_finalizing(PyObject *module, PyObject *Py_UNUSED(ignored))
     return sys_is_finalizing_impl(module);
 }
 
+PyDoc_STRVAR(sys__qsbr_epoch__doc__,
+"_qsbr_epoch($module, /)\n"
+"--\n"
+"\n"
+"Current QSBR epoch counter.");
+
+#define SYS__QSBR_EPOCH_METHODDEF    \
+    {"_qsbr_epoch", (PyCFunction)sys__qsbr_epoch, METH_NOARGS, sys__qsbr_epoch__doc__},
+
+static PyObject *
+sys__qsbr_epoch_impl(PyObject *module);
+
+static PyObject *
+sys__qsbr_epoch(PyObject *module, PyObject *Py_UNUSED(ignored))
+{
+    return sys__qsbr_epoch_impl(module);
+}
+
 #if defined(ANDROID_API_LEVEL)
 
 PyDoc_STRVAR(sys_getandroidapilevel__doc__,
@@ -970,4 +1014,4 @@ sys_getandroidapilevel(PyObject *module, PyObject *Py_UNUSED(ignored))
 #ifndef SYS_GETANDROIDAPILEVEL_METHODDEF
     #define SYS_GETANDROIDAPILEVEL_METHODDEF
 #endif /* !defined(SYS_GETANDROIDAPILEVEL_METHODDEF) */
-/*[clinic end generated code: output=39eb34a01fb9a919 input=a9049054013a1b77]*/
+/*[clinic end generated code: output=2473e46bb3dd4ebd input=a9049054013a1b77]*/

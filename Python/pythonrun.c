@@ -20,16 +20,24 @@
 #include "pycore_pystate.h"       // _PyInterpreterState_GET()
 #include "pycore_sysmodule.h"     // _PySys_Audit()
 
-#include "node.h"                 // node
-#include "token.h"                // INDENT
-#include "parsetok.h"             // perrdetail
-#include "errcode.h"              // E_EOF
-#include "code.h"                 // PyCodeObject
-#include "symtable.h"             // PySymtable_BuildObject()
-#include "ast.h"                  // PyAST_FromNodeObject()
-#include "marshal.h"              // PyMarshal_ReadLongFromFile()
+#include "grammar.h"
+#include "node.h"
+#include "token.h"
+#include "parsetok.h"
+#include "errcode.h"
+#include "code.h"
+#include "code2.h"
+#include "symtable.h"
+#include "ast.h"
+#include "marshal.h"
+#include "osdefs.h"
+#include <locale.h>
 
 #include "pegen_interface.h"      // PyPegen_ASTFrom*
+
+#ifdef HAVE_SIGNAL_H
+#include <signal.h>
+#endif
 
 #ifdef MS_WINDOWS
 #  include "malloc.h"             // alloca()
@@ -1216,8 +1224,18 @@ run_eval_code_obj(PyThreadState *tstate, PyCodeObject *co, PyObject *globals, Py
         }
     }
 
-    v = PyEval_EvalCode((PyObject*)co, globals, locals);
-    if (!v && _PyErr_Occurred(tstate) == PyExc_KeyboardInterrupt) {
+    if (PyCode_Check(co)) {
+        v = PyEval_EvalCode((PyObject*)co, globals, locals);
+    }
+    else if (PyCode2_Check(co)) {
+        v = PyEval2_EvalCode((PyObject*)co, globals, locals);
+    }
+    else {
+        PyErr_SetString(PyExc_TypeError, "not a code object");
+        return NULL;
+    }
+
+    if (!v && PyErr_Occurred() == PyExc_KeyboardInterrupt) {
         _Py_UnhandledKeyboardInterrupt = 1;
     }
     return v;
@@ -1267,7 +1285,7 @@ run_pyc_file(FILE *fp, PyObject *globals, PyObject *locals,
         goto error;
     }
     v = PyMarshal_ReadLastObjectFromFile(fp);
-    if (v == NULL || !PyCode_Check(v)) {
+    if (v == NULL || (!PyCode_Check(v) && !PyCode2_Check(v))) {
         Py_XDECREF(v);
         PyErr_SetString(PyExc_RuntimeError,
                    "Bad code object in .pyc file");
@@ -1289,7 +1307,7 @@ PyObject *
 Py_CompileStringObject(const char *str, PyObject *filename, int start,
                        PyCompilerFlags *flags, int optimize)
 {
-    PyCodeObject *co;
+    PyObject *co;
     mod_ty mod;
     int use_peg = _PyInterpreterState_GET()->config._use_peg_parser;
     PyArena *arena = PyArena_New();
@@ -1307,11 +1325,18 @@ Py_CompileStringObject(const char *str, PyObject *filename, int start,
         return NULL;
     }
     if (flags && (flags->cf_flags & PyCF_ONLY_AST)) {
+        if ((flags->cf_flags & PyCF_OPTIMIZE_AST) != 0) {
+            if (!_PyAST_Optimize(mod, arena, optimize)) {
+                PyArena_Free(arena);
+                return NULL;
+            }
+        }
+
         PyObject *result = PyAST_mod2obj(mod);
         PyArena_Free(arena);
         return result;
     }
-    co = PyAST_CompileObject(mod, filename, flags, optimize, arena);
+    co = (PyObject *)PyAST_CompileObject(mod, filename, flags, optimize, arena);
     PyArena_Free(arena);
     return (PyObject *)co;
 }

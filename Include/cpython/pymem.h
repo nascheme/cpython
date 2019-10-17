@@ -11,6 +11,10 @@ PyAPI_FUNC(void *) PyMem_RawCalloc(size_t nelem, size_t elsize);
 PyAPI_FUNC(void *) PyMem_RawRealloc(void *ptr, size_t new_size);
 PyAPI_FUNC(void) PyMem_RawFree(void *ptr);
 
+PyAPI_FUNC(PyObject **) PyMem_ArrayMalloc(size_t size, size_t *usable);
+PyAPI_FUNC(void) PyMem_ArrayFree(void *ptr);
+
+
 /* Try to get the allocators name set by _PyMem_SetupAllocators(). */
 PyAPI_FUNC(const char*) _PyMem_GetCurrentAllocatorName(void);
 
@@ -34,7 +38,12 @@ typedef enum {
     PYMEM_DOMAIN_MEM,
 
     /* PyObject_Malloc(), PyObject_Realloc() and PyObject_Free() */
-    PYMEM_DOMAIN_OBJ
+    PYMEM_DOMAIN_OBJ,
+
+    /* PyObject_GC_Malloc(), etc. */
+    PYMEM_DOMAIN_GC,
+
+    PYMEM_DOMAIN_COUNT
 } PyMemAllocatorDomain;
 
 typedef enum {
@@ -83,7 +92,7 @@ PyAPI_FUNC(void) PyMem_GetAllocator(PyMemAllocatorDomain domain,
    PyMem_SetupDebugHooks() function must be called to reinstall the debug hooks
    on top on the new allocator. */
 PyAPI_FUNC(void) PyMem_SetAllocator(PyMemAllocatorDomain domain,
-                                    PyMemAllocatorEx *allocator);
+                                    const PyMemAllocatorEx *allocator);
 
 /* Setup hooks to detect bugs in the following Python memory allocator
    functions:
@@ -102,6 +111,8 @@ PyAPI_FUNC(void) PyMem_SetAllocator(PyMemAllocatorDomain domain,
 
    The function does nothing if Python is not compiled is debug mode. */
 PyAPI_FUNC(void) PyMem_SetupDebugHooks(void);
+
+PyAPI_FUNC(int) _PyMem_DebugEnabled(void);
 
 #ifdef __cplusplus
 }

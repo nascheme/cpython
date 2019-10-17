@@ -39,7 +39,7 @@ struct wrapperbase {
 /* Various kinds of descriptor objects */
 
 typedef struct {
-    PyObject_HEAD
+    PyFuncBase   d_base;
     PyTypeObject *d_type;
     PyObject *d_name;
     PyObject *d_qualname;
@@ -54,6 +54,7 @@ typedef struct {
     PyDescr_COMMON;
     PyMethodDef *d_method;
     vectorcallfunc vectorcall;
+    vectorcallfunc base_vectorcall;  /* TODO: sgross maybe move to a subtype? */
 } PyMethodDescrObject;
 
 typedef struct {

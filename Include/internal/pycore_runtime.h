@@ -10,15 +10,33 @@ extern "C" {
 
 #include "pycore_atomic.h"    /* _Py_atomic_address */
 #include "pycore_gil.h"       // struct _gil_runtime_state
+#include "pycore_llist.h"
+#include "pycore_qsbr.h"
+#include "lock.h"
+
+/* Forward declaration */
+struct _Py_hashtable_t;
+
+
+typedef enum {
+    _Py_THREAD_DETACHED=0,
+    _Py_THREAD_ATTACHED,
+    _Py_THREAD_GC,
+} _Py_thread_status;
+
+enum {
+    EVAL_PLEASE_STOP = 1U << 0,
+    EVAL_PENDING_SIGNALS = 1U << 1,
+    EVAL_PENDING_CALLS = 1U << 2,
+    EVAL_DROP_GIL = 1U << 3,
+    EVAL_ASYNC_EXC = 1U << 4,
+    EVAL_EXPLICIT_MERGE = 1U << 5,
+    EVAL_QSBR = 1U << 6
+};
 
 /* ceval state */
 
 struct _ceval_runtime_state {
-    /* Request for checking signals. It is shared by all interpreters (see
-       bpo-40513). Any thread of any interpreter can receive a signal, but only
-       the main thread of the main interpreter can handle signals: see
-       _Py_ThreadCanHandleSignals(). */
-    _Py_atomic_int signals_pending;
     struct _gil_runtime_state gil;
 };
 
@@ -62,6 +80,9 @@ typedef struct pyruntimestate {
     /* Is Python fully initialized? Set to 1 by Py_Initialize() */
     int initialized;
 
+    /* Is Python stopping all threads? */
+    int stop_the_world;
+
     /* Set by Py_FinalizeEx(). Only reset to NULL if Py_Initialize()
        is called again.
 
@@ -74,7 +95,7 @@ typedef struct pyruntimestate {
         PyInterpreterState *head;
         PyInterpreterState *main;
         /* _next_interp_id is an auto-numbered sequence of small
-           integers.  It gets initialized in _PyInterpreterState_Init(),
+           integers.  It gets initialized in _PyInterpreterState_Enable(),
            which is called in Py_Initialize(), and used in
            PyInterpreterState_New().  A negative interpreter ID
            indicates an error occurred.  The main interpreter will
@@ -89,7 +110,10 @@ typedef struct pyruntimestate {
         struct _xidregitem *head;
     } xidregistry;
 
+    struct qsbr_shared qsbr;
+
     unsigned long main_thread;
+    PyThreadState *main_tstate;
 
 #define NEXITFUNCS 32
     void (*exitfuncs[NEXITFUNCS])(void);
@@ -103,6 +127,13 @@ typedef struct pyruntimestate {
     Py_OpenCodeHookFunction open_code_hook;
     void *open_code_userdata;
     _Py_AuditHookEntry *audit_hook_head;
+
+    /* Used for types for now */
+    _PyMutex mutex;
+
+    _PyMutex stoptheworld_mutex;
+
+    intptr_t ref_total;
 
     // XXX Consolidate globals found via the check-c-globals script.
 } _PyRuntimeState;
@@ -120,6 +151,11 @@ PyAPI_FUNC(void) _PyRuntimeState_Fini(_PyRuntimeState *runtime);
 #ifdef HAVE_FORK
 PyAPI_FUNC(void) _PyRuntimeState_ReInitThreads(_PyRuntimeState *runtime);
 #endif
+
+PyAPI_FUNC(void) _PyRuntimeState_StopTheWorld(_PyRuntimeState *runtime);
+PyAPI_FUNC(void) _PyRuntimeState_StartTheWorld(_PyRuntimeState *runtime);
+
+PyAPI_FUNC(intptr_t) _PyRuntimeState_GetRefTotal(void);
 
 /* Initialize _PyRuntimeState.
    Return NULL on success, or return an error message on failure. */

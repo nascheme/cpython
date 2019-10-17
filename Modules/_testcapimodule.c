@@ -46,6 +46,7 @@ static PyObject *
 raiseTestError(const char* test_name, const char* msg)
 {
     PyErr_Format(TestError, "%s: %s", test_name, msg);
+
     return NULL;
 }
 
@@ -282,7 +283,7 @@ dict_hassplittable(PyObject *self, PyObject *arg)
         return NULL;
     }
 
-    return PyBool_FromLong(_PyDict_HasSplitTable((PyDictObject*)arg));
+    return PyBool_FromLong(0);//_PyDict_HasSplitTable((PyDictObject*)arg));
 }
 
 /* Issue #4701: Check that PyObject_Hash implicitly calls
@@ -3570,8 +3571,8 @@ slot_tp_del(PyObject *self)
     PyObject *error_type, *error_value, *error_traceback;
 
     /* Temporarily resurrect the object. */
-    assert(Py_REFCNT(self) == 0);
-    Py_SET_REFCNT(self, 1);
+    assert(Py_IS_REFERENCED(self) == 0);
+    Py_RESURRECT(self);
 
     /* Save the current exception, if any. */
     PyErr_Fetch(&error_type, &error_value, &error_traceback);
@@ -3594,8 +3595,8 @@ slot_tp_del(PyObject *self)
      * cause a recursive call.
      */
     assert(Py_REFCNT(self) > 0);
-    Py_SET_REFCNT(self, Py_REFCNT(self) - 1);
-    if (Py_REFCNT(self) == 0) {
+    int alive = Py_UNRESURRECT(self);
+    if (!alive) {
         /* this is the normal path out */
         return;
     }
@@ -3603,16 +3604,18 @@ slot_tp_del(PyObject *self)
     /* __del__ resurrected it!  Make it look like the original Py_DECREF
      * never happened.
      */
-    {
-        Py_ssize_t refcnt = Py_REFCNT(self);
-        _Py_NewReference(self);
-        Py_SET_REFCNT(self, refcnt);
+#ifdef Py_TRACE_REFS
+    if (_Py_tracemalloc_config.tracing) {
+        _PyTraceMalloc_NewReference(op);
     }
-    assert(!PyType_IS_GC(Py_TYPE(self)) || PyObject_GC_IsTracked(self));
+#endif
+
+    assert(!PyType_IS_GC(Py_TYPE(self)) || _PyObject_GC_IS_TRACKED(self));
+
     /* If Py_REF_DEBUG macro is defined, _Py_NewReference() increased
        _Py_RefTotal, so we need to undo that. */
 #ifdef Py_REF_DEBUG
-    _Py_RefTotal--;
+    _Py_DecRefTotal();
 #endif
 }
 
@@ -4017,6 +4020,7 @@ static struct {
     PyMemAllocatorEx raw;
     PyMemAllocatorEx mem;
     PyMemAllocatorEx obj;
+    PyMemAllocatorEx gc;
 } FmHook;
 
 static struct {
@@ -4090,6 +4094,7 @@ fm_setup_hooks(void)
     PyMem_GetAllocator(PYMEM_DOMAIN_RAW, &FmHook.raw);
     PyMem_GetAllocator(PYMEM_DOMAIN_MEM, &FmHook.mem);
     PyMem_GetAllocator(PYMEM_DOMAIN_OBJ, &FmHook.obj);
+    PyMem_GetAllocator(PYMEM_DOMAIN_GC, &FmHook.gc);
 
     alloc.ctx = &FmHook.raw;
     PyMem_SetAllocator(PYMEM_DOMAIN_RAW, &alloc);
@@ -4099,6 +4104,9 @@ fm_setup_hooks(void)
 
     alloc.ctx = &FmHook.obj;
     PyMem_SetAllocator(PYMEM_DOMAIN_OBJ, &alloc);
+
+    alloc.ctx = &FmHook.gc;
+    PyMem_SetAllocator(PYMEM_DOMAIN_GC, &alloc);
 }
 
 static void
@@ -4109,6 +4117,7 @@ fm_remove_hooks(void)
         PyMem_SetAllocator(PYMEM_DOMAIN_RAW, &FmHook.raw);
         PyMem_SetAllocator(PYMEM_DOMAIN_MEM, &FmHook.mem);
         PyMem_SetAllocator(PYMEM_DOMAIN_OBJ, &FmHook.obj);
+        PyMem_SetAllocator(PYMEM_DOMAIN_GC, &FmHook.gc);
     }
 }
 
@@ -4652,6 +4661,13 @@ test_pyobject_is_freed(const char *test_name, PyObject *op)
     Py_RETURN_NONE;
 }
 
+static void
+pyobject_fake_refcount(PyObject *self, int refcount)
+{
+    self->ob_tid = _Py_ThreadId();
+    self->ob_ref_local = (refcount << _Py_REF_LOCAL_SHIFT);
+    self->ob_ref_shared = 0;
+}
 
 static PyObject*
 check_pyobject_null_is_freed(PyObject *self, PyObject *Py_UNUSED(args))
@@ -4818,9 +4834,9 @@ dict_get_version(PyObject *self, PyObject *args)
 static PyObject *
 raise_SIGINT_then_send_None(PyObject *self, PyObject *args)
 {
-    PyGenObject *gen;
+    PyGenObject2 *gen;
 
-    if (!PyArg_ParseTuple(args, "O!", &PyGen_Type, &gen))
+    if (!PyArg_ParseTuple(args, "O!", &PyGen2_Type, &gen))
         return NULL;
 
     /* This is used in a test to check what happens if a signal arrives just
@@ -4834,7 +4850,7 @@ raise_SIGINT_then_send_None(PyObject *self, PyObject *args)
          because we check for signals before every bytecode operation.
      */
     raise(SIGINT);
-    return _PyGen_Send(gen, Py_None);
+    return _PyGen2_Send(gen, Py_None);
 }
 
 
@@ -5187,7 +5203,8 @@ negative_refcount(PyObject *self, PyObject *Py_UNUSED(args))
     }
     assert(Py_REFCNT(obj) == 1);
 
-    Py_SET_REFCNT(obj,  0);
+    pyobject_fake_refcount(obj, 0);
+
     /* Py_DECREF() must call _Py_NegativeRefcount() and abort Python */
     Py_DECREF(obj);
 

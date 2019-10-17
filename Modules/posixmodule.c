@@ -21,10 +21,12 @@
 #  include <pathcch.h>
 #endif
 
-#include "pycore_ceval.h"         // _PyEval_ReInitThreads()
-#include "pycore_import.h"        // _PyImport_ReInitLock()
-#include "pycore_pystate.h"       // _PyInterpreterState_GET()
-#include "structmember.h"         // PyMemberDef
+#include "pycore_ceval.h"     /* _PyEval_ReInitThreads() */
+#include "pycore_import.h"    /* _PyImport_ReInitLock() */
+#include "pycore_pystate.h"   /* _PyRuntime */
+#include "pythread.h"
+#include "structmember.h"
+#include "parking_lot.h"
 #ifndef MS_WINDOWS
 #  include "posixmodule.h"
 #else
@@ -560,14 +562,26 @@ run_at_forkers(PyObject *lst, int reverse)
 void
 PyOS_BeforeFork(void)
 {
-    run_at_forkers(_PyInterpreterState_GET()->before_forkers, 1);
+    _PyRuntimeState *runtime = &_PyRuntime;
+    run_at_forkers(_PyInterpreterState_Get()->before_forkers, 1);
 
     _PyImport_AcquireLock();
+
+    /* Stop all other threads still attached to the Python VM.
+     * It's not so much taht thi */
+    _PyMutex_lock(&runtime->stoptheworld_mutex);
+    _PyRuntimeState_StopTheWorld(runtime);
+    PyThread_acquire_lock(runtime->interpreters.mutex, WAIT_LOCK);
 }
 
 void
 PyOS_AfterFork_Parent(void)
 {
+    _PyRuntimeState *runtime = &_PyRuntime;
+    PyThread_release_lock(runtime->interpreters.mutex);
+    _PyRuntimeState_StartTheWorld(runtime);
+    _PyMutex_unlock(&runtime->stoptheworld_mutex);
+
     if (_PyImport_ReleaseLock() <= 0)
         Py_FatalError("failed releasing import lock after fork");
 
@@ -578,12 +592,31 @@ void
 PyOS_AfterFork_Child(void)
 {
     _PyRuntimeState *runtime = &_PyRuntime;
+
+    // Clears the parking lot. Any waiting threads are dead. This must be
+    // called before releasing any locks that use the parking lot so that
+    // unlocking the locks doesn't try to wake up dead threads.
+    _PyParkingLot_AfterFork();
+
     _PyGILState_Reinit(runtime);
     _PyEval_ReInitThreads(runtime);
+
+    // re-creates runtime->interpreters.mutex
+    _PyRuntimeState_ReInitThreads(runtime);
+
+    PyThreadState *garbage = _PyThreadState_UnlinkExceptCurrent(runtime);
+
+    PyThreadState *tstate = PyThreadState_GET();
+    _Py_qsbr_after_fork(&runtime->qsbr, tstate->qsbr);
     _PyImport_ReInitLock();
     _PySignal_AfterFork();
-    _PyRuntimeState_ReInitThreads(runtime);
-    _PyInterpreterState_DeleteExceptMain(runtime);
+    _PyInterpreterState_DeleteExceptMain(runtime);  // DANGER! this is almost certainly fragile/broken
+    _PyRuntimeState_StartTheWorld(runtime);
+    _PyMutex_unlock(&runtime->stoptheworld_mutex);
+
+    // Now that we're in a good state we can delete the dead thread states.
+    // This may call arbitrary Python code from destructors.
+    _PyThreadState_DeleteGarbage(garbage);
 
     run_at_forkers(_PyInterpreterState_GET()->after_forkers_child, 0);
 }

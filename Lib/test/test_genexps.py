@@ -142,12 +142,6 @@ Verify late binding for the innermost for-expression
     >>> list(g)
     [(0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2), (1, 3), (2, 0), (2, 1), (2, 2), (2, 3)]
 
-Verify re-use of tuples (a side benefit of using genexps over listcomps)
-
-    >>> tupleids = list(map(id, ((i,i) for i in range(10))))
-    >>> int(max(tupleids) - min(tupleids))
-    0
-
 Verify that syntax error's are raised for genexps used as lvalues
 
     >>> (y for y in (1,2)) = 10
@@ -233,7 +227,7 @@ Make sure that None is a valid return value
 Check that generator attributes are present
 
     >>> g = (i*i for i in range(3))
-    >>> expected = set(['gi_frame', 'gi_running'])
+    >>> expected = set(['gi_running'])
     >>> set(attr for attr in dir(g) if not attr.startswith('__')) >= expected
     True
 

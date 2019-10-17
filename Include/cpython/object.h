@@ -271,7 +271,10 @@ struct _typeobject {
 
     destructor tp_finalize;
     vectorcallfunc tp_vectorcall;
+    unsigned int tp_typeid;
 };
+
+struct _dictkeysobject;
 
 /* The *real* layout of a type object when allocated on the heap */
 typedef struct _heaptypeobject {
@@ -288,10 +291,20 @@ typedef struct _heaptypeobject {
                                       see add_operators() in typeobject.c . */
     PyBufferProcs as_buffer;
     PyObject *ht_name, *ht_slots, *ht_qualname;
+    _PyMutex ht_mutex;
     struct _dictkeysobject *ht_cached_keys;
     PyObject *ht_module;
+    PyObject *ht_cached_dict; /* unowned reference; cleared in dict_dealloc */
     /* here are optional user slots, followed by the members. */
 } PyHeapTypeObject;
+
+#define MCACHE_SIZE_EXP         12
+
+struct method_cache_entry {
+    unsigned int version;
+    PyObject *name;             /* reference to exactly a str or None */
+    PyObject *value;            /* borrowed */
+};
 
 /* access macro to the members which are floating "behind" the object */
 #define PyHeapType_GET_MEMBERS(etype) \
@@ -328,6 +341,7 @@ PyAPI_FUNC(int) _PyObject_LookupAttr(PyObject *, PyObject *, PyObject **);
 PyAPI_FUNC(int) _PyObject_LookupAttrId(PyObject *, struct _Py_Identifier *, PyObject **);
 
 PyAPI_FUNC(int) _PyObject_GetMethod(PyObject *obj, PyObject *name, PyObject **method);
+PyAPI_FUNC(int) _PyObject_GetMethodStack(PyObject *obj, PyObject *name, PyObject **method);
 
 PyAPI_FUNC(PyObject **) _PyObject_GetDictPtr(PyObject *);
 PyAPI_FUNC(PyObject *) _PyObject_NextNotImplemented(PyObject *);
@@ -377,6 +391,12 @@ PyAPI_FUNC(PyObject *) _PyObject_FunctionStr(PyObject *);
         Py_XDECREF(_py_tmp);                    \
     } while (0)
 
+
+#define Py_RESURRECT(ob)        Py_INCREF(ob)
+#define Py_UNRESURRECT(ob)      _PyObject_Unresurrect(_PyObject_CAST(ob))
+
+PyAPI_FUNC(int)
+_PyObject_Unresurrect(PyObject *op);
 
 PyAPI_DATA(PyTypeObject) _PyNone_Type;
 PyAPI_DATA(PyTypeObject) _PyNotImplemented_Type;

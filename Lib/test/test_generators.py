@@ -306,6 +306,16 @@ class ExceptionTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'raised StopIteration'):
             next(gen())
 
+    def test_stopiteration_throw(self):
+        def gen():
+            yield
+
+        g = gen()
+        next(g)
+
+        with self.assertRaisesRegex(RuntimeError, 'raised StopIteration'):
+            g.throw(StopIteration, 'spam')
+
     def test_tutorial_stopiteration(self):
         # Raise StopIteration" stops the generator too:
 
@@ -340,6 +350,37 @@ class ExceptionTest(unittest.TestCase):
             gen.send(StopIteration(2))
         self.assertIsInstance(cm.exception.value, StopIteration)
         self.assertEqual(cm.exception.value.value, 2)
+
+    def test_yield_with_func_on_stack(self):
+        def bar(arg):
+            return arg * 2
+
+        def foo():
+            r = bar((yield 1))
+            yield r
+
+        gen = foo()
+        val = next(gen)
+        # after this, `bar` only exists on foo's stack
+        del bar; gc.collect()
+        self.assertEqual(val, 1)
+        self.assertEqual(gen.send(4 + val), 10)
+
+    def test_reentrant_throw(self):
+        def foo():
+            gen = yield
+            try:
+                yield
+            except RuntimeError:
+                gen.throw(RuntimeError, 'second')
+
+        gen = foo()
+        gen.send(None)
+        gen.send(gen)
+        with self.assertRaises(ValueError) as cm:
+            gen.throw(RuntimeError, 'first')
+        self.assertIn('generator already executing', repr(cm.exception))
+        self.assertIsInstance(cm.exception.__context__, RuntimeError)
 
 
 class GeneratorThrowTest(unittest.TestCase):
@@ -907,7 +948,7 @@ And more, added later.
 >>> i.gi_running = 42
 Traceback (most recent call last):
   ...
-AttributeError: readonly attribute
+AttributeError: attribute 'gi_running' of 'generator' objects is not writable
 >>> def g():
 ...     yield me.gi_running
 >>> me = g()

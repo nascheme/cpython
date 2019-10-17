@@ -2,11 +2,14 @@
 
 #include "Python.h"
 #include "code.h"
+#include "code2.h"
 #include "opcode.h"
 #include "structmember.h"         // PyMemberDef
 #include "pycore_code.h"
 #include "pycore_interp.h"        // PyInterpreterState.co_extra_freefuncs
-#include "pycore_pystate.h"       // _PyInterpreterState_GET()
+#include "pycore_object.h"
+#include "pycore_gc.h"
+#include "pycore_pystate.h"
 #include "pycore_tupleobject.h"
 #include "clinic/codeobject.c.h"
 
@@ -21,22 +24,18 @@ class code "PyCodeObject *" "&PyCode_Type"
 [clinic start generated code]*/
 /*[clinic end generated code: output=da39a3ee5e6b4b0d input=78aa5d576683bb4b]*/
 
-/* all_name_chars(s): true iff s matches [a-zA-Z0-9_]* */
+/* has_null_char(o): string contains NULL character */
 static int
-all_name_chars(PyObject *o)
+has_null_char(PyObject *o)
 {
     const unsigned char *s, *e;
-
-    if (!PyUnicode_IS_ASCII(o))
-        return 0;
-
     s = PyUnicode_1BYTE_DATA(o);
     e = s + PyUnicode_GET_LENGTH(o);
     for (; s != e; s++) {
-        if (!Py_ISALNUM(*s) && *s != '_')
-            return 0;
+        if (*s == 0)
+            return 1;
     }
-    return 1;
+    return 0;
 }
 
 static int
@@ -67,7 +66,7 @@ intern_string_constants(PyObject *tuple, int *modified)
                 return -1;
             }
 
-            if (all_name_chars(v)) {
+            if (!has_null_char(v)) {
                 PyObject *w = v;
                 PyUnicode_InternInPlace(&v);
                 if (w != v) {
@@ -121,6 +120,29 @@ PyCode_NewWithPosOnlyArgs(int argcount, int posonlyargcount, int kwonlyargcount,
                           PyObject *filename, PyObject *name, int firstlineno,
                           PyObject *lnotab)
 {
+    int callablesize = PyCompile_CallableStackSize(code);
+    if (callablesize < 0) {
+        return NULL;
+    }
+    int maxfblocks = PyCompile_BlockDepth(code);
+    if (maxfblocks < 0) {
+        return NULL;
+    }
+    return PyCode_NewInternal(argcount, posonlyargcount, kwonlyargcount, nlocals,
+                              stacksize, callablesize, maxfblocks,
+                              flags, code, consts, names,
+                              varnames, freevars, cellvars, filename,
+                              name, firstlineno, lnotab);
+}
+
+PyCodeObject *
+PyCode_NewInternal(int argcount, int posonlyargcount, int kwonlyargcount,
+                   int nlocals, int stacksize, int callablesize, int maxfblocks, int flags,
+                   PyObject *code, PyObject *consts, PyObject *names,
+                   PyObject *varnames, PyObject *freevars, PyObject *cellvars,
+                   PyObject *filename, PyObject *name, int firstlineno,
+                   PyObject *lnotab)
+{
     PyCodeObject *co;
     Py_ssize_t *cell2arg = NULL;
     Py_ssize_t i, n_cellvars, n_varnames, total_args;
@@ -164,6 +186,16 @@ PyCode_NewWithPosOnlyArgs(int argcount, int posonlyargcount, int kwonlyargcount,
     }
     if (intern_string_constants(consts, NULL) < 0) {
         return NULL;
+    }
+    Py_ssize_t nconst = PyTuple_GET_SIZE(consts);
+    for (Py_ssize_t i = 0; i < nconst; i++) {
+        PyObject *op = PyTuple_GET_ITEM(consts, i);
+        if (_Py_ThreadLocal(op) &&
+            (PyLong_CheckExact(op) || PyFloat_CheckExact(op))) {
+            // intern number constants
+            op->ob_ref_local |= _Py_REF_IMMORTAL_MASK;
+            op->ob_tid = 0;
+        }
     }
 
     /* Make sure that code is indexable with an int, this is
@@ -228,17 +260,25 @@ PyCode_NewWithPosOnlyArgs(int argcount, int posonlyargcount, int kwonlyargcount,
             cell2arg = NULL;
         }
     }
-    co = PyObject_New(PyCodeObject, &PyCode_Type);
+    co = PyObject_GC_New(PyCodeObject, &PyCode_Type);
     if (co == NULL) {
         if (cell2arg)
             PyMem_FREE(cell2arg);
         return NULL;
+    }
+    if (Py_SIZE(code) > 0) {
+        // FIXME: for now we only set deferred RC on non-empty code objects
+        // because we use empty code objects as placeholders for tracebacks
+        // in the new interpreter.
+        _PyObject_SET_DEFERRED_RC((PyObject *)co);
     }
     co->co_argcount = argcount;
     co->co_posonlyargcount = posonlyargcount;
     co->co_kwonlyargcount = kwonlyargcount;
     co->co_nlocals = nlocals;
     co->co_stacksize = stacksize;
+    co->co_callablesize = callablesize;
+    co->co_maxfblocks = maxfblocks;
     co->co_flags = flags;
     Py_INCREF(code);
     co->co_code = code;
@@ -268,6 +308,8 @@ PyCode_NewWithPosOnlyArgs(int argcount, int posonlyargcount, int kwonlyargcount,
     co->co_opcache = NULL;
     co->co_opcache_flag = 0;
     co->co_opcache_size = 0;
+
+    PyObject_GC_Track(co);
     return co;
 }
 
@@ -302,7 +344,7 @@ _PyCode_InitOpcache(PyCodeObject *co)
         i++;  // 'i' is now aligned to (next_instr - first_instr)
 
         // TODO: LOAD_METHOD, LOAD_ATTR
-        if (opcode == LOAD_GLOBAL) {
+        if (opcode == LOAD_GLOBAL || opcode == LOAD_GLOBAL_FOR_CALL) {
             opts++;
             co->co_opcache_map[i] = (unsigned char)opts;
             if (opts > 254) {
@@ -385,7 +427,9 @@ static PyMemberDef code_memberlist[] = {
     {"co_posonlyargcount",      T_INT,  OFF(co_posonlyargcount), READONLY},
     {"co_kwonlyargcount",       T_INT,  OFF(co_kwonlyargcount),  READONLY},
     {"co_nlocals",      T_INT,          OFF(co_nlocals),         READONLY},
-    {"co_stacksize",T_INT,              OFF(co_stacksize),       READONLY},
+    {"co_stacksize",    T_INT,          OFF(co_stacksize),       READONLY},
+    {"co_callablesize", T_INT,          OFF(co_callablesize),    READONLY},
+    {"co_maxfblocks",   T_INT,          OFF(co_maxfblocks),      READONLY},
     {"co_flags",        T_INT,          OFF(co_flags),           READONLY},
     {"co_code",         T_OBJECT,       OFF(co_code),            READONLY},
     {"co_consts",       T_OBJECT,       OFF(co_consts),          READONLY},
@@ -448,6 +492,12 @@ PyDoc_STRVAR(code_doc,
       firstlineno, lnotab[, freevars[, cellvars]])\n\
 \n\
 Create a code object.  Not for the faint of heart.");
+
+static int
+code_traverse(PyCodeObject *co, visitproc visit, void *arg)
+{
+    return 0;
+}
 
 static PyObject *
 code_new(PyTypeObject *type, PyObject *args, PyObject *kw)
@@ -553,6 +603,7 @@ code_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 static void
 code_dealloc(PyCodeObject *co)
 {
+    PyObject_GC_UnTrack(co);
     if (co->co_opcache != NULL) {
         PyMem_FREE(co->co_opcache);
     }
@@ -592,7 +643,7 @@ code_dealloc(PyCodeObject *co)
         PyObject_GC_Del(co->co_zombieframe);
     if (co->co_weakreflist != NULL)
         PyObject_ClearWeakRefs((PyObject*)co);
-    PyObject_DEL(co);
+    PyObject_GC_Del(co);
 }
 
 static PyObject *
@@ -713,7 +764,8 @@ _PyCode_ConstantKey(PyObject *op)
        || PyLong_CheckExact(op)
        || PyUnicode_CheckExact(op)
           /* code_richcompare() uses _PyCode_ConstantKey() internally */
-       || PyCode_Check(op))
+       || PyCode_Check(op)
+       || PyCode2_Check(op))
     {
         /* Objects of these types are always different from object of other
          * type and from tuples. */
@@ -819,6 +871,10 @@ _PyCode_ConstantKey(PyObject *op)
         key = PyTuple_Pack(2, set, op);
         Py_DECREF(set);
         return key;
+    }
+    else if (PySlice_Check(op)) {
+        PySliceObject *slice = (PySliceObject *)op;
+        return Py_BuildValue("(O(OOO))", Py_TYPE(op), slice->start, slice->stop, slice->step);
     }
     else {
         /* for other types, use the object identifier as a unique identifier
@@ -962,9 +1018,9 @@ PyTypeObject PyCode_Type = {
     PyObject_GenericGetAttr,            /* tp_getattro */
     0,                                  /* tp_setattro */
     0,                                  /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT,                 /* tp_flags */
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, /* tp_flags */
     code_doc,                           /* tp_doc */
-    0,                                  /* tp_traverse */
+    (traverseproc)code_traverse,        /* tp_traverse */
     0,                                  /* tp_clear */
     code_richcompare,                   /* tp_richcompare */
     offsetof(PyCodeObject, co_weakreflist),     /* tp_weaklistoffset */
@@ -1055,67 +1111,4 @@ _PyCode_CheckLineNumber(PyCodeObject* co, int lasti, PyAddrPair *bounds)
     }
 
     return line;
-}
-
-
-int
-_PyCode_GetExtra(PyObject *code, Py_ssize_t index, void **extra)
-{
-    if (!PyCode_Check(code)) {
-        PyErr_BadInternalCall();
-        return -1;
-    }
-
-    PyCodeObject *o = (PyCodeObject*) code;
-    _PyCodeObjectExtra *co_extra = (_PyCodeObjectExtra*) o->co_extra;
-
-    if (co_extra == NULL || co_extra->ce_size <= index) {
-        *extra = NULL;
-        return 0;
-    }
-
-    *extra = co_extra->ce_extras[index];
-    return 0;
-}
-
-
-int
-_PyCode_SetExtra(PyObject *code, Py_ssize_t index, void *extra)
-{
-    PyInterpreterState *interp = _PyInterpreterState_GET();
-
-    if (!PyCode_Check(code) || index < 0 ||
-            index >= interp->co_extra_user_count) {
-        PyErr_BadInternalCall();
-        return -1;
-    }
-
-    PyCodeObject *o = (PyCodeObject*) code;
-    _PyCodeObjectExtra *co_extra = (_PyCodeObjectExtra *) o->co_extra;
-
-    if (co_extra == NULL || co_extra->ce_size <= index) {
-        Py_ssize_t i = (co_extra == NULL ? 0 : co_extra->ce_size);
-        co_extra = PyMem_Realloc(
-                co_extra,
-                sizeof(_PyCodeObjectExtra) +
-                (interp->co_extra_user_count-1) * sizeof(void*));
-        if (co_extra == NULL) {
-            return -1;
-        }
-        for (; i < interp->co_extra_user_count; i++) {
-            co_extra->ce_extras[i] = NULL;
-        }
-        co_extra->ce_size = interp->co_extra_user_count;
-        o->co_extra = co_extra;
-    }
-
-    if (co_extra->ce_extras[index] != NULL) {
-        freefunc free = interp->co_extra_freefuncs[index];
-        if (free != NULL) {
-            free(co_extra->ce_extras[index]);
-        }
-    }
-
-    co_extra->ce_extras[index] = extra;
-    return 0;
 }

@@ -69,10 +69,6 @@ MEMORY_SANITIZER = (
     '--with-memory-sanitizer' in _config_args
 )
 
-# Does io.IOBase finalizer log the exception if the close() method fails?
-# The exception is ignored silently by default in release build.
-IOBASE_EMITS_UNRAISABLE = (hasattr(sys, "gettotalrefcount") or sys.flags.dev_mode)
-
 
 def _default_chunk_size():
     """Get the default TextIOWrapper chunk size"""
@@ -1113,9 +1109,7 @@ class CommonBufferedTests:
             with self.assertRaises(AttributeError):
                 self.tp(rawio).xyzzy
 
-            if not IOBASE_EMITS_UNRAISABLE:
-                self.assertIsNone(cm.unraisable)
-            elif cm.unraisable is not None:
+            if cm.unraisable is not None:
                 self.assertEqual(cm.unraisable.exc_type, OSError)
 
     def test_repr(self):
@@ -1452,6 +1446,7 @@ class BufferedReaderTest(unittest.TestCase, CommonBufferedTests):
             N = 1000
             l = list(range(256)) * N
             random.shuffle(l)
+            lock = threading.Lock()
             s = bytes(bytearray(l))
             with self.open(support.TESTFN, "wb") as f:
                 f.write(s)
@@ -1467,9 +1462,11 @@ class BufferedReaderTest(unittest.TestCase, CommonBufferedTests):
                             if not s:
                                 break
                             # list.append() is atomic
-                            results.append(s)
+                            with lock:
+                                results.append(s)
                     except Exception as e:
-                        errors.append(e)
+                        with lock:
+                            errors.append(e)
                         raise
                 threads = [threading.Thread(target=f) for x in range(20)]
                 with support.start_threads(threads):
@@ -1816,6 +1813,7 @@ class BufferedWriterTest(unittest.TestCase, CommonBufferedTests):
                 queue.append(contents[n:n+size])
                 n += size
             del contents
+            lock = threading.Lock()
             # We use a real file object because it allows us to
             # exercise situations where the GIL is released before
             # writing the buffer to the raw streams. This is in addition
@@ -1828,12 +1826,14 @@ class BufferedWriterTest(unittest.TestCase, CommonBufferedTests):
                     try:
                         while True:
                             try:
-                                s = queue.popleft()
+                                with lock:
+                                    s = queue.popleft()
                             except IndexError:
                                 return
                             bufio.write(s)
                     except Exception as e:
-                        errors.append(e)
+                        with lock:
+                            errors.append(e)
                         raise
                 threads = [threading.Thread(target=f) for x in range(20)]
                 with support.start_threads(threads):
@@ -2116,6 +2116,11 @@ class BufferedRWPairTest(unittest.TestCase):
         # Silence destructor error
         reader.close = lambda: None
         writer.close = lambda: None
+
+        with support.catch_unraisable_exception():
+            # Ignore BufferedRWPair unraisable exception
+            pair = None
+            support.gc_collect()
 
     def test_isatty(self):
         class SelectableIsAtty(MockRawIO):
@@ -2891,9 +2896,7 @@ class TextIOWrapperTest(unittest.TestCase):
             with self.assertRaises(AttributeError):
                 self.TextIOWrapper(rawio).xyzzy
 
-            if not IOBASE_EMITS_UNRAISABLE:
-                self.assertIsNone(cm.unraisable)
-            elif cm.unraisable is not None:
+            if cm.unraisable is not None:
                 self.assertEqual(cm.unraisable.exc_type, OSError)
 
     # Systematic tests of the text I/O API
@@ -3499,10 +3502,8 @@ class TextIOWrapperTest(unittest.TestCase):
             codecs.lookup('utf-8')
 
             class C:
-                def __init__(self):
-                    self.buf = io.BytesIO()
                 def __del__(self):
-                    io.TextIOWrapper(self.buf, **{kwargs})
+                    io.TextIOWrapper(io.BytesIO(), **{kwargs})
                     print("ok")
             c = C()
             """.format(iomod=iomod, kwargs=kwargs)
@@ -4583,4 +4584,5 @@ def load_tests(*args):
     return suite
 
 if __name__ == "__main__":
+    load_tests()
     unittest.main()

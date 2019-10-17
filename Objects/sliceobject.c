@@ -16,7 +16,10 @@ this type and there is exactly one in existence.
 #include "Python.h"
 #include "pycore_abstract.h"      // _PyIndex_Check()
 #include "pycore_object.h"
-#include "structmember.h"         // PyMemberDef
+#include "pycore_pymem.h"
+#include "pycore_pystate.h"
+#include "structmember.h"
+#include "ceval2_meta.h"
 
 static PyObject *
 ellipsis_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
@@ -87,10 +90,7 @@ PyTypeObject PyEllipsis_Type = {
     ellipsis_new,                       /* tp_new */
 };
 
-PyObject _Py_EllipsisObject = {
-    _PyObject_EXTRA_INIT
-    1, &PyEllipsis_Type
-};
+PyObject _Py_EllipsisObject = _PyObject_STRUCT_INIT(&PyEllipsis_Type);
 
 
 /* Slice object implementation */
@@ -98,15 +98,8 @@ PyObject _Py_EllipsisObject = {
 /* Using a cache is very effective since typically only a single slice is
  * created and then deleted again
  */
-static PySliceObject *slice_cache = NULL;
-
 void _PySlice_Fini(void)
 {
-    PySliceObject *obj = slice_cache;
-    if (obj != NULL) {
-        slice_cache = NULL;
-        PyObject_GC_Del(obj);
-    }
 }
 
 /* start, stop, and step are python objects with None indicating no
@@ -116,16 +109,9 @@ void _PySlice_Fini(void)
 PyObject *
 PySlice_New(PyObject *start, PyObject *stop, PyObject *step)
 {
-    PySliceObject *obj;
-    if (slice_cache != NULL) {
-        obj = slice_cache;
-        slice_cache = NULL;
-        _Py_NewReference((PyObject *)obj);
-    } else {
-        obj = PyObject_GC_New(PySliceObject, &PySlice_Type);
-        if (obj == NULL)
-            return NULL;
-    }
+    PySliceObject *obj = PyObject_GC_New(PySliceObject, &PySlice_Type);
+    if (obj == NULL)
+        return NULL;
 
     if (step == NULL) step = Py_None;
     Py_INCREF(step);
@@ -133,6 +119,42 @@ PySlice_New(PyObject *start, PyObject *stop, PyObject *step)
     Py_INCREF(start);
     if (stop == NULL) stop = Py_None;
     Py_INCREF(stop);
+
+    obj->step = step;
+    obj->start = start;
+    obj->stop = stop;
+
+    _PyObject_GC_TRACK(obj);
+    return (PyObject *) obj;
+}
+
+PyObject *
+vm_build_slice(struct ThreadState *ts, Py_ssize_t base)
+{
+    PySliceObject *obj = PyObject_GC_New(PySliceObject, &PySlice_Type);
+    if (obj == NULL) {
+        return NULL;
+    }
+
+    PyObject *start, *stop, *step;
+
+    start = AS_OBJ(ts->regs[base]);
+    if (!IS_RC(ts->regs[base])) {
+        Py_INCREF(start);
+    }
+
+    stop = AS_OBJ(ts->regs[base + 1]);
+    if (!IS_RC(ts->regs[base + 1])) {
+        Py_INCREF(stop);
+    }
+    step = AS_OBJ(ts->regs[base + 2]);
+    if (!IS_RC(ts->regs[base + 2])) {
+        Py_INCREF(step);
+    }
+
+    ts->regs[base + 0].as_int64 = 0;
+    ts->regs[base + 1].as_int64 = 0;
+    ts->regs[base + 2].as_int64 = 0;
 
     obj->step = step;
     obj->start = start;
@@ -328,10 +350,7 @@ slice_dealloc(PySliceObject *r)
     Py_DECREF(r->step);
     Py_DECREF(r->start);
     Py_DECREF(r->stop);
-    if (slice_cache == NULL)
-        slice_cache = r;
-    else
-        PyObject_GC_Del(r);
+    PyObject_GC_Del(r);
 }
 
 static PyObject *

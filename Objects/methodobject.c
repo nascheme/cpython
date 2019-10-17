@@ -5,8 +5,10 @@
 #include "pycore_ceval.h"         // _Py_EnterRecursiveCall()
 #include "pycore_object.h"
 #include "pycore_pyerrors.h"
-#include "pycore_pystate.h"       // _PyThreadState_GET()
-#include "structmember.h"         // PyMemberDef
+#include "pycore_pymem.h"
+#include "pycore_pystate.h"
+#include "structmember.h"
+#include "opcode2.h"
 
 /* undefine macro trampoline to PyCFunction_NewEx */
 #undef PyCFunction_New
@@ -34,6 +36,17 @@ PyCFunction_New(PyMethodDef *ml, PyObject *self)
     return PyCFunction_NewEx(ml, self, NULL);
 }
 
+static const uint8_t cfunc_header_noargs =  CFUNC_HEADER_NOARGS;
+static const uint8_t cfunc_header_o =  CFUNC_HEADER_O;
+
+static const uint8_t func_vector_call[] = {
+    CFUNC_HEADER, 0, 0, 0
+};
+
+static const uint8_t func_tp_call[] = {
+    FUNC_TPCALL_HEADER, 0, 0, 0
+};
+
 PyObject *
 PyCFunction_NewEx(PyMethodDef *ml, PyObject *self, PyObject *module)
 {
@@ -45,6 +58,7 @@ PyCMethod_New(PyMethodDef *ml, PyObject *self, PyObject *module, PyTypeObject *c
 {
     /* Figure out correct vectorcall function to use */
     vectorcallfunc vectorcall;
+    const uint8_t *first_instr = &func_vector_call[0];
     switch (ml->ml_flags & (METH_VARARGS | METH_FASTCALL | METH_NOARGS |
                             METH_O | METH_KEYWORDS | METH_METHOD))
     {
@@ -53,6 +67,7 @@ PyCMethod_New(PyMethodDef *ml, PyObject *self, PyObject *module, PyTypeObject *c
             /* For METH_VARARGS functions, it's more efficient to use tp_call
              * instead of vectorcall. */
             vectorcall = NULL;
+            first_instr = &func_tp_call[0];
             break;
         case METH_FASTCALL:
             vectorcall = cfunction_vectorcall_FASTCALL;
@@ -62,9 +77,11 @@ PyCMethod_New(PyMethodDef *ml, PyObject *self, PyObject *module, PyTypeObject *c
             break;
         case METH_NOARGS:
             vectorcall = cfunction_vectorcall_NOARGS;
+            first_instr = &cfunc_header_noargs;
             break;
         case METH_O:
             vectorcall = cfunction_vectorcall_O;
+            first_instr = &cfunc_header_o;
             break;
         case METH_METHOD | METH_FASTCALL | METH_KEYWORDS:
             vectorcall = cfunction_vectorcall_FASTCALL_KEYWORDS_METHOD;
@@ -103,7 +120,7 @@ PyCMethod_New(PyMethodDef *ml, PyObject *self, PyObject *module, PyTypeObject *c
             return NULL;
         }
     }
-
+    ((PyFuncBase *)op)->first_instr = first_instr;
     op->m_weakreflist = NULL;
     op->m_ml = ml;
     Py_XINCREF(self);
@@ -355,7 +372,8 @@ PyTypeObject PyCFunction_Type = {
     0,                                          /* tp_setattro */
     0,                                          /* tp_as_buffer */
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
-    Py_TPFLAGS_HAVE_VECTORCALL,                 /* tp_flags */
+    Py_TPFLAGS_HAVE_VECTORCALL |
+    Py_TPFLAGS_FUNC_INTERFACE,                  /* tp_flags */
     0,                                          /* tp_doc */
     (traverseproc)meth_traverse,                /* tp_traverse */
     0,                                          /* tp_clear */

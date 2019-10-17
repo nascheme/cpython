@@ -12,12 +12,18 @@ typedef struct {
     int b_type;                 /* what kind of block this is */
     int b_handler;              /* where to jump to find handler */
     int b_level;                /* value stack level to pop to */
+    int b_callablelevel;        /* callable stack level to pop to */
 } PyTryBlock;
+
+struct _PyCodeObject2;
+typedef struct _PyCodeObject2 PyCodeObject2;
 
 struct _frame {
     PyObject_VAR_HEAD
     struct _frame *f_back;      /* previous frame, or NULL */
     PyCodeObject *f_code;       /* code segment */
+    PyCodeObject2 *f_code2;       /* code segment */
+    struct ThreadState *ts;
     PyObject *f_builtins;       /* builtin symbol table (PyDictObject) */
     PyObject *f_globals;        /* global symbol table (PyDictObject) */
     PyObject *f_locals;         /* local symbol table (any mapping) */
@@ -26,9 +32,12 @@ struct _frame {
        Frame evaluation usually NULLs it, but a frame that yields sets it
        to the current stack top. */
     PyObject **f_stacktop;
+    PyObject **f_callablestack;    /* points after the last local */
+    /* Next free slot in f_valuestack.  Frame creation sets to f_valuestack.
+       Frame evaluation usually NULLs it, but a frame that yields sets it
+       to the current stack top. */
+    PyObject **f_callabletop;
     PyObject *f_trace;          /* Trace function */
-    char f_trace_lines;         /* Emit per-line trace events? */
-    char f_trace_opcodes;       /* Emit per-opcode trace events? */
 
     /* Borrowed reference to a generator, or NULL */
     PyObject *f_gen;
@@ -41,8 +50,20 @@ struct _frame {
        bytecode index. */
     int f_lineno;               /* Current line number */
     int f_iblock;               /* index in f_blockstack */
+    char f_trace_lines;         /* Emit per-line trace events? */
+    char f_trace_opcodes;       /* Emit per-opcode trace events? */
     char f_executing;           /* whether the frame is still executing */
-    PyTryBlock f_blockstack[CO_MAXBLOCKS]; /* for try and loop blocks */
+    char f_retains_code;        /* Use deferred ref counting for builtins, globals, code */
+    Py_ssize_t f_offset;        /* offset from the bottom of the stack */
+
+    /* tracing stuff */
+    int instr_lb;
+    int instr_ub;
+    int last_line;
+    unsigned int seen_func_header : 1;
+    unsigned int traced_func : 1;
+
+    PyTryBlock *f_blockstack;
     PyObject *f_localsplus[1];  /* locals+stack, dynamically sized */
 };
 
@@ -60,6 +81,8 @@ PyAPI_FUNC(PyFrameObject *) PyFrame_New(PyThreadState *, PyCodeObject *,
 PyFrameObject* _PyFrame_New_NoTrack(PyThreadState *, PyCodeObject *,
                                     PyObject *, PyObject *);
 
+PyFrameObject* _PyFrame_NewFake(PyCodeObject2 *, PyObject *);
+
 
 /* The rest of the interface is specific for frame objects */
 
@@ -67,6 +90,8 @@ PyFrameObject* _PyFrame_New_NoTrack(PyThreadState *, PyCodeObject *,
 
 PyAPI_FUNC(void) PyFrame_BlockSetup(PyFrameObject *, int, int, int);
 PyAPI_FUNC(PyTryBlock *) PyFrame_BlockPop(PyFrameObject *);
+PyAPI_FUNC(void) PyFrame_BlockUnwind(PyFrameObject *f, PyTryBlock *b, PyObject ***sp);
+PyAPI_FUNC(void) PyFrame_BlockUnwindExceptHandler(PyFrameObject *f, PyTryBlock *b, PyObject ***sp);
 
 /* Conversions between "fast locals" and locals in dictionary */
 
@@ -74,6 +99,11 @@ PyAPI_FUNC(void) PyFrame_LocalsToFast(PyFrameObject *, int);
 
 PyAPI_FUNC(int) PyFrame_FastToLocalsWithError(PyFrameObject *f);
 PyAPI_FUNC(void) PyFrame_FastToLocals(PyFrameObject *);
+
+PyAPI_FUNC(void) PyFrame_RetainForGC(PyFrameObject *);
+PyAPI_FUNC(void) PyFrame_UnretainForGC(PyFrameObject *);
+
+PyAPI_FUNC(int) PyFrame_ClearFreeList(void);
 
 PyAPI_FUNC(void) _PyFrame_DebugMallocStats(FILE *out);
 

@@ -988,7 +988,7 @@ static int add_ast_fields(astmodulestate *state)
 
 """, 0, reflow=False)
 
-        self.emit("static int init_types(astmodulestate *state)",0)
+        self.emit("static int init_types_inner(astmodulestate *state)",0)
         self.emit("{", 0)
         self.emit("if (state->initialized) return 1;", 1)
         self.emit("if (init_identifiers(state) < 0) return 0;", 1)
@@ -1000,6 +1000,26 @@ static int add_ast_fields(astmodulestate *state)
         self.emit("state->initialized = 1;", 1)
         self.emit("return 1;", 1);
         self.emit("}", 0)
+
+        self.emit("""
+static int
+init_types(astmodulestate *state)
+{
+    static _PyOnceFlag once;
+    if (!_PyBeginOnce(&once)) {
+        return 1;
+    }
+
+    int ok = init_types_inner(state);
+    if (!ok) {
+        _PyEndOnceFailed(&once);
+        return 0;
+    }
+
+    _PyEndOnce(&once);
+    return 1;
+}
+""", 0, reflow=False)
 
     def visitProduct(self, prod, name):
         if prod.fields:
@@ -1082,6 +1102,9 @@ class ASTModuleVisitor(PickleVisitor):
         self.emit('}', 1)
         self.emit('if (PyModule_AddIntMacro(m, PyCF_ONLY_AST) < 0) {', 1)
         self.emit("return -1;", 2)
+        self.emit('}', 1)
+        self.emit('if (PyModule_AddIntMacro(m, PyCF_OPTIMIZE_AST) < 0) {', 1)
+        self.emit("goto error;", 2)
         self.emit('}', 1)
         self.emit('if (PyModule_AddIntMacro(m, PyCF_TYPE_COMMENTS) < 0) {', 1)
         self.emit("return -1;", 2)

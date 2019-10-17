@@ -18,6 +18,10 @@ Data members:
 #include "code.h"
 #include "frameobject.h"          // PyFrame_GetBack()
 #include "pycore_ceval.h"         // _Py_RecursionLimitLowerWaterMark()
+#include "code2.h"
+#include "ceval2_meta.h"
+#include "frameobject.h"
+#include "pycore_ceval.h"
 #include "pycore_initconfig.h"
 #include "pycore_object.h"
 #include "pycore_pathconfig.h"
@@ -26,6 +30,9 @@ Data members:
 #include "pycore_pymem.h"         // _PyMem_SetDefaultAllocator()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "pycore_tupleobject.h"
+#include "pycore_qsbr.h"
+#include "pythread.h"
+#include "pydtrace.h"
 
 #include "pydtrace.h"
 #include "osdefs.h"               // DELIM
@@ -748,6 +755,7 @@ sys_excepthook_impl(PyObject *module, PyObject *exctype, PyObject *value,
     Py_RETURN_NONE;
 }
 
+PyObject *vm_cur_handled_exc(void);
 
 /*[clinic input]
 sys.exc_info
@@ -762,13 +770,17 @@ static PyObject *
 sys_exc_info_impl(PyObject *module)
 /*[clinic end generated code: output=3afd0940cf3a4d30 input=b5c5bf077788a3e5]*/
 {
-    _PyErr_StackItem *err_info = _PyErr_GetTopmostException(_PyThreadState_GET());
-    return Py_BuildValue(
-        "(OOO)",
-        err_info->exc_type != NULL ? err_info->exc_type : Py_None,
-        err_info->exc_value != NULL ? err_info->exc_value : Py_None,
-        err_info->exc_traceback != NULL ?
-            err_info->exc_traceback : Py_None);
+    PyObject *exc_value = NULL, *exc_type = NULL, *exc_traceback = NULL;
+    exc_value = vm_cur_handled_exc();
+    if (exc_value != NULL) {
+        exc_type = (PyObject *)Py_TYPE(exc_value);
+        exc_traceback = ((PyBaseExceptionObject *)exc_value)->traceback;
+    }
+
+    return Py_BuildValue("(OOO)",
+        exc_type != NULL ? exc_type : Py_None,
+        exc_value != NULL ? exc_value : Py_None,
+        exc_traceback != NULL ? exc_traceback : Py_None);
 }
 
 
@@ -929,8 +941,10 @@ static PyObject *
 call_trampoline(PyThreadState *tstate, PyObject* callback,
                 PyFrameObject *frame, int what, PyObject *arg)
 {
-    if (PyFrame_FastToLocalsWithError(frame) < 0) {
-        return NULL;
+    if (0 /*!tstate->use_new_interp*/) {
+        if (PyFrame_FastToLocalsWithError(frame) < 0) {
+            return NULL;
+        }
     }
 
     PyObject *stack[3];
@@ -941,7 +955,10 @@ call_trampoline(PyThreadState *tstate, PyObject* callback,
     /* call the Python-level function */
     PyObject *result = _PyObject_FastCallTstate(tstate, callback, stack, 3);
 
-    PyFrame_LocalsToFast(frame, 1);
+    if (0 /*!tstate->use_new_interp*/) {
+       PyFrame_LocalsToFast(frame, 1);
+    }
+
     if (result == NULL) {
         PyTraceBack_Here(frame);
     }
@@ -1738,6 +1755,79 @@ sys_getrefcount_impl(PyObject *module, PyObject *object)
     return Py_REFCNT(object);
 }
 
+/*[clinic input]
+sys.getfullrefcount ->
+
+    object:  object
+    /
+
+Return the reference count of object.
+
+The count returned is generally one higher than you might expect,
+because it includes the (temporary) reference as an argument to
+getrefcount().
+[clinic start generated code]*/
+
+static PyObject *
+sys_getfullrefcount(PyObject *module, PyObject *object)
+/*[clinic end generated code: output=2f39a7bf08762090 input=ef418950716349aa]*/
+{
+    PyObject *res = PyDict_New();
+    if (!res) {
+        return NULL;
+    }
+
+    // TODO (sgross): clean this up
+    uintptr_t tid = _PyObject_ThreadId(object);
+
+    Py_ssize_t local, shared;
+    int deferred, immortal, queued, merged;
+
+    deferred = (object->ob_ref_local & _Py_REF_DEFERRED_MASK) != 0;
+    _PyRef_UnpackLocal(object->ob_ref_local, &local, &immortal);
+    _PyRef_UnpackShared(object->ob_ref_shared, &shared, &queued, &merged);
+
+    PyDict_SetItemString(res, "local", PyLong_FromSsize_t(local));
+    PyDict_SetItemString(res, "shared", PyLong_FromSsize_t(shared));
+    PyDict_SetItemString(res, "merged", PyBool_FromLong(merged));
+    PyDict_SetItemString(res, "queued", PyBool_FromLong(queued));
+    PyDict_SetItemString(res, "immortal", PyBool_FromLong(immortal));
+    PyDict_SetItemString(res, "deferred", PyBool_FromLong(deferred));
+    if (queued) {
+        Py_INCREF(Py_None);
+        PyDict_SetItemString(res, "tid", Py_None);
+    }
+    else {
+        PyDict_SetItemString(res, "tid", PyLong_FromVoidPtr((void*)tid));
+    }
+
+    return res;
+}
+
+/*[clinic input]
+sys.mergerefcount -> object
+
+    object:  object
+    /
+
+Return the reference count of object.
+
+The count returned is generally one higher than you might expect,
+because it includes the (temporary) reference as an argument to
+getrefcount().
+[clinic start generated code]*/
+
+static PyObject *
+sys_mergerefcount(PyObject *module, PyObject *object)
+/*[clinic end generated code: output=fcf63cbbf05c295d input=db12481f016621a8]*/
+{
+    if (_PyObject_ThreadId(object) == _Py_ThreadId()) {
+        _Py_ExplicitMergeRefcount(object);
+    }
+    Py_INCREF(object);
+    return object;
+}
+
 #ifdef Py_REF_DEBUG
 /*[clinic input]
 sys.gettotalrefcount -> Py_ssize_t
@@ -1764,7 +1854,6 @@ sys_getallocatedblocks_impl(PyObject *module)
     return _Py_GetAllocatedBlocks();
 }
 
-
 /*[clinic input]
 sys._getframe
 
@@ -1787,7 +1876,10 @@ sys__getframe_impl(PyObject *module, int depth)
 /*[clinic end generated code: output=d438776c04d59804 input=c1be8a6464b11ee5]*/
 {
     PyThreadState *tstate = _PyThreadState_GET();
-    PyFrameObject *f = PyThreadState_GetFrame(tstate);
+    PyFrameObject *f = vm_frame(tstate->active);
+    if (f == NULL) {
+        return NULL;
+    }
 
     if (_PySys_Audit(tstate, "sys._getframe", "O", f) < 0) {
         Py_DECREF(f);
@@ -1805,7 +1897,8 @@ sys__getframe_impl(PyObject *module, int depth)
                          "call stack is not deep enough");
         return NULL;
     }
-    return (PyObject*)f;
+    Py_INCREF(f);
+    return (PyObject *)f;
 }
 
 /*[clinic input]
@@ -1914,6 +2007,57 @@ sys_is_finalizing_impl(PyObject *module)
     return PyBool_FromLong(_Py_IsFinalizing());
 }
 
+/*[clinic input]
+sys._qsbr_epoch
+
+Current QSBR epoch counter.
+[clinic start generated code]*/
+
+static PyObject *
+sys__qsbr_epoch_impl(PyObject *module)
+/*[clinic end generated code: output=b429cdff802e1b20 input=926beccfa946d777]*/
+{
+    PyObject *obj = NULL;
+    PyObject *rd_seq = NULL;
+    PyObject *wr_seq = NULL;
+    PyObject *t_seq = NULL;
+
+    obj = PyDict_New();
+    if (!obj) {
+        goto error;
+    }
+
+    rd_seq = PyLong_FromUnsignedLongLong(
+        (unsigned long long)_Py_atomic_load_uint64(&_PyRuntime.qsbr.s_rd_seq));
+    if (!rd_seq || PyDict_SetItemString(obj, "rd_seq", rd_seq) < 0) {
+        goto error;
+    }
+
+    wr_seq = PyLong_FromUnsignedLongLong(
+        (unsigned long long)_Py_atomic_load_uint64(&_PyRuntime.qsbr.s_wr));
+    if (!wr_seq || PyDict_SetItemString(obj, "wr_seq", wr_seq) < 0) {
+        goto error;
+    }
+
+    t_seq = PyLong_FromUnsignedLongLong(
+        (unsigned long long)_Py_atomic_load_uint64(&PyThreadState_GET()->qsbr->t_seq));
+    if (!t_seq || PyDict_SetItemString(obj, "t_seq", t_seq) < 0) {
+        goto error;
+    }
+
+    Py_DECREF(rd_seq);
+    Py_DECREF(wr_seq);
+    Py_DECREF(t_seq);
+    return obj;
+
+error:
+    Py_XDECREF(obj);
+    Py_XDECREF(rd_seq);
+    Py_XDECREF(wr_seq);
+    Py_XDECREF(t_seq);
+    return NULL;
+}
+
 #ifdef ANDROID_API_LEVEL
 /*[clinic input]
 sys.getandroidapilevel
@@ -1929,7 +2073,20 @@ sys_getandroidapilevel_impl(PyObject *module)
 }
 #endif   /* ANDROID_API_LEVEL */
 
+static PyObject *
+sys_FunctionTypes(PyObject *module)
+{
+    return Py_BuildValue("(OO)", (PyObject*)&PyFunc_Type,
+                                 (PyObject*)&PyFunction_Type);
+}
 
+
+static PyObject *
+sys_CodeTypes(PyObject *module)
+{
+    return Py_BuildValue("(OO)", (PyObject*)&PyCode2_Type,
+                                 (PyObject*)&PyCode_Type);
+}
 
 static PyMethodDef sys_methods[] = {
     /* Might as well keep this in alphabetic order */
@@ -1937,6 +2094,8 @@ static PyMethodDef sys_methods[] = {
     {"audit",           (PyCFunction)(void(*)(void))sys_audit, METH_FASTCALL, audit_doc },
     {"breakpointhook",  (PyCFunction)(void(*)(void))sys_breakpointhook,
      METH_FASTCALL | METH_KEYWORDS, breakpointhook_doc},
+    {"FunctionTypes",  (PyCFunction)(void(*)(void))sys_FunctionTypes, METH_NOARGS, NULL},
+    {"CodeTypes",  (PyCFunction)(void(*)(void))sys_CodeTypes, METH_NOARGS, NULL},
     SYS__CLEAR_TYPE_CACHE_METHODDEF
     SYS__CURRENT_FRAMES_METHODDEF
     SYS_DISPLAYHOOK_METHODDEF
@@ -1956,6 +2115,8 @@ static PyMethodDef sys_methods[] = {
 #endif
     SYS_GETTOTALREFCOUNT_METHODDEF
     SYS_GETREFCOUNT_METHODDEF
+    SYS_GETFULLREFCOUNT_METHODDEF
+    SYS_MERGEREFCOUNT_METHODDEF
     SYS_GETRECURSIONLIMIT_METHODDEF
     {"getsizeof",   (PyCFunction)(void(*)(void))sys_getsizeof,
      METH_VARARGS | METH_KEYWORDS, getsizeof_doc},
@@ -1964,6 +2125,7 @@ static PyMethodDef sys_methods[] = {
     SYS__ENABLELEGACYWINDOWSFSENCODING_METHODDEF
     SYS_INTERN_METHODDEF
     SYS_IS_FINALIZING_METHODDEF
+    SYS__QSBR_EPOCH_METHODDEF
     SYS_MDEBUG_METHODDEF
     SYS_SETSWITCHINTERVAL_METHODDEF
     SYS_GETSWITCHINTERVAL_METHODDEF
@@ -2441,6 +2603,7 @@ static PyStructSequence_Field flags_fields[] = {
     {"hash_randomization",      "-R"},
     {"isolated",                "-I"},
     {"dev_mode",                "-X dev"},
+    {"nogil",                   "-X nogil"},
     {"utf8_mode",               "-X utf8"},
     {0}
 };
@@ -2484,6 +2647,7 @@ make_flags(PyThreadState *tstate)
     SetFlag(config->use_hash_seed == 0 || config->hash_seed != 0);
     SetFlag(config->isolated);
     PyStructSequence_SET_ITEM(seq, pos++, PyBool_FromLong(config->dev_mode));
+    PyStructSequence_SET_ITEM(seq, pos++, PyBool_FromLong(config->disable_gil));
     SetFlag(preconfig->utf8_mode);
 #undef SetFlag
 
@@ -2564,7 +2728,7 @@ make_version_info(PyThreadState *tstate)
 }
 
 /* sys.implementation values */
-#define NAME "cpython"
+#define NAME "nogil"
 const char *_PySys_ImplName = NAME;
 #define MAJOR Py_STRINGIFY(PY_MAJOR_VERSION)
 #define MINOR Py_STRINGIFY(PY_MINOR_VERSION)

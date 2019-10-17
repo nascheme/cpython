@@ -11,26 +11,24 @@ name: f
 argcount: 1
 posonlyargcount: 0
 kwonlyargcount: 0
-names: ()
 varnames: ('x', 'g')
 cellvars: ('x',)
 freevars: ()
 nlocals: 2
 flags: 3
-consts: ('None', '<code object g>', "'f.<locals>.g'")
+consts: ('None', "'f'", '<code object g>')
 
 >>> dump(f(4).__code__)
 name: g
 argcount: 1
 posonlyargcount: 0
 kwonlyargcount: 0
-names: ()
-varnames: ('y',)
+varnames: ('y', 'x')
 cellvars: ()
 freevars: ('x',)
-nlocals: 1
+nlocals: 2
 flags: 19
-consts: ('None',)
+consts: ('None', "'f.<locals>.g'")
 
 >>> def h(x, y):
 ...     a = x + y
@@ -44,13 +42,12 @@ name: h
 argcount: 2
 posonlyargcount: 0
 kwonlyargcount: 0
-names: ()
 varnames: ('x', 'y', 'a', 'b', 'c')
 cellvars: ()
 freevars: ()
 nlocals: 5
-flags: 67
-consts: ('None',)
+flags: 3
+consts: ('None', "'h'")
 
 >>> def attrs(obj):
 ...     print(obj.attr1)
@@ -62,13 +59,12 @@ name: attrs
 argcount: 1
 posonlyargcount: 0
 kwonlyargcount: 0
-names: ('print', 'attr1', 'attr2', 'attr3')
 varnames: ('obj',)
 cellvars: ()
 freevars: ()
 nlocals: 1
-flags: 67
-consts: ('None',)
+flags: 3
+consts: ('None', "'attrs'", "'print'", "'attr1'", "'attr2'", "'attr3'")
 
 >>> def optimize_away():
 ...     'doc string'
@@ -81,13 +77,12 @@ name: optimize_away
 argcount: 0
 posonlyargcount: 0
 kwonlyargcount: 0
-names: ()
 varnames: ()
 cellvars: ()
 freevars: ()
 nlocals: 0
-flags: 67
-consts: ("'doc string'", 'None')
+flags: 3
+consts: ("'doc string'", "'optimize_away'", 'None')
 
 >>> def keywordonly_args(a,b,*,k1):
 ...     return a,b,k1
@@ -98,13 +93,12 @@ name: keywordonly_args
 argcount: 2
 posonlyargcount: 0
 kwonlyargcount: 1
-names: ()
 varnames: ('a', 'b', 'k1')
 cellvars: ()
-freevars: ()
+freevars: ('k1',)
 nlocals: 3
-flags: 67
-consts: ('None',)
+flags: 3
+consts: ('None', "'keywordonly_args'")
 
 >>> def posonly_args(a,b,/,c):
 ...     return a,b,c
@@ -115,13 +109,12 @@ name: posonly_args
 argcount: 3
 posonlyargcount: 2
 kwonlyargcount: 0
-names: ()
 varnames: ('a', 'b', 'c')
 cellvars: ()
 freevars: ()
 nlocals: 3
-flags: 67
-consts: ('None',)
+flags: 3
+consts: ('None', "'posonly_args'")
 
 """
 
@@ -130,6 +123,7 @@ import sys
 import threading
 import unittest
 import weakref
+import opcode
 try:
     import ctypes
 except ImportError:
@@ -150,7 +144,7 @@ def consts(t):
 def dump(co):
     """Print out a text representation of a code object."""
     for attr in ["name", "argcount", "posonlyargcount",
-                 "kwonlyargcount", "names", "varnames",
+                 "kwonlyargcount", "varnames",
                  "cellvars", "freevars", "nlocals", "flags"]:
         print("%s: %s" % (attr, getattr(co, "co_" + attr)))
     print("consts:", tuple(consts(co.co_consts)))
@@ -171,6 +165,7 @@ class CodeTest(unittest.TestCase):
         self.assertEqual(co.co_firstlineno, 15)
 
     @cpython_only
+    @unittest.skip("sgross: can't add freevars")
     def test_closure_injection(self):
         # From https://bugs.python.org/issue32176
         from types import FunctionType
@@ -217,18 +212,22 @@ class CodeTest(unittest.TestCase):
                         co.co_posonlyargcount,
                         co.co_kwonlyargcount,
                         co.co_nlocals,
-                        co.co_stacksize,
+                        co.co_framesize,
+                        co.co_ndefaultargs,
+                        co.co_nmeta,
                         co.co_flags,
                         co.co_code,
                         co.co_consts,
-                        co.co_names,
                         co.co_varnames,
                         co.co_filename,
                         co.co_name,
                         co.co_firstlineno,
                         co.co_lnotab,
+                        co.co_exc_handlers,
                         co.co_freevars,
-                        co.co_cellvars)
+                        co.co_cellvars,
+                        co.co_free2reg,
+                        co.co_cell2reg)
 
     def test_replace(self):
         def func():
@@ -247,12 +246,11 @@ class CodeTest(unittest.TestCase):
             ("co_posonlyargcount", 0),
             ("co_kwonlyargcount", 0),
             ("co_nlocals", 0),
-            ("co_stacksize", 0),
+            ("co_framesize", 0),
             ("co_flags", code.co_flags | inspect.CO_COROUTINE),
             ("co_firstlineno", 100),
             ("co_code", code2.co_code),
             ("co_consts", code2.co_consts),
-            ("co_names", ("myname",)),
             ("co_varnames", code2.co_varnames),
             ("co_freevars", ("freevar",)),
             ("co_cellvars", ("cellvar",)),
@@ -281,10 +279,6 @@ class CodeConstsTest(unittest.TestCase):
         if not isinterned(s):
             self.fail('String %r is not interned' % (s,))
 
-    def assertIsNotInterned(self, s):
-        if isinterned(s):
-            self.fail('String %r is interned' % (s,))
-
     @cpython_only
     def test_interned_string(self):
         co = compile('res = "str_value"', '?', 'exec')
@@ -309,12 +303,6 @@ class CodeConstsTest(unittest.TestCase):
             return a
         self.assertIsInterned(f())
 
-    @cpython_only
-    def test_interned_string_with_null(self):
-        co = compile(r'res = "str\0value!"', '?', 'exec')
-        v = self.find_const(co.co_consts, 'str\0value!')
-        self.assertIsNotInterned(v)
-
 
 class CodeWeakRefTest(unittest.TestCase):
 
@@ -333,7 +321,9 @@ class CodeWeakRefTest(unittest.TestCase):
         # f is now the last reference to the function, and through it, the code
         # object.  While we hold it, check that we can create a weakref and
         # deref it.  Then delete it, and check that the callback gets called and
-        # the reference dies.
+        # the reference dies. We need a gc call because code objects now use
+        # deferred reference counting to avoid contention on reference counts
+        # when accessed by multiple threads.
         coderef = weakref.ref(f.__code__, callback)
         self.assertTrue(bool(coderef()))
         del f
@@ -396,6 +386,7 @@ if check_impl_detail(cpython=True) and ctypes is not None:
 
             SetExtra(f.__code__, FREE_INDEX, ctypes.c_voidp(100))
             del f
+            gc_collect()
             self.assertEqual(LAST_FREED, 100)
 
         def test_get_set(self):
@@ -424,7 +415,8 @@ if check_impl_detail(cpython=True) and ctypes is not None:
                     self.f = f
                     self.test = test
                 def run(self):
-                    del self.f
+                    self.f = None
+                    gc.collect()
                     self.test.assertEqual(LAST_FREED, 500)
 
             SetExtra(f.__code__, FREE_INDEX, ctypes.c_voidp(500))

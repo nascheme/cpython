@@ -1581,25 +1581,12 @@ typedef struct {
 } futureiterobject;
 
 
-#define FI_FREELIST_MAXLEN 255
-static futureiterobject *fi_freelist = NULL;
-static Py_ssize_t fi_freelist_len = 0;
-
-
 static void
 FutureIter_dealloc(futureiterobject *it)
 {
     PyObject_GC_UnTrack(it);
     Py_CLEAR(it->future);
-
-    if (fi_freelist_len < FI_FREELIST_MAXLEN) {
-        fi_freelist_len++;
-        it->future = (FutureObj*) fi_freelist;
-        fi_freelist = it;
-    }
-    else {
-        PyObject_GC_Del(it);
-    }
+    PyObject_GC_Del(it);
 }
 
 static PyObject *
@@ -1747,18 +1734,9 @@ future_new_iter(PyObject *fut)
 
     ENSURE_FUTURE_ALIVE(fut)
 
-    if (fi_freelist_len) {
-        fi_freelist_len--;
-        it = fi_freelist;
-        fi_freelist = (futureiterobject*) it->future;
-        it->future = NULL;
-        _Py_NewReference((PyObject*) it);
-    }
-    else {
-        it = PyObject_GC_New(futureiterobject, &FutureIterType);
-        if (it == NULL) {
-            return NULL;
-        }
+    it = PyObject_GC_New(futureiterobject, &FutureIterType);
+    if (it == NULL) {
+        return NULL;
     }
 
     Py_INCREF(fut);
@@ -1992,15 +1970,13 @@ unregister_task(PyObject *task)
 static int
 enter_task(PyObject *loop, PyObject *task)
 {
-    PyObject *item;
-    Py_hash_t hash;
-    hash = PyObject_Hash(loop);
-    if (hash == -1) {
+    int is_insert;
+    PyObject *item = _PyDict_SetDefault(current_tasks, loop, task, 1,
+                                        &is_insert);
+    if (item == NULL) {
         return -1;
     }
-    item = _PyDict_GetItem_KnownHash(current_tasks, loop, hash);
-    if (item != NULL) {
-        Py_INCREF(item);
+    if (!is_insert) {
         PyErr_Format(
             PyExc_RuntimeError,
             "Cannot enter into task %R while another " \
@@ -2009,36 +1985,52 @@ enter_task(PyObject *loop, PyObject *task)
         Py_DECREF(item);
         return -1;
     }
-    if (PyErr_Occurred()) {
-        return -1;
-    }
-    return _PyDict_SetItem_KnownHash(current_tasks, loop, task, hash);
+    assert(item == task);
+    Py_DECREF(item);
+    return 0;
 }
 
+struct task_matches_arg {
+    PyObject *task;
+    PyObject *item;
+};
+
+static int
+task_matches(PyObject *item, void *data)
+{
+    struct task_matches_arg *arg = (struct task_matches_arg *)data;
+    Py_INCREF(item);
+    arg->item = item;
+    return arg->task == item;
+}
 
 static int
 leave_task(PyObject *loop, PyObject *task)
 /*[clinic end generated code: output=0ebf6db4b858fb41 input=51296a46313d1ad8]*/
 {
-    PyObject *item;
-    Py_hash_t hash;
-    hash = PyObject_Hash(loop);
-    if (hash == -1) {
-        return -1;
-    }
-    item = _PyDict_GetItem_KnownHash(current_tasks, loop, hash);
-    if (item != task) {
-        if (item == NULL) {
-            /* Not entered, replace with None */
-            item = Py_None;
+    struct task_matches_arg arg;
+    arg.task = task;
+    arg.item = Py_None;
+    int res = _PyDict_DelItemIf(current_tasks, loop, &task_matches, &arg);
+    if (res != 0) {
+        if (PyErr_ExceptionMatches(PyExc_KeyError)) {
+            // use custom error message if loop is not present
+            goto fail;
         }
-        PyErr_Format(
-            PyExc_RuntimeError,
-            "Leaving task %R does not match the current task %R.",
-            task, item, NULL);
         return -1;
     }
-    return _PyDict_DelItem_KnownHash(current_tasks, loop, hash);
+    if (arg.item == task) {
+        Py_XDECREF(arg.item);
+        return 0;
+    }
+
+fail:
+    PyErr_Format(
+        PyExc_RuntimeError,
+        "Leaving task %R does not match the current task %R.",
+        task, arg.item, NULL);
+    Py_XDECREF(arg.item);
+    return -1;
 }
 
 /* ----- Task */
@@ -2682,6 +2674,9 @@ task_step_impl(TaskObj *task, PyObject *exc)
         if (PyGen_CheckExact(coro) || PyCoro_CheckExact(coro)) {
             result = _PyGen_Send((PyGenObject*)coro, Py_None);
         }
+        else if (PyGen2_CheckExact(coro) || PyCoro2_CheckExact(coro)) {
+            result = _PyGen2_Send((PyGenObject2*)coro, Py_None);
+        }
         else {
             result = _PyObject_CallMethodIdOneArg(coro, &PyId_send, Py_None);
         }
@@ -2923,6 +2918,9 @@ task_step_impl(TaskObj *task, PyObject *exc)
     Py_XDECREF(o);
     /* Check if `result` is a generator */
     res = PyObject_IsInstance(result, (PyObject*)&PyGen_Type);
+    if (res == 0) {
+        res = PyObject_IsInstance(result, (PyObject*)&PyGen2_Type);
+    }
     if (res < 0) {
         goto fail;
     }
@@ -3277,26 +3275,6 @@ static PyTypeObject PyRunningLoopHolder_Type = {
 
 
 static void
-module_free_freelists(void)
-{
-    PyObject *next;
-    PyObject *current;
-
-    next = (PyObject*) fi_freelist;
-    while (next != NULL) {
-        assert(fi_freelist_len > 0);
-        fi_freelist_len--;
-
-        current = next;
-        next = (PyObject*) ((futureiterobject*) current)->future;
-        PyObject_GC_Del(current);
-    }
-    assert(fi_freelist_len == 0);
-    fi_freelist = NULL;
-}
-
-
-static void
 module_free(void *m)
 {
     Py_CLEAR(asyncio_mod);
@@ -3315,8 +3293,6 @@ module_free(void *m)
     Py_CLEAR(iscoroutine_typecache);
 
     Py_CLEAR(context_kwname);
-
-    module_free_freelists();
 
     module_initialized = 0;
 }

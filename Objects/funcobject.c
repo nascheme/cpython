@@ -38,6 +38,13 @@ PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname
     /* Note: No failures from this point on, since func_dealloc() does not
        expect a partially-created object. */
 
+    PyCodeObject *co = (PyCodeObject *)code;
+    if ((co->co_flags & (CO_NOFREE|CO_NESTED)) == CO_NOFREE) {
+        // Defer the reference count for functions that have no free
+        // variables.
+        _PyObject_SET_DEFERRED_RC((PyObject *)op);
+    }
+
     op->func_weakreflist = NULL;
     Py_INCREF(code);
     op->func_code = code;
