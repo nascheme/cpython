@@ -2,6 +2,8 @@
 
 #include "Python.h"
 
+#include <gc/gc.h>
+
 #include "Python-ast.h"
 #undef Yield   /* undefine macro conflicting with <winbase.h> */
 
@@ -77,6 +79,8 @@ _PyRuntime_Initialize(void)
         return _PyStatus_OK();
     }
     runtime_initialized = 1;
+
+    GC_INIT();
 
     return _PyRuntimeState_Init(&_PyRuntime);
 }
@@ -568,6 +572,9 @@ pycore_create_interpreter(_PyRuntimeState *runtime,
     }
 
     *tstate_p = tstate;
+
+    GC_allow_register_threads();
+
     return _PyStatus_OK();
 }
 
