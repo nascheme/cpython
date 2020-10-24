@@ -109,40 +109,6 @@ PyAPI_FUNC(void) PyObject_Free(void *ptr);
 #define PyObject_Del            PyObject_Free
 #define PyObject_DEL            PyObject_Free
 
-
-/*
- * Generic object allocator interface
- * ==================================
- */
-
-/* Functions */
-PyAPI_FUNC(PyObject *) PyObject_Init(PyObject *, PyTypeObject *);
-PyAPI_FUNC(PyVarObject *) PyObject_InitVar(PyVarObject *,
-                                           PyTypeObject *, Py_ssize_t);
-
-#define PyObject_INIT(op, typeobj) \
-    PyObject_Init(_PyObject_CAST(op), (typeobj))
-#define PyObject_INIT_VAR(op, typeobj, size) \
-    PyObject_InitVar(_PyVarObject_CAST(op), (typeobj), (size))
-
-
-PyAPI_FUNC(PyObject *) _PyObject_New(PyTypeObject *);
-PyAPI_FUNC(PyVarObject *) _PyObject_NewVar(PyTypeObject *, Py_ssize_t);
-
-#define PyObject_New(type, typeobj) ((type *)_PyObject_New(typeobj))
-
-// Alias to PyObject_New(). In Python 3.8, PyObject_NEW() called directly
-// PyObject_MALLOC() with _PyObject_SIZE().
-#define PyObject_NEW(type, typeobj) PyObject_New(type, typeobj)
-
-#define PyObject_NewVar(type, typeobj, n) \
-                ( (type *) _PyObject_NewVar((typeobj), (n)) )
-
-// Alias to PyObject_New(). In Python 3.8, PyObject_NEW() called directly
-// PyObject_MALLOC() with _PyObject_VAR_SIZE().
-#define PyObject_NEW_VAR(type, typeobj, n) PyObject_NewVar(type, typeobj, n)
-
-
 /*
  * Garbage Collection Support
  * ==========================
@@ -152,7 +118,7 @@ PyAPI_FUNC(PyVarObject *) _PyObject_NewVar(PyTypeObject *, Py_ssize_t);
 PyAPI_FUNC(Py_ssize_t) PyGC_Collect(void);
 
 /* Test if a type has a GC head */
-#define PyType_IS_GC(t) PyType_HasFeature((t), Py_TPFLAGS_HAVE_GC)
+#define PyType_IS_GC(t) (0)
 
 PyAPI_FUNC(PyVarObject *) _PyObject_GC_Resize(PyVarObject *, Py_ssize_t);
 #define PyObject_GC_Resize(type, op, n) \
@@ -196,6 +162,39 @@ PyAPI_FUNC(int) PyObject_GC_IsFinalized(PyObject *);
                 return vret;                                            \
         }                                                               \
     } while (0)
+
+/*
+ * Generic object allocator interface
+ * ==================================
+ */
+
+/* Functions */
+PyAPI_FUNC(PyObject *) PyObject_Init(PyObject *, PyTypeObject *);
+PyAPI_FUNC(PyVarObject *) PyObject_InitVar(PyVarObject *,
+                                           PyTypeObject *, Py_ssize_t);
+
+#define PyObject_INIT(op, typeobj) \
+    PyObject_Init(_PyObject_CAST(op), (typeobj))
+#define PyObject_INIT_VAR(op, typeobj, size) \
+    PyObject_InitVar(_PyVarObject_CAST(op), (typeobj), (size))
+
+
+PyAPI_FUNC(PyObject *) _PyObject_New(PyTypeObject *);
+PyAPI_FUNC(PyVarObject *) _PyObject_NewVar(PyTypeObject *, Py_ssize_t);
+
+#define PyObject_New(type, typeobj) ((type *)_PyObject_New(typeobj))
+
+// Alias to PyObject_New(). In Python 3.8, PyObject_NEW() called directly
+// PyObject_MALLOC() with _PyObject_SIZE().
+#define PyObject_NEW(type, typeobj) PyObject_New(type, typeobj)
+
+#define PyObject_NewVar(type, typeobj, n) \
+                ( (type *) _PyObject_NewVar((typeobj), (n)) )
+
+// Alias to PyObject_New(). In Python 3.8, PyObject_NEW() called directly
+// PyObject_MALLOC() with _PyObject_VAR_SIZE().
+#define PyObject_NEW_VAR(type, typeobj, n) PyObject_NewVar(type, typeobj, n)
+
 
 #ifndef Py_LIMITED_API
 #  define Py_CPYTHON_OBJIMPL_H

@@ -202,11 +202,13 @@ PyObject_CallFinalizer(PyObject *self)
 int
 PyObject_CallFinalizerFromDealloc(PyObject *self)
 {
+#if 0
     if (Py_REFCNT(self) != 0) {
         _PyObject_ASSERT_FAILED_MSG(self,
                                     "PyObject_CallFinalizerFromDealloc called "
                                     "on object with a non-zero refcount");
     }
+#endif
 
     /* Temporarily resurrect the object. */
     Py_SET_REFCNT(self, 1);
@@ -2189,19 +2191,45 @@ _PyObject_AssertFailed(PyObject *obj, const char *expr, const char *msg,
     Py_FatalError("_PyObject_AssertFailed");
 }
 
-
 void
-_Py_Dealloc(PyObject *op)
+_GC_Py_Dealloc(PyObject *op)
 {
-    destructor dealloc = Py_TYPE(op)->tp_dealloc;
+    PyGILState_STATE state = PyGILState_Ensure();
+    destructor delfunc = Py_TYPE(op)->tp_del;
 #ifdef Py_TRACE_REFS
     _Py_ForgetReference(op);
 #endif
-    (*dealloc)(op);
+    if (Py_TYPE(op)->tp_weaklistoffset != 0) {
+        PyObject_ClearWeakRefs(op);
+    }
+    if (delfunc != NULL) {
+        (*delfunc)(op);
+    } else {
+        PyObject_CallFinalizer(op);
+    }
+    PyGILState_Release(state);
 }
 
+void
+_Py_Dealloc_GC_finalizer(void *_op, void *unused)
+{
+    PyObject *op = _Py_FROM_GC(_op);
+    assert(PyObject_IS_GC(op));
+    _Py_Dealloc_finalizer((void *)op, (void *)_op);
+}
 
-PyObject **
+void
+_Py_Dealloc_finalizer(void *_op, void *is_gc)
+{
+    PyObject *op = (PyObject *)_op;
+    assert(is_gc == NULL ? !PyObject_IS_GC(op) : PyObject_IS_GC(op));
+    if (op->ob_refcnt != 0) {
+        // fprintf(stderr, "object %p refcount leak (%ld)\n", op, op->ob_refcnt);
+    }
+    _GC_Py_Dealloc(op);
+}
+
+GC_hidden_pointer *
 PyObject_GET_WEAKREFS_LISTPTR(PyObject *op)
 {
     return _PyObject_GET_WEAKREFS_LISTPTR(op);

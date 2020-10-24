@@ -72,23 +72,7 @@ static inline void _PyObject_GC_TRACK(
 #endif
     PyObject *op)
 {
-    _PyObject_ASSERT_FROM(op, !_PyObject_GC_IS_TRACKED(op),
-                          "object already tracked by the garbage collector",
-                          filename, lineno, __func__);
-
-    PyGC_Head *gc = _Py_AS_GC(op);
-    _PyObject_ASSERT_FROM(op,
-                          (gc->_gc_prev & _PyGC_PREV_MASK_COLLECTING) == 0,
-                          "object is in generation which is garbage collected",
-                          filename, lineno, __func__);
-
-    PyThreadState *tstate = _PyThreadState_GET();
-    PyGC_Head *generation0 = tstate->interp->gc.generation0;
-    PyGC_Head *last = (PyGC_Head*)(generation0->_gc_prev);
-    _PyGCHead_SET_NEXT(last, gc);
-    _PyGCHead_SET_PREV(gc, last);
-    _PyGCHead_SET_NEXT(gc, generation0);
-    generation0->_gc_prev = (uintptr_t)gc;
+    return;
 }
 
 /* Tell the GC to stop tracking this object.
@@ -108,17 +92,7 @@ static inline void _PyObject_GC_UNTRACK(
 #endif
     PyObject *op)
 {
-    _PyObject_ASSERT_FROM(op, _PyObject_GC_IS_TRACKED(op),
-                          "object not tracked by the garbage collector",
-                          filename, lineno, __func__);
-
-    PyGC_Head *gc = _Py_AS_GC(op);
-    PyGC_Head *prev = _PyGCHead_PREV(gc);
-    PyGC_Head *next = _PyGCHead_NEXT(gc);
-    _PyGCHead_SET_NEXT(prev, next);
-    _PyGCHead_SET_PREV(next, prev);
-    gc->_gc_next = 0;
-    gc->_gc_prev &= _PyGC_PREV_MASK_FINALIZED;
+    return;
 }
 
 // Macros to accept any type for the parameter, and to automatically pass
@@ -146,11 +120,40 @@ extern void _Py_PrintReferences(FILE *);
 extern void _Py_PrintReferenceAddresses(FILE *);
 #endif
 
-static inline PyObject **
+static inline GC_hidden_pointer *
 _PyObject_GET_WEAKREFS_LISTPTR(PyObject *op)
 {
     Py_ssize_t offset = Py_TYPE(op)->tp_weaklistoffset;
-    return (PyObject **)((char *)op + offset);
+    //return (PyObject **)((char *)op + offset);
+    return ((GC_hidden_pointer *) ((char *) op + offset));
+}
+
+#define _Py_HIDE_POINTER(p) \
+    ((GC_hidden_pointer)((p) == NULL ? 0 : GC_HIDE_POINTER(p)))
+
+#define _Py_REVEAL_POINTER(p) \
+    ((PyObject *)((p) == 0 ? NULL : GC_REVEAL_POINTER(p)))
+
+/* Potentially register a finalizer. Call when creating the object, when
+ * tp_finalize/tp_del are changed, a first weakref is added or a last
+ * weakref is removed. */
+static inline void
+_PyObject_ReconsiderFinalizer(PyObject *op)
+{
+    if (!GC_is_heap_ptr(op))
+        return;
+    /* Assume tp_dealloc is only used to clear refs (unnecessary when using
+     * libgc), call weakref callbacks, and/or call tp_del/tp_finalize, so
+     * register a finalizer if we may need to do the latter two of
+     * those, and remove it if we don't. */
+    if (Py_TYPE(op)->tp_finalize != NULL ||
+        Py_TYPE(op)->tp_del != NULL ||
+        (Py_TYPE(op)->tp_weaklistoffset != 0 &&
+         _Py_REVEAL_POINTER(PyObject_GET_WEAKREFS_LISTPTR(op)) != NULL)) {
+        GC_REGISTER_FINALIZER(op, _Py_Dealloc_finalizer, NULL, NULL, NULL);
+    } else {
+        GC_REGISTER_FINALIZER(op, NULL, NULL, NULL, NULL);
+    }
 }
 
 // Fast inlined version of PyObject_IS_GC()

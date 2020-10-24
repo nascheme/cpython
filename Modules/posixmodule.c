@@ -452,11 +452,16 @@ PyOS_BeforeFork(void)
     run_at_forkers(_PyInterpreterState_GET()->before_forkers, 1);
 
     _PyImport_AcquireLock();
+    /* GC atfork_prepare needs to be called last, as it disables GC. */
+    GC_atfork_prepare();
 }
 
 void
 PyOS_AfterFork_Parent(void)
 {
+    /* GC atfork functions need to be called first, before allocations can
+     * happen. */
+    GC_atfork_parent();
     if (_PyImport_ReleaseLock() <= 0)
         Py_FatalError("failed releasing import lock after fork");
 
@@ -468,7 +473,9 @@ PyOS_AfterFork_Child(void)
 {
     PyStatus status;
     _PyRuntimeState *runtime = &_PyRuntime;
-
+    /* GC atfork functions need to be called first, before allocations can
+     * happen. */
+    GC_atfork_child();
     status = _PyGILState_Reinit(runtime);
     if (_PyStatus_EXCEPTION(status)) {
         goto fatal_error;

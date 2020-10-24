@@ -1,5 +1,6 @@
 #include "Python.h"
 #include "pycore_pymem.h"         // _PyTraceMalloc_Config
+#include "gc/gc.h"
 
 #include <stdbool.h>
 
@@ -96,7 +97,7 @@ _PyMem_RawMalloc(void *ctx, size_t size)
        To solve these problems, allocate an extra byte. */
     if (size == 0)
         size = 1;
-    return malloc(size);
+    return GC_MALLOC(size);
 }
 
 static void *
@@ -110,21 +111,40 @@ _PyMem_RawCalloc(void *ctx, size_t nelem, size_t elsize)
         nelem = 1;
         elsize = 1;
     }
-    return calloc(nelem, elsize);
+    return GC_MALLOC(nelem * elsize);
 }
 
 static void *
 _PyMem_RawRealloc(void *ctx, void *ptr, size_t size)
 {
+    GC_finalization_proc fn;
+
+    if (ptr == NULL)
+        return _PyMem_RawMalloc(ctx, size);
+
     if (size == 0)
         size = 1;
-    return realloc(ptr, size);
+    if (!GC_is_heap_ptr(ptr)) {
+        abort();
+    }
+    GC_REGISTER_FINALIZER(ptr, NULL, NULL, &fn, NULL);
+    ptr = GC_REALLOC(ptr, size);
+    if (fn != NULL) {
+        GC_REGISTER_FINALIZER(ptr, fn, NULL, NULL, NULL);
+    }
+    return ptr;
 }
 
 static void
 _PyMem_RawFree(void *ctx, void *ptr)
 {
-    free(ptr);
+    if (ptr == NULL)
+        return;
+    if (!GC_is_heap_ptr(ptr)) {
+        abort();
+    }
+    GC_REGISTER_FINALIZER(ptr, NULL, NULL, NULL, NULL);
+//    GC_FREE(ptr);
 }
 
 
@@ -2208,7 +2228,9 @@ _PyMem_DebugRawFree(void *ctx, void *p)
     _PyMem_DebugCheckAddress(__func__, api->api_id, p);
     nbytes = read_size_t(q);
     nbytes += PYMEM_DEBUG_EXTRA_BYTES;
-    memset(q, PYMEM_DEADBYTE, nbytes);
+    // TODO(thomas@python.org): figure out alternative that works with
+    // _Py_Dealloc_finalize, probably by writing magic values to refcnt.
+    // memset(q, DEADBYTE, nbytes);
     api->alloc.free(api->alloc.ctx, q);
 }
 

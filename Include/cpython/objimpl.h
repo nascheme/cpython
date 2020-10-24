@@ -101,4 +101,4 @@ PyAPI_FUNC(PyObject *) _PyObject_GC_Calloc(size_t size);
 /* Test if a type supports weak references */
 #define PyType_SUPPORTS_WEAKREFS(t) ((t)->tp_weaklistoffset > 0)
 
-PyAPI_FUNC(PyObject **) PyObject_GET_WEAKREFS_LISTPTR(PyObject *op);
+PyAPI_FUNC(GC_hidden_pointer *) PyObject_GET_WEAKREFS_LISTPTR(PyObject *op);

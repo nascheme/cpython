@@ -2,9 +2,6 @@
 #include "pycore_object.h"   // _PyObject_GET_WEAKREFS_LISTPTR
 
 
-#define GET_WEAKREFS_LISTPTR(o) \
-        ((PyWeakReference **) _PyObject_GET_WEAKREFS_LISTPTR(o))
-
 /*[clinic input]
 module _weakref
 [clinic start generated code]*/
@@ -26,13 +23,14 @@ static Py_ssize_t
 _weakref_getweakrefcount_impl(PyObject *module, PyObject *object)
 /*[clinic end generated code: output=301806d59558ff3e input=cedb69711b6a2507]*/
 {
-    PyWeakReference **list;
+    GC_hidden_pointer *list;
 
     if (!PyType_SUPPORTS_WEAKREFS(Py_TYPE(object)))
         return 0;
 
-    list = GET_WEAKREFS_LISTPTR(object);
-    return _PyWeakref_GetWeakrefCount(*list);
+    list = PyObject_GET_WEAKREFS_LISTPTR(object);
+    return _PyWeakref_GetWeakrefCount(
+        (PyWeakReference *)_Py_REVEAL_POINTER(*list));
 }
 
 
@@ -86,17 +84,20 @@ weakref_getweakrefs(PyObject *self, PyObject *object)
     PyObject *result = NULL;
 
     if (PyType_SUPPORTS_WEAKREFS(Py_TYPE(object))) {
-        PyWeakReference **list = GET_WEAKREFS_LISTPTR(object);
-        Py_ssize_t count = _PyWeakref_GetWeakrefCount(*list);
+        GC_hidden_pointer *list = PyObject_GET_WEAKREFS_LISTPTR(object);
+        Py_ssize_t count = _PyWeakref_GetWeakrefCount(
+            (PyWeakReference *)_Py_REVEAL_POINTER(*list));
 
         result = PyList_New(count);
         if (result != NULL) {
-            PyWeakReference *current = *list;
+            PyWeakReference *current =
+                (PyWeakReference *)_Py_REVEAL_POINTER(*list);
             Py_ssize_t i;
             for (i = 0; i < count; ++i) {
                 PyList_SET_ITEM(result, i, (PyObject *) current);
                 Py_INCREF(current);
-                current = current->wr_next;
+                current =
+                    (PyWeakReference *)_Py_REVEAL_POINTER(current->wr_next);
             }
         }
     }

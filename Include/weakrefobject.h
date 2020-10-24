@@ -17,10 +17,9 @@ struct _PyWeakReference {
     PyObject_HEAD
 
     /* The object to which this is a weak reference, or Py_None if none.
-     * Note that this is a stealth reference:  wr_object's refcount is
-     * not incremented to reflect this pointer.
+     * Note that this is a hidden pointer.
      */
-    PyObject *wr_object;
+    GC_hidden_pointer wr_object;
 
     /* A callable to invoke when wr_object dies, or NULL if none. */
     PyObject *wr_callback;
@@ -35,8 +34,8 @@ struct _PyWeakReference {
      * If wr_object goes away, wr_object is set to Py_None, and these pointers
      * have no meaning then.
      */
-    PyWeakReference *wr_prev;
-    PyWeakReference *wr_next;
+    GC_hidden_pointer wr_prev;
+    GC_hidden_pointer wr_next;
 };
 #endif
 
@@ -67,18 +66,9 @@ PyAPI_FUNC(Py_ssize_t) _PyWeakref_GetWeakrefCount(PyWeakReference *head);
 PyAPI_FUNC(void) _PyWeakref_ClearRef(PyWeakReference *self);
 #endif
 
-/* Explanation for the Py_REFCNT() check: when a weakref's target is part
-   of a long chain of deallocations which triggers the trashcan mechanism,
-   clearing the weakrefs can be delayed long after the target's refcount
-   has dropped to zero.  In the meantime, code accessing the weakref will
-   be able to "see" the target object even though it is supposed to be
-   unreachable.  See issue #16602. */
+PyAPI_FUNC(PyObject *) _PyWeakref_GET_OBJECT(PyWeakReference *self);
 
-#define PyWeakref_GET_OBJECT(ref)                           \
-    (Py_REFCNT(((PyWeakReference *)(ref))->wr_object) > 0   \
-     ? ((PyWeakReference *)(ref))->wr_object                \
-     : Py_None)
-
+#define PyWeakref_GET_OBJECT(ref) _PyWeakref_GET_OBJECT((PyWeakReference *)ref)
 
 #ifdef __cplusplus
 }
