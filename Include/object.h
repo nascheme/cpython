@@ -446,7 +446,7 @@ static inline void _Py_DECREF(
 #endif
     }
     else {
-        _Py_Dealloc(op);
+        //_Py_Dealloc(op);
     }
 }
 

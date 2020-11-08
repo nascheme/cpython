@@ -359,6 +359,20 @@ enum flagstates {collecting_clear_unreachable_clear,
                  collecting_set_unreachable_clear,
                  collecting_set_unreachable_set};
 
+
+#define refchain _Py_refchain
+extern PyObject _Py_refchain;
+
+static void
+validate_refchain(void)
+{
+    PyObject *p;
+    for (p = refchain._ob_next; p != &refchain; p = p->_ob_next) {
+        assert(p->_ob_prev->_ob_next == p && p->_ob_next->_ob_prev == p);
+    }
+}
+
+
 #ifdef GC_DEBUG
 // validate_list checks list consistency.  And it works as document
 // describing when flags are expected to be set / unset.
@@ -439,7 +453,9 @@ update_refs(PyGC_Head *containers)
          * so serious that maybe this should be a release-build
          * check instead of an assert?
          */
+#if 0
         _PyObject_ASSERT(FROM_GC(gc), gc_get_refs(gc) != 0);
+#endif
     }
 }
 
@@ -997,8 +1013,17 @@ delete_garbage(PyThreadState *tstate, GCState *gcstate,
         PyGC_Head *gc = GC_NEXT(collectable);
         PyObject *op = FROM_GC(gc);
 
+#if 0
         _PyObject_ASSERT_WITH_MSG(op, Py_REFCNT(op) > 0,
                                   "refcount is too small");
+#else
+        if (Py_REFCNT(op) == 0) {
+            _Py_Dealloc(op);
+            assert(GC_NEXT(collectable) != gc);
+            //validate_refchain();
+            continue;
+        }
+#endif
 
         if (gcstate->debug & DEBUG_SAVEALL) {
             assert(gcstate->garbage != NULL);
@@ -1173,6 +1198,59 @@ handle_resurrected_objects(PyGC_Head *unreachable, PyGC_Head* still_unreachable,
     gc_list_merge(resurrected, old_generation);
 }
 
+static Py_ssize_t
+gc_collect_refcnt(void)
+{
+    PyObject garbage = {&garbage, &garbage};
+    PyObject *p;
+
+    /* move refchain list to garbage */
+    garbage._ob_next = _Py_refchain._ob_next;
+    assert(garbage._ob_next->_ob_prev == &_Py_refchain);
+    garbage._ob_next->_ob_prev = &garbage;
+    garbage._ob_prev = _Py_refchain._ob_prev;
+    assert(garbage._ob_prev->_ob_next == &_Py_refchain);
+    garbage._ob_prev->_ob_next = &garbage;
+    refchain._ob_next = &refchain;
+    refchain._ob_prev = &refchain;
+
+    for (p = garbage._ob_next; p != &garbage; p = p->_ob_next) {
+        assert(p->_ob_prev->_ob_next == p && p->_ob_next->_ob_prev == p);
+    }
+
+    Py_ssize_t n = 0;
+    while (garbage._ob_next != &garbage) {
+        p = garbage._ob_next;
+        if (Py_REFCNT(p) == 0) {
+            _Py_Dealloc(p);
+            /* should be removed from list */
+            assert(garbage._ob_next != p);
+            n++;
+        }
+        else {
+#if 0
+            /* unlink p from garbage */
+            p->_ob_next->_ob_prev = p->_ob_prev;
+            p->_ob_prev->_ob_next = p->_ob_next;
+            /* link p into refchain */
+            p->_ob_next = refchain._ob_next;
+            p->_ob_prev = &refchain;
+            refchain._ob_next->_ob_prev = p;
+            refchain._ob_next = p;
+#else
+            _Py_ForgetReference(p);
+            _Py_AddToAllObjects(p, 1);
+#endif
+        }
+    }
+    for (p = refchain._ob_next; p != &refchain; p = p->_ob_next) {
+        assert(p->_ob_prev->_ob_next == p && p->_ob_next->_ob_prev == p);
+    }
+
+    return n;
+}
+
+
 /* This is the main function.  Read this to understand how the
  * collection process works. */
 static Py_ssize_t
@@ -1212,6 +1290,17 @@ gc_collect_main(PyThreadState *tstate, int generation,
 
     if (PyDTrace_GC_START_ENABLED())
         PyDTrace_GC_START(generation);
+
+#if 1
+    for (int pass = 0; ; pass++) {
+        Py_ssize_t deallocated = gc_collect_refcnt();
+        if (deallocated == 0) {
+            break;
+        }
+        fprintf(stderr, "dealloc pass %d, %ld objects\n", pass, deallocated);
+        break;
+    }
+#endif
 
     /* update collection and allocation counters */
     if (generation+1 < NUM_GENERATIONS)
