@@ -80,7 +80,8 @@ _PyDebug_PrintTotalRefs(void) {
  * together via the _ob_prev and _ob_next members of a PyObject, which
  * exist only in a Py_TRACE_REFS build.
  */
-static PyObject refchain = {&refchain, &refchain};
+#define refchain _Py_refchain
+PyObject _Py_refchain = {&refchain, &refchain};
 
 /* Insert op at the front of the list of all objects.  If force is true,
  * op is added even if _ob_prev and _ob_next are non-NULL already.  If
