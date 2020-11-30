@@ -3646,6 +3646,25 @@ typedef struct {
 } dictiterobject;
 
 static PyObject *
+dictiter_copy(dictiterobject *di)
+{
+    dictiterobject *result;
+    result = PyObject_GC_New(dictiterobject, Py_TYPE(di));
+    if (result == NULL) {
+        return NULL;
+    }
+    result->di_dict = di->di_dict;
+    Py_INCREF(result->di_dict);
+    result->di_used = di->di_used;
+    result->len = di->len;
+    result->di_pos = di->di_pos;
+    result->di_result = di->di_result;
+    Py_XINCREF(result->di_result);
+    _PyObject_GC_TRACK(result);
+    return (PyObject *)result;
+}
+
+static PyObject *
 dictiter_new(PyDictObject *dict, PyTypeObject *itertype)
 {
     dictiterobject *di;
@@ -4139,12 +4158,12 @@ static PyObject *
 dictiter_reduce(dictiterobject *di, PyObject *Py_UNUSED(ignored))
 {
     _Py_IDENTIFIER(iter);
-    /* copy the iterator state */
-    dictiterobject tmp = *di;
-    Py_XINCREF(tmp.di_dict);
-
-    PyObject *list = PySequence_List((PyObject*)&tmp);
-    Py_XDECREF(tmp.di_dict);
+    PyObject *tmp = dictiter_copy(di);
+    if (tmp == NULL) {
+        return NULL;
+    }
+    PyObject *list = PySequence_List(tmp);
+    Py_DECREF(tmp);
     if (list == NULL) {
         return NULL;
     }
