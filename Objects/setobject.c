@@ -752,18 +752,19 @@ setiter_len(setiterobject *si, PyObject *Py_UNUSED(ignored))
 PyDoc_STRVAR(length_hint_doc, "Private method returning an estimate of len(list(it)).");
 
 static PyObject *setiter_iternext(setiterobject *si);
+static PyObject *setiter_copy(setiterobject *other);
 
 static PyObject *
 setiter_reduce(setiterobject *si, PyObject *Py_UNUSED(ignored))
 {
     _Py_IDENTIFIER(iter);
-    /* copy the iterator state */
-    setiterobject tmp = *si;
-    Py_XINCREF(tmp.si_set);
-
+    PyObject *tmp = setiter_copy(si);
+    if (tmp == NULL) {
+        return NULL;
+    }
     /* iterate the temporary into a list */
-    PyObject *list = PySequence_List((PyObject*)&tmp);
-    Py_XDECREF(tmp.si_set);
+    PyObject *list = PySequence_List(tmp);
+    Py_DECREF(tmp);
     if (list == NULL) {
         return NULL;
     }
@@ -848,6 +849,22 @@ PyTypeObject PySetIter_Type = {
     setiter_methods,                            /* tp_methods */
     0,
 };
+
+static PyObject *
+setiter_copy(setiterobject *other)
+{
+    setiterobject *si = PyObject_GC_New(setiterobject, &PySetIter_Type);
+    if (si == NULL) {
+        return NULL;
+    }
+    si->si_set = other->si_set;
+    Py_INCREF(si->si_set);
+    si->si_used = other->si_used;
+    si->si_pos = other->si_pos;
+    si->len = other->len;
+    _PyObject_GC_TRACK(si);
+    return (PyObject *)si;
+}
 
 static PyObject *
 set_iter(PySetObject *so)
