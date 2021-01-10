@@ -1376,7 +1376,7 @@ class DictTest(unittest.TestCase):
         pair = [X(), 123]
         dict([pair])
 
-    def test_oob_indexing_dictiter_iternextitem(self):
+    def __test_oob_indexing_dictiter_iternextitem(self):
         class X(int):
             def __del__(self):
                 d.clear()
