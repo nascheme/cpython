@@ -364,19 +364,6 @@ enum flagstates {collecting_clear_unreachable_clear,
                  collecting_set_unreachable_set};
 
 
-#define refchain _Py_refchain
-extern PyObject _Py_refchain;
-
-static void
-validate_refchain(void)
-{
-    PyObject *p;
-    for (p = refchain._ob_next; p != &refchain; p = p->_ob_next) {
-        assert(p->_ob_prev->_ob_next == p && p->_ob_next->_ob_prev == p);
-    }
-}
-
-
 #ifdef GC_DEBUG
 // validate_list checks list consistency.  And it works as document
 // describing when flags are expected to be set / unset.
@@ -1024,7 +1011,6 @@ delete_garbage(PyThreadState *tstate, GCState *gcstate,
         if (Py_REFCNT(op) == 0) {
             _Py_Dealloc(op);
             assert(GC_NEXT(collectable) != gc);
-            //validate_refchain();
             continue;
         }
 #endif
@@ -1202,54 +1188,52 @@ handle_resurrected_objects(PyGC_Head *unreachable, PyGC_Head* still_unreachable,
     gc_list_merge(resurrected, old_generation);
 }
 
+extern PyObject _Py_refchain;
+
 static Py_ssize_t
 gc_collect_refcnt(void)
 {
     PyObject garbage = {&garbage, &garbage};
-    PyObject *p;
+    PyObject *op, *next;
 
-    /* move refchain list to garbage */
-    garbage._ob_next = _Py_refchain._ob_next;
-    assert(garbage._ob_next->_ob_prev == &_Py_refchain);
-    garbage._ob_next->_ob_prev = &garbage;
-    garbage._ob_prev = _Py_refchain._ob_prev;
-    assert(garbage._ob_prev->_ob_next == &_Py_refchain);
-    garbage._ob_prev->_ob_next = &garbage;
-    refchain._ob_next = &refchain;
-    refchain._ob_prev = &refchain;
-
-    for (p = garbage._ob_next; p != &garbage; p = p->_ob_next) {
-        assert(p->_ob_prev->_ob_next == p && p->_ob_next->_ob_prev == p);
+    /* add objects with zero refcnt to 'garbage' */
+    for (op = _Py_refchain._ob_next; op != &_Py_refchain; op = next) {
+        next = op->_ob_next;
+        if (Py_REFCNT(op) == 0) {
+            /* unlink from '_Py_refchain' */
+            op->_ob_next->_ob_prev = op->_ob_prev;
+            op->_ob_prev->_ob_next = op->_ob_next;
+            /* link op into garbage */
+            op->_ob_next = garbage._ob_next;
+            op->_ob_prev = &garbage;
+            garbage._ob_next->_ob_prev = op;
+            garbage._ob_next = op;
+        }
     }
+
+#if 0
+    for (op = garbage._ob_next; op != &garbage; op = op->_ob_next) {
+        assert(op->_ob_prev->_ob_next == op && op->_ob_next->_ob_prev == op);
+    }
+    for (op = _Py_refchain._ob_next; op != &_Py_refchain; op = op->_ob_next) {
+        assert(op->_ob_prev->_ob_next == op && op->_ob_next->_ob_prev == op);
+    }
+#endif
 
     Py_ssize_t n = 0;
     while (garbage._ob_next != &garbage) {
-        p = garbage._ob_next;
-        if (Py_REFCNT(p) == 0) {
-            _Py_Dealloc(p);
-            /* should be removed from list */
-            assert(garbage._ob_next != p);
-            n++;
-        }
-        else {
+        op = garbage._ob_next;
+        _Py_Dealloc(op);
+        /* should be removed from list */
+        assert(garbage._ob_next != op);
+        n++;
+    }
+
 #if 0
-            /* unlink p from garbage */
-            p->_ob_next->_ob_prev = p->_ob_prev;
-            p->_ob_prev->_ob_next = p->_ob_next;
-            /* link p into refchain */
-            p->_ob_next = refchain._ob_next;
-            p->_ob_prev = &refchain;
-            refchain._ob_next->_ob_prev = p;
-            refchain._ob_next = p;
-#else
-            _Py_ForgetReference(p);
-            _Py_AddToAllObjects(p, 1);
+    for (op = _Py_refchain._ob_next; op != &_Py_refchain; op = op->_ob_next) {
+        assert(op->_ob_prev->_ob_next == op && op->_ob_next->_ob_prev == op);
+    }
 #endif
-        }
-    }
-    for (p = refchain._ob_next; p != &refchain; p = p->_ob_next) {
-        assert(p->_ob_prev->_ob_next == p && p->_ob_next->_ob_prev == p);
-    }
 
     return n;
 }
@@ -1296,13 +1280,12 @@ gc_collect_main(PyThreadState *tstate, int generation,
         PyDTrace_GC_START(generation);
 
 #if 1
-    for (int pass = 0; ; pass++) {
+    for (int pass = 0; pass < 4; pass++) {
         Py_ssize_t deallocated = gc_collect_refcnt();
         if (deallocated == 0) {
             break;
         }
-        fprintf(stderr, "dealloc pass %d, %ld objects\n", pass, deallocated);
-        break;
+        //fprintf(stderr, "dealloc pass %d, %ld objects\n", pass, deallocated);
     }
 #endif
 
