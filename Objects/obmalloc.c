@@ -1493,6 +1493,12 @@ arena_map_is_used(block *p)
     return (tail < lo) || (tail >= hi && hi != 0);
 }
 
+int
+_Py_object_is_obmalloc(PyObject *p)
+{
+    return arena_map_is_used((block *)p);
+}
+
 /* end of radix tree logic */
 /*==========================================================================*/
 

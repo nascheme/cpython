@@ -1190,6 +1190,8 @@ handle_resurrected_objects(PyGC_Head *unreachable, PyGC_Head* still_unreachable,
 
 extern PyObject _Py_refchain;
 
+extern int _Py_object_is_obmalloc(PyObject *p);
+
 static void
 gc_dump_addrs(void)
 {
@@ -1198,7 +1200,11 @@ gc_dump_addrs(void)
     /* add objects with zero refcnt to 'garbage' */
     for (op = _Py_refchain._ob_next; op != &_Py_refchain; op = next) {
         next = op->_ob_next;
-        fprintf(stderr, "%p\n", op);
+        if (!_Py_object_is_obmalloc(op)) {
+            PyTypeObject *type = Py_TYPE(op);
+            fprintf(stderr, "%p %s\n", op,
+                    type==NULL ? "NULL" : type->tp_name);
+        }
     }
 }
 
