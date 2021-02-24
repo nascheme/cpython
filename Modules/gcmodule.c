@@ -1190,6 +1190,18 @@ handle_resurrected_objects(PyGC_Head *unreachable, PyGC_Head* still_unreachable,
 
 extern PyObject _Py_refchain;
 
+static void
+gc_dump_addrs(void)
+{
+    PyObject *op, *next;
+
+    /* add objects with zero refcnt to 'garbage' */
+    for (op = _Py_refchain._ob_next; op != &_Py_refchain; op = next) {
+        next = op->_ob_next;
+        fprintf(stderr, "%p\n", op);
+    }
+}
+
 static Py_ssize_t
 gc_collect_refcnt(void)
 {
@@ -2203,6 +2215,7 @@ _PyGC_DumpShutdownStats(PyInterpreterState *interp)
 void
 _PyGC_Fini(PyInterpreterState *interp)
 {
+    gc_dump_addrs();
     GCState *gcstate = &interp->gc;
     Py_CLEAR(gcstate->garbage);
     Py_CLEAR(gcstate->callbacks);
