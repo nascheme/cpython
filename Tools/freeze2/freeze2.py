@@ -732,7 +732,7 @@ void _PyFrozenModules_Enable(void) {{
 
 PyObject* _PyFrozenModule_Lookup(PyObject* name) {{
     if(frozen_code_objects != NULL && !frozen_modules_disable) {{
-        PyObject *co, *needs_path, *parent_name,
+        PyObject *co, *needs_path,
                  *origin, *cached, *path_str,
                  *module, *module_dict, *t =
             PyDict_GetItem(frozen_code_objects, name);
@@ -741,7 +741,6 @@ PyObject* _PyFrozenModule_Lookup(PyObject* name) {{
         }}
         co = PyTuple_GetItem(t, 0);
         needs_path = PyTuple_GetItem(t, 1);
-        parent_name = PyTuple_GetItem(t, 2);
         origin = PyTuple_GetItem(t, 3);
         cached = PyTuple_GetItem(t, 4);
         if (co != NULL) {{
