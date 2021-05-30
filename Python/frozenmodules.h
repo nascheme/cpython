@@ -9,8 +9,8 @@ extern "C" {
 
 extern void _PyFrozenModules_Init(void);
 extern PyObject* _PyFrozenModule_Lookup(PyObject* name);
+extern PyObject* _PyFrozenModule_GetCode(PyObject* name);
 extern void _PyFrozenModules_Finalize(void);
-extern int _PyFrozenModules_ImportBootstrap(void);
 extern void _PyFrozenModules_Disable(void);
 extern void _PyFrozenModules_Enable(void);
 

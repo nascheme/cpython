@@ -1280,6 +1280,14 @@ find_frozen(PyObject *name)
 static PyObject *
 get_frozen_object(PyObject *name)
 {
+    PyObject *co = _PyFrozenModule_GetCode(name);
+    if (co != NULL) {
+        Py_INCREF(co);
+        if (Py_VerboseFlag) {
+            PySys_FormatStderr("found static frozen module %U\n", name);
+        }
+        return co;
+    }
     const struct _frozen *p = find_frozen(name);
     int size;
 
@@ -1331,28 +1339,36 @@ is_frozen_package(PyObject *name)
 int
 PyImport_ImportFrozenModuleObject(PyObject *name)
 {
-    const struct _frozen *p;
     PyObject *co, *m, *d;
     int ispackage;
-    int size;
 
-    p = find_frozen(name);
-
-    if (p == NULL)
-        return 0;
-    if (p->code == NULL) {
-        PyErr_Format(PyExc_ImportError,
-                     "Excluded frozen object named %R",
-                     name);
-        return -1;
+    co = _PyFrozenModule_GetCode(name);
+    if (co != NULL) {
+        ispackage = 0;
+        Py_INCREF(co);
+        if (Py_VerboseFlag) {
+            PySys_FormatStderr("found static frozen module %U\n", name);
+        }
     }
-    size = p->size;
-    ispackage = (size < 0);
-    if (ispackage)
-        size = -size;
-    co = PyMarshal_ReadObjectFromString((const char *)p->code, size);
-    if (co == NULL)
-        return -1;
+    else {
+        const struct _frozen *p;
+        p = find_frozen(name);
+        if (p == NULL)
+            return 0;
+        if (p->code == NULL) {
+            PyErr_Format(PyExc_ImportError,
+                         "Excluded frozen object named %R",
+                         name);
+            return -1;
+        }
+        int size = p->size;
+        ispackage = (size < 0);
+        if (ispackage)
+            size = -size;
+        co = PyMarshal_ReadObjectFromString((const char *)p->code, size);
+        if (co == NULL)
+            return -1;
+    }
     if (!PyCode_Check(co)) {
         PyErr_Format(PyExc_TypeError,
                      "frozen object %R is not a code object",

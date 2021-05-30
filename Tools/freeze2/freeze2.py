@@ -453,6 +453,17 @@ class Serializer:
                     bootstrap_external_code)
         return bootstrap, bootstrap_external
 
+    def _get_module_code(self, mod_name):
+        spec = importlib.util.find_spec(mod_name)
+        return spec.loader.get_code(spec.name)
+
+    def _get_bootstrap_modules(self, py_exe_file: str):
+        co = self._get_module_code('_frozen_importlib')
+        co_external = self._get_module_code('_frozen_importlib_external')
+        bootstrap = self._serialize(co)
+        bootstrap_external = self._serialize(co_external)
+        return bootstrap, bootstrap_external
+
     def freeze_startup_modules(self, py_exe_file: str,
                                output_filename: Optional[str]=None,
                                include_bootstrap: bool=True,
@@ -468,8 +479,7 @@ class Serializer:
         for mod_name, py_file, (origin, cached) in startup_modules:
             print('freezing startup module', mod_name)
             modules[mod_name] = py_file
-            spec = importlib.util.find_spec(mod_name)
-            code = spec.loader.get_code(spec.name)
+            code = self._get_module_code(mod_name)
             try:
                 d[mod_name] = (py_file, self._serialize(code),
                                origin, cached)
@@ -538,13 +548,13 @@ class Serializer:
 
 
 PYTHON_BOOTSTRAP_FN_TEMPLATE = """
-int _PyFrozenModules_ImportBootstrap(void)
+PyObject *_PyFrozenModule_GetCode(PyObject *name)
 {{
-    if (import_bootstrap_module("_frozen_importlib_external",
-                                (PyObject*){bootstrap_external}) <= 0)
-        return -1;
-    return import_bootstrap_module("_frozen_importlib",
-                                   (PyObject*){bootstrap});
+    if (_PyUnicode_EqualToASCIIString(name, "_frozen_importlib"))
+        return (PyObject*){bootstrap};
+    if (_PyUnicode_EqualToASCIIString(name, "_frozen_importlib_external"))
+        return (PyObject*){bootstrap_external};
+    return NULL;
 }}
 """
 
@@ -621,6 +631,7 @@ exec_code_in_module(PyObject *name,
     return m;
 }}
 
+#if 0
 static int import_bootstrap_module(char * name, PyObject* co) {{
     PyObject *m, *d, *name_obj = PyUnicode_FromString(name);
     if (!PyCode_Check(co)) {{
@@ -643,7 +654,7 @@ _import_botstrap_err_return:
     Py_DECREF(name_obj);
     return -1;
 }}
-
+#endif
 
 int _PyFrozenModule_AddModule(const char *name, PyObject *co,
                                 _Bool needs_path, const char *parent_name,

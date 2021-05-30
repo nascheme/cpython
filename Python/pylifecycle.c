@@ -155,20 +155,9 @@ init_importlib(PyInterpreterState *interp, PyObject *sysmod)
     PyObject *value;
     int verbose = interp->config.verbose;
 
-    int rv = (_PyFrozenModules_ImportBootstrap());
-    if (rv < 0) {
-        return _PyStatus_ERR("_PyFrozenModules_ImportBootstrap failed");
-    }
-    if (rv == 0) {
-        /* Import _importlib through its frozen.c version */
-        if (PyImport_ImportFrozenModule("_frozen_importlib") <= 0) {
-            return _PyStatus_ERR("can't import _frozen_importlib");
-        }
-    }
-    else {
-        if (verbose) {
-            PySys_FormatStderr("_PyFrozenModules_ImportBootstrap success\n");
-        }
+    /* Import _importlib through its frozen version, _frozen_importlib. */
+    if (PyImport_ImportFrozenModule("_frozen_importlib") <= 0) {
+        return _PyStatus_ERR("can't import _frozen_importlib");
     }
     if (verbose) {
         PySys_FormatStderr("import _frozen_importlib # frozen\n");

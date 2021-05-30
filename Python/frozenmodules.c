@@ -29,3 +29,8 @@ int _PyFrozenModules_ImportBootstrap(void)
 {
     return 0;
 }
+
+PyObject *_PyFrozenModule_GetCode(PyObject *name)
+{
+    return NULL;
+}
