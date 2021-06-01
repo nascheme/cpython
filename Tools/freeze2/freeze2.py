@@ -2,9 +2,11 @@
 # -*- coding: utf-8 -*-
 #
 # Originally created by Jeethu Rao <jeethu@jeethurao.com>
+# Ported to Python 3.8 by Neil Schemenauer
 
 """Convert Python code objects into static C structures.
 """
+import sys
 import argparse
 import ast
 import inspect
@@ -382,89 +384,57 @@ class Serializer:
 
     _INIT_FILE_NAMES = ('__init__.py', '__init__.pyc', '__init__.pyo')
 
-    def _run_target_py_command(self, py_exe_file: str, cmd: str) -> Any:
-        py_exe_path = pathlib.Path(py_exe_file)
-        if not py_exe_path.is_file():
-            raise RuntimeError(f"Could not find python binary {py_exe_file}")
-        proc = subprocess.run([py_exe_file, "-c", cmd],
+    def _run_py_command(self, cmd: str) -> Any:
+        proc = subprocess.run([sys.executable, "-c", cmd],
                               stdout=subprocess.PIPE)
         return ast.literal_eval(proc.stdout.decode("utf-8"))
 
-    def _get_spec(self, py_exe_file: str, mod_name: str) -> Tuple[str, str]:
-        cmds = [
-            "from importlib.util import find_spec",
-            f"spec = find_spec(\'{mod_name}\')",
-            "print(repr((spec.origin, spec.cached)))"
-        ]
-        return self._run_target_py_command(py_exe_file, ";".join(cmds))
-
-    def _get_startup_modules(self, py_exe_file: str,
+    def _get_startup_modules(self,
                              extra_modules: Optional[List[str]]=None):
+        cmd_print_modules = (
+            'import sys\n'
+            'print([m for m in sys.modules])\n'
+            )
+        startup_modules = self._run_py_command(cmd_print_modules)
+        if extra_modules:
+            startup_modules.extend(extra_modules)
         bad_modules = {
-            'encodings',
-            'collections',
-            'collections.abc',
+            #'encodings',
+            #'collections',
+            #'collections.abc',
             '_collections_abc',
+            #'_frozen_importlib',
+            #'_frozen_importlib_external',
         }
-        cmds = [
-            "import sys",
-            "print("
-            "{x: sys.modules[x].__file__ "
-            "for x in sys.modules if "
-            "getattr(sys.modules[x], '__file__', '').endswith("
-            "('.py', '.pyc', '.pyo'))})"
-        ]
-        if extra_modules is not None:
-            for mod in extra_modules:
-                cmds.insert(0, f"import {mod}")
-        modules = self._run_target_py_command(py_exe_file, ";".join(cmds))
-        for mod_name, py_file in modules.items():
-            spec = self._get_spec(py_exe_file, mod_name)
+        modules = []
+        for mod_name in startup_modules:
             if mod_name in bad_modules:
                 continue
-            yield mod_name, py_file, spec
-
-    def _get_bootstrap_root_path(self, py_exe_file: str):
-        py_exe_path = pathlib.Path(py_exe_file)
-        if not py_exe_path.is_file():
-            raise RuntimeError(f"Could not find python binary {py_exe_file}")
-
-        bootstrap_dir = py_exe_path.parent / "Lib" / "importlib"
-        if bootstrap_dir.is_dir():
-            return bootstrap_dir
-        else:
-            bootstrap_dir = pathlib.Path.cwd() / "Lib" / "importlib"
-            return bootstrap_dir
-
-    def _get_bootstrap_modules(self, py_exe_file: str):
-        bootstrap_dir = self._get_bootstrap_root_path(py_exe_file)
-        bootstrap_path = bootstrap_dir / "_bootstrap.py"
-        bootstrap_external_path = bootstrap_dir / "_bootstrap_external.py"
-        if bootstrap_path.is_file():
-            with open(bootstrap_path, 'r') as f:
-                bootstrap_code = _serializer.compile_code(
-                    "<frozen importlib._bootstrap>", f.read())
-                bootstrap = self._serialize(bootstrap_code)
-        if bootstrap_external_path.is_file():
-            with open(bootstrap_external_path, 'r') as f:
-                bootstrap_external_code = _serializer.compile_code(
-                    "<frozen importlib._bootstrap_external>", f.read())
-                bootstrap_external = self._serialize(
-                    bootstrap_external_code)
-        return bootstrap, bootstrap_external
+            try:
+                spec = importlib.util.find_spec(mod_name)
+            except ValueError:
+                print('skipping', mod_name, 'no spec')
+                continue
+            if spec is None:
+                print('skipping', mod_name, 'no spec')
+                continue
+            if spec.origin is None:
+                print('skipping', mod_name, 'missing origin')
+                continue
+            co = spec.loader.get_code(spec.name)
+            if co is None:
+                print('skipping', mod_name, 'missing code')
+                continue
+            modules.append((mod_name, spec))
+        for mod, spec in modules:
+            co = spec.loader.get_code(spec.name)
+            yield mod, co, spec.origin, spec.cached
 
     def _get_module_code(self, mod_name):
         spec = importlib.util.find_spec(mod_name)
         return spec.loader.get_code(spec.name)
 
-    def _get_bootstrap_modules(self, py_exe_file: str):
-        co = self._get_module_code('_frozen_importlib')
-        co_external = self._get_module_code('_frozen_importlib_external')
-        bootstrap = self._serialize(co)
-        bootstrap_external = self._serialize(co_external)
-        return bootstrap, bootstrap_external
-
-    def freeze_startup_modules(self, py_exe_file: str,
+    def freeze_startup_modules(self,
                                output_filename: Optional[str]=None,
                                include_bootstrap: bool=True,
                                extra_modules: Optional[List[str]]=None) -> str:
@@ -474,28 +444,21 @@ class Serializer:
         template = PYTHON_FROZEN_MODULES_TEMPLATE.lstrip()
         d = {}
         modules = {}
-        startup_modules = self._get_startup_modules(py_exe_file,
-                                                    extra_modules)
-        for mod_name, py_file, (origin, cached) in startup_modules:
+        startup_modules = self._get_startup_modules(extra_modules)
+        for mod_name, co, origin, cached in startup_modules:
             print('freezing startup module', mod_name)
-            modules[mod_name] = py_file
-            code = self._get_module_code(mod_name)
+            modules[mod_name] = origin
             try:
-                d[mod_name] = (py_file, self._serialize(code),
-                               origin, cached)
+                d[mod_name] = (self._serialize(co), origin, cached)
             except TypeError as e:
                 print(py_file)
                 raise e
 
-        bootstrap = bootstrap_external = None
-        if include_bootstrap:
-            bootstrap, bootstrap_external = self._get_bootstrap_modules(
-                py_exe_file)
-
         self.finalize()
         init_lines = []
         padding_space = " " * 31
-        for k, (file_name, code_ptr, _origin, _cached) in d.items():
+        for k, (code_ptr, _origin, _cached) in d.items():
+            file_name = _origin
             if '.' in k:
                 parent_module = f"\"{k.rsplit('.', 1)[0]}\""
             else:
@@ -506,6 +469,7 @@ class Serializer:
                 needs_path = "true"
             else:
                 needs_path = "false"
+            print(k, file_name, needs_path)
             init_lines.append(f"    _PyFrozenModule_AddModule("
                               f"\"{k}\",\n{padding_space}"
                               f"(PyObject*){code_ptr}, "
@@ -519,10 +483,7 @@ class Serializer:
             fwd_declarations="\n".join(self.forward_declarations),
             extra_refs="\n".join(self.extra_refs),
             init_lines="\n".join(init_lines))
-        if bootstrap and bootstrap_external:
-            output += PYTHON_BOOTSTRAP_FN_TEMPLATE.format(
-                bootstrap=bootstrap,
-                bootstrap_external=bootstrap_external)
+        output += PYTHON_BOOTSTRAP_FN_TEMPLATE
         if output_filename is not None:
             with open(output_filename, 'w') as f:
                 f.write(output)
@@ -548,14 +509,20 @@ class Serializer:
 
 
 PYTHON_BOOTSTRAP_FN_TEMPLATE = """
-PyObject *_PyFrozenModule_GetCode(PyObject *name)
-{{
-    if (_PyUnicode_EqualToASCIIString(name, "_frozen_importlib"))
-        return (PyObject*){bootstrap};
-    if (_PyUnicode_EqualToASCIIString(name, "_frozen_importlib_external"))
-        return (PyObject*){bootstrap_external};
-    return NULL;
-}}
+PyObject *_PyFrozenModule_GetCode(PyObject *name, int *needs_path)
+{
+    PyObject *t = PyDict_GetItem(frozen_code_objects, name);
+    if (t == NULL) {
+        return NULL;
+    }
+    PyObject *origin = PyTuple_GetItem(t, 3);
+    if (!_PyUnicode_EqualToASCIIString(origin, "frozen")) {{
+	return NULL; // will be returned from _PyFrozenModule_Lookup
+    }}
+    PyObject *co = PyTuple_GetItem(t, 0);
+    *needs_path = PyObject_IsTrue(PyTuple_GetItem(t, 1));
+    return co;
+}
 """
 
 PYTHON_FROZEN_MODULES_TEMPLATE = """
@@ -570,91 +537,6 @@ PYTHON_FROZEN_MODULES_TEMPLATE = """
 static _Bool frozen_modules_initialized = false;
 static _Bool frozen_modules_disable = false;
 static PyObject* frozen_code_objects = NULL;
-
-/* Remove name from sys.modules, if it's there. */
-static void
-remove_module(PyObject *name)
-{{
-    PyObject *modules = PyImport_GetModuleDict();
-    if (PyDict_GetItem(modules, name) == NULL)
-        return;
-    if (PyDict_DelItem(modules, name) < 0)
-        Py_FatalError("import:  deleting existing key in"
-                      "sys.modules failed");
-}}
-
-static PyObject *
-module_dict_for_exec(PyObject *name)
-{{
-    PyObject *m, *d = NULL;
-
-    m = PyImport_AddModuleObject(name);
-    if (m == NULL)
-        return NULL;
-    /* If the module is being reloaded, we get the old module back
-       and re-use its dict to exec the new code. */
-    d = PyModule_GetDict(m);
-    if (PyDict_GetItemString(d, "__builtins__") == NULL) {{
-        if (PyDict_SetItemString(d, "__builtins__",
-                                 PyEval_GetBuiltins()) != 0) {{
-            remove_module(name);
-            return NULL;
-        }}
-    }}
-
-    return d;  /* Return a borrowed reference. */
-}}
-
-static PyObject *
-exec_code_in_module(PyObject *name,
-                    PyObject *module_dict, PyObject *code_object)
-{{
-    PyObject *modules = PyImport_GetModuleDict();
-    PyObject *v, *m;
-
-    v = PyEval_EvalCode(code_object, module_dict, module_dict);
-    if (v == NULL) {{
-        remove_module(name);
-        return NULL;
-    }}
-    Py_DECREF(v);
-
-    if ((m = PyDict_GetItem(modules, name)) == NULL) {{
-        PyErr_Format(PyExc_ImportError,
-                     "Loaded module %R not found in sys.modules",
-                     name);
-        return NULL;
-    }}
-
-    Py_INCREF(m);
-
-    return m;
-}}
-
-#if 0
-static int import_bootstrap_module(char * name, PyObject* co) {{
-    PyObject *m, *d, *name_obj = PyUnicode_FromString(name);
-    if (!PyCode_Check(co)) {{
-        PyErr_Format(PyExc_TypeError,
-                     "frozen object %R is not a code object",
-                     "_frozen_importlib");
-        goto _import_botstrap_err_return;
-    }}
-    d = module_dict_for_exec(name_obj);
-    if (d == NULL) {{
-        goto _import_botstrap_err_return;
-    }}
-    m = exec_code_in_module(name_obj, d, co);
-    if (m == NULL)
-        goto _import_botstrap_err_return;
-    Py_DECREF(name_obj);
-    Py_DECREF(m);
-    return 1;
-_import_botstrap_err_return:
-    Py_DECREF(name_obj);
-    return -1;
-}}
-#endif
 
 int _PyFrozenModule_AddModule(const char *name, PyObject *co,
                                 _Bool needs_path, const char *parent_name,
@@ -740,7 +622,6 @@ void _PyFrozenModules_Enable(void) {{
     frozen_modules_disable = false;
 }}
 
-
 PyObject* _PyFrozenModule_Lookup(PyObject* name) {{
     if(frozen_code_objects != NULL && !frozen_modules_disable) {{
         PyObject *co, *needs_path,
@@ -750,9 +631,12 @@ PyObject* _PyFrozenModule_Lookup(PyObject* name) {{
         if (t == NULL) {{
             return NULL;
         }}
+        origin = PyTuple_GetItem(t, 3);
+        if (_PyUnicode_EqualToASCIIString(origin, "frozen")) {{
+            return NULL; // will be returned from _PyFrozenModule_GetCode
+        }}
         co = PyTuple_GetItem(t, 0);
         needs_path = PyTuple_GetItem(t, 1);
-        origin = PyTuple_GetItem(t, 3);
         cached = PyTuple_GetItem(t, 4);
         if (co != NULL) {{
             if (needs_path == Py_True) {{
@@ -784,14 +668,14 @@ PyObject* _PyFrozenModule_Lookup(PyObject* name) {{
                 }}
                 PyList_SetItem(l, 0, path_str);
                 int err = PyDict_SetItemString(module_dict, "__path__", l);
-                Py_DECREF(l);
+                //Py_DECREF(l);
                 if (err != 0) {{
                     Py_DECREF(origin);
                     Py_DECREF(cached);
                     Py_DECREF(path_str);
                     return NULL;
                 }}
-                Py_DECREF(path_str);
+                //Py_DECREF(path_str);
             }}
             module = PyImport_ExecCodeModuleObject(
                 name, co, origin, cached);
@@ -858,9 +742,6 @@ def main():
                                      help="Freeze startup modules "
                                           "from a python interpreter")
     parser_2.set_defaults(freeze_startup_modules=True)
-    parser_2.add_argument('python_binary', type=str,
-                          help="The python interpreter to get "
-                               "the startup python modules from")
     parser_2.add_argument('-o', '--out-file', type=str,
                           default='out.c', nargs='?',
                           help="The output filename (defaults to 'out.c')")
@@ -872,8 +753,7 @@ def main():
     if getattr(args, 'freeze_py', False):
         serializer.freeze_py(args.py_file, output_filename=args.out_file)
     elif getattr(args, 'freeze_startup_modules', False):
-        serializer.freeze_startup_modules(args.python_binary,
-                                          args.out_file,
+        serializer.freeze_startup_modules(args.out_file,
                                           extra_modules=args.extra_module)
 
 if __name__ == '__main__':

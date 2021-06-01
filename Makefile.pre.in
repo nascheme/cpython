@@ -742,8 +742,7 @@ check-abidump: all
 .PHONY: regen-freeze-startup
 regen-freeze-startup:
 	./python $(srcdir)/Tools/freeze2/freeze2.py \
-		freeze-startup-modules -o $(srcdir)/Python/frozenmodules.c \
-		./python -x bisect
+		freeze-startup-modules -o $(srcdir)/Python/frozenmodules.c
 
 ############################################################################
 # Regenerate all generated files

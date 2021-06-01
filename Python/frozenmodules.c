@@ -30,7 +30,7 @@ int _PyFrozenModules_ImportBootstrap(void)
     return 0;
 }
 
-PyObject *_PyFrozenModule_GetCode(PyObject *name)
+PyObject *_PyFrozenModule_GetCode(PyObject *name, int *needs_path)
 {
     return NULL;
 }

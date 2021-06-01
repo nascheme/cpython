@@ -1280,7 +1280,8 @@ find_frozen(PyObject *name)
 static PyObject *
 get_frozen_object(PyObject *name)
 {
-    PyObject *co = _PyFrozenModule_GetCode(name);
+    int needs_path;
+    PyObject *co = _PyFrozenModule_GetCode(name, &needs_path);
     if (co != NULL) {
         Py_INCREF(co);
         if (Py_VerboseFlag) {
@@ -1312,6 +1313,17 @@ get_frozen_object(PyObject *name)
 static PyObject *
 is_frozen_package(PyObject *name)
 {
+    int ispackage;
+    PyObject *co = _PyFrozenModule_GetCode(name, &ispackage);
+    if (co != NULL) {
+        if (ispackage) {
+            Py_RETURN_TRUE;
+        }
+        else {
+            Py_RETURN_FALSE;
+        }
+    }
+
     const struct _frozen *p = find_frozen(name);
     int size;
 
@@ -1341,10 +1353,8 @@ PyImport_ImportFrozenModuleObject(PyObject *name)
 {
     PyObject *co, *m, *d;
     int ispackage;
-
-    co = _PyFrozenModule_GetCode(name);
+    co = _PyFrozenModule_GetCode(name, &ispackage);
     if (co != NULL) {
-        ispackage = 0;
         Py_INCREF(co);
         if (Py_VerboseFlag) {
             PySys_FormatStderr("found static frozen module %U\n", name);
@@ -1793,6 +1803,7 @@ PyImport_ImportModuleLevelObject(PyObject *name, PyObject *globals,
     }
 
     if (mod == NULL) {
+        /* try finding code object from frozenmodules.c */
         mod = _PyFrozenModule_Lookup(abs_name);
         from_frozen_module = true;
         if (mod != NULL && Py_VerboseFlag) {
@@ -2172,6 +2183,12 @@ static PyObject *
 _imp_is_frozen_impl(PyObject *module, PyObject *name)
 /*[clinic end generated code: output=01f408f5ec0f2577 input=7301dbca1897d66b]*/
 {
+    int ispackage;
+    PyObject *co = _PyFrozenModule_GetCode(name, &ispackage);
+    if (co != NULL) {
+        return PyBool_FromLong(ispackage ? -1 : 1);
+    }
+
     const struct _frozen *p;
 
     p = find_frozen(name);
