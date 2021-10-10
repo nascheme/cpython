@@ -250,7 +250,7 @@ get_ast_state(PyObject* Py_UNUSED(module))
     return state;
 }
 
-void _PyAST_Fini()
+void _PyAST_Fini(void)
 {
     astmodulestate* state = &global_ast_state;
     Py_CLEAR(state->AST_type);
@@ -1895,6 +1895,8 @@ init_types(astmodulestate *state)
     _PyEndOnce(&once);
     return 1;
 }
+
+
 static int obj2ast_mod(astmodulestate *state, PyObject* obj, mod_ty* out,
                        PyArena* arena);
 static int obj2ast_stmt(astmodulestate *state, PyObject* obj, stmt_ty* out,
@@ -10365,7 +10367,7 @@ astmodule_exec(PyObject *m)
         return -1;
     }
     if (PyModule_AddIntMacro(m, PyCF_OPTIMIZE_AST) < 0) {
-        goto error;
+        return -1;
     }
     if (PyModule_AddIntMacro(m, PyCF_TYPE_COMMENTS) < 0) {
         return -1;

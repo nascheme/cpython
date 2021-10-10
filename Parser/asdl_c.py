@@ -1104,7 +1104,7 @@ class ASTModuleVisitor(PickleVisitor):
         self.emit("return -1;", 2)
         self.emit('}', 1)
         self.emit('if (PyModule_AddIntMacro(m, PyCF_OPTIMIZE_AST) < 0) {', 1)
-        self.emit("goto error;", 2)
+        self.emit("return -1;", 2)
         self.emit('}', 1)
         self.emit('if (PyModule_AddIntMacro(m, PyCF_TYPE_COMMENTS) < 0) {', 1)
         self.emit("return -1;", 2)
@@ -1432,7 +1432,7 @@ get_ast_state(PyObject* Py_UNUSED(module))
     return state;
 }
 
-void _PyAST_Fini()
+void _PyAST_Fini(void)
 {
     astmodulestate* state = &global_ast_state;
 """)

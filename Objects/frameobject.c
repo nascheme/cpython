@@ -35,7 +35,7 @@ frame_getlocals(PyFrameObject *f, void *closure)
 static PyObject *
 frame_getcode(PyFrameObject *f, void *closure)
 {
-    return PyFrame_GetCode(f);
+    return (PyObject *)PyFrame_GetCode(f);
 }
 
 int
@@ -670,9 +670,9 @@ frame_traverse(PyFrameObject *f, visitproc visit, void *arg)
     Py_VISIT(f->f_trace);
 
     /* locals */
-    slots = frame_nslots(f);
-    fastlocals = f->f_localsplus;
-    for (i = slots; --i >= 0; ++fastlocals)
+    Py_ssize_t slots = frame_nslots(f);
+    PyObject **fastlocals = f->f_localsplus;
+    for (Py_ssize_t i = slots; --i >= 0; ++fastlocals) {
         Py_VISIT(*fastlocals);
     }
 
@@ -706,9 +706,9 @@ frame_tp_clear(PyFrameObject *f)
     Py_CLEAR(f->f_trace);
 
     /* locals */
-    slots = frame_nslots(f);
-    fastlocals = f->f_localsplus;
-    for (i = slots; --i >= 0; ++fastlocals)
+    Py_ssize_t slots = frame_nslots(f);
+    PyObject **fastlocals = f->f_localsplus;
+    for (Py_ssize_t i = slots; --i >= 0; ++fastlocals) {
         Py_CLEAR(*fastlocals);
     }
 
@@ -903,13 +903,6 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
         return f;
     }
 
-    Py_ssize_t ncells = PyTuple_GET_SIZE(code->co_cellvars);
-    Py_ssize_t nfrees = PyTuple_GET_SIZE(code->co_freevars);
-    Py_ssize_t extras = code->co_stacksize + code->co_nlocals + ncells + nfrees;
-#if PyFrame_MAXFREELIST > 0
-    if (free_list == NULL)
-#endif
-
     if (_PyObject_ThreadId(code) == _Py_ThreadId() && code->co_zombieframe != NULL) {
         f = code->co_zombieframe;
         code->co_zombieframe = NULL;
@@ -936,13 +929,16 @@ _PyFrame_New_NoTrack(PyThreadState *tstate, PyCodeObject *code,
         extras = code->co_nlocals + ncells + nfrees + 1;
         f->f_valuestack = f->f_localsplus + extras;
         f->f_callablestack = f->f_valuestack + code->co_stacksize;
-        for (i=0; i<extras; i++)
+        for (Py_ssize_t i=0; i<extras; i++) {
             f->f_localsplus[i] = NULL;
+        }
         f->f_blockstack = (PyTryBlock *)(f->f_callablestack + code->co_callablesize);
         f->f_locals = NULL;
         f->f_trace = NULL;
     }
 
+    PyObject *builtins;
+    PyFrameObject *back = tstate->frame;
     if (back && back->f_globals == globals) {
         /* If we share the globals, we share the builtins.
            Save a lookup and a call. */
@@ -1089,6 +1085,7 @@ PyFrame_BlockPop(PyFrameObject *f)
     return b;
 }
 
+#if 0
 /* Convert between "fast" version of locals and dictionary version.
 
    map and values are input arguments.  map is a tuple of strings.
@@ -1133,6 +1130,7 @@ map_to_dict(PyObject *map, Py_ssize_t nmap, PyObject *dict, PyObject **values,
     }
     return 0;
 }
+#endif
 
 /* Copy values from the "locals" dict into the fast locals.
 
@@ -1320,7 +1318,6 @@ PyFrame_UnretainForGC(PyFrameObject *top)
 void
 _PyFrame_ClearFreeList(void)
 {
-    return 0;
 }
 
 void
@@ -1340,7 +1337,10 @@ PyCodeObject *
 PyFrame_GetCode(PyFrameObject *frame)
 {
     assert(frame != NULL);
-    PyCodeObject *code = frame->f_code ? frame->f_code : frame->f_code2;
+    PyCodeObject *code = frame->f_code;
+    if (code == NULL) {
+        code = (PyCodeObject *)frame->f_code2;
+    }
     assert(code != NULL);
     Py_INCREF(code);
     return code;

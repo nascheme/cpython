@@ -17,6 +17,7 @@ terms of the MIT license. A copy of the license can be found in the file
 
 #include "Python.h"
 #include "pycore_pystate.h"
+#include "pycore_interp.h"
 
 /* -----------------------------------------------------------
   Definition of page queues for each block size

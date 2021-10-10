@@ -50,7 +50,7 @@ _Py_IDENTIFIER(__name__);
 /* Forward declarations */
 Py_LOCAL_INLINE(PyObject *) call_function(
     PyThreadState *tstate, PyObject *func,
-    PyObject **pp_stack,
+    PyObject ***pp_stack,
     Py_ssize_t oparg, PyObject *kwnames);
 static PyObject * do_call_core(
     PyThreadState *tstate, PyObject *func,
@@ -866,7 +866,6 @@ _PyEval_EvalFrameDefault(PyThreadState *tstate, PyFrameObject *f, int throwflag)
     const _Py_CODEUNIT *first_instr;
     PyObject *names;
     PyObject *consts;
-    _PyOpcache *co_opcache;
 
 #ifdef LLTRACE
     _Py_IDENTIFIER(__ltrace__);

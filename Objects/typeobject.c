@@ -44,6 +44,7 @@ class object "PyObject *" "&PyBaseObject_Type"
         PyUnicode_GET_LENGTH(name) <= MCACHE_MAX_ATTR_SIZE
 
 static uintptr_t next_version_tag = 0;
+#endif
 
 #define MCACHE_STATS 0
 
@@ -3900,7 +3901,7 @@ type_clear(PyTypeObject *type)
     //     ((PyHeapTypeObject *)type)->ht_cached_keys = NULL;
     //     _PyDictKeys_DecRef(cached_keys);
     // }
-    if (type->tp_dict)
+    if (type->tp_dict) {
         PyDict_Clear(type->tp_dict);
     }
     Py_CLEAR(((PyHeapTypeObject *)type)->ht_module);
@@ -8279,6 +8280,7 @@ super_descr_get(PyObject *self, PyObject *obj, PyObject *type)
 int
 vm_super_init(PyObject **obj, PyTypeObject **type);
 
+#if 0
 static int
 super_init_without_args(PyFrameObject *f, PyCodeObject *co,
                         PyTypeObject **type_p, PyObject **obj_p)
@@ -8355,6 +8357,7 @@ super_init_without_args(PyFrameObject *f, PyCodeObject *co,
     *obj_p = obj;
     return 0;
 }
+#endif
 
 static int
 super_init(PyObject *self, PyObject *args, PyObject *kwds)

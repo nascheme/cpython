@@ -1948,7 +1948,6 @@ _PyFloat_Init(void)
 void
 _PyFloat_ClearFreeList(void)
 {
-    return 0;
 }
 
 void

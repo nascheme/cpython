@@ -11,7 +11,6 @@
 #include "pycore_gc.h"       // _PyObject_GC_IS_TRACKED()
 #include "pycore_object.h"
 #include "pycore_pystate.h"
-#include "dict-common.h"
 #include "pycore_dict.h"
 #include "lock.h"
 #include "stringlib/eq.h"    /* to get unicode_eq() */
@@ -52,7 +51,6 @@ DICT_NEXT_VERSION(void)
 void
 _PyDict_ClearFreeList(void)
 {
-    return 0;
 }
 
 /* Print summary info about the state of the optimized allocator */

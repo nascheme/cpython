@@ -763,6 +763,7 @@ warn_explicit(PyObject *category, PyObject *message,
     return result;  /* Py_None or NULL. */
 }
 
+#if 0
 static int
 is_internal_frame(PyFrameObject *frame)
 {
@@ -917,6 +918,7 @@ setup_context_old(Py_ssize_t stack_level, PyObject **filename, int *lineno,
     Py_DECREF(*filename);
     return 0;
 }
+#endif
 
 /* filename, module, and registry are new refs, globals is borrowed */
 /* Returns 0 on error (no new refs), 1 on success */
@@ -937,7 +939,7 @@ setup_context(Py_ssize_t stack_level, PyObject **filename, int *lineno,
     }
 
     if (func == NULL) {
-        globals = _PyInterpreterState_GET_UNSAFE()->sysdict;
+        globals = _PyInterpreterState_GET()->sysdict;
         *filename = PyUnicode_FromString("sys");
         *lineno = 1;
     }
@@ -1414,7 +1416,7 @@ _PyErr_WarnUnawaitedCoroutine(PyObject *coro)
     if (!warned) {
         PyObject *qualname = PyCoro_CheckExact(coro) ? ((PyCoroObject *)coro)->cr_qualname :
                              PyCoro2_CheckExact(coro) ? ((PyGenObject2 *)coro)->qualname : NULL;
-        if (PyErr_WarnFormat(coro, PyExc_RuntimeWarning, 1,
+        if (_PyErr_WarnFormat(coro, PyExc_RuntimeWarning, 1,
                              "coroutine '%S' was never awaited",
                              qualname) < 0)
         {

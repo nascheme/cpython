@@ -15656,6 +15656,7 @@ PyUnicode_InternInPlace(PyObject **p)
 
 #ifdef INTERNED_STRINGS
 
+    PyObject *t;
     Py_ALLOW_RECURSION
     _PyMutex_lock(&interned_mutex);
     t = PyDict_SetDefault(interned, s, s);
@@ -16269,7 +16270,7 @@ _PyUnicode_Fini(PyThreadState *tstate)
          */
         unicode_release_interned();
 #endif /* __INSURE__ */
-        _PyUnicode_ClearStaticStrings();
+        unicode_clear_static_strings();
     }
 
     _PyUnicode_FiniEncodings(&tstate->interp->unicode.fs_codec);
