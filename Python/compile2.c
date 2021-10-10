@@ -358,7 +358,10 @@ compile_object(struct compiler *c, mod_ty mod, PyObject *filename,
         c->flags.cf_flags = c->future->ff_features;
     }
 
-    if (!_PyAST_Optimize(mod, arena, c->optimize)) {
+    _PyASTOptimizeState state;
+    state.optimize = c->optimize;
+    state.ff_features = c->flags.cf_flags;
+    if (!_PyAST_Optimize(mod, arena, &state)) {
         COMPILER_ERROR(c);
     }
 

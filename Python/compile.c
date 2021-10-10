@@ -323,12 +323,18 @@ PyAST_CompileObject(mod_ty mod, PyObject *filename, PyCompilerFlags *flags,
 {
     PyCompilerFlags local_flags = _PyCompilerFlags_INIT;
     int merged;
-    PyConfig *config = &_PyInterpreterState_GET_UNSAFE()->config;
+    const PyConfig *config = _Py_GetConfig();
     if (optimize == -1) {
         optimize = config->optimization_level;
     }
-
-    if (!_PyAST_Optimize(mod, arena, optimize)) {
+    if (!flags) {
+        flags = &local_flags;
+    }
+    merged = flags->cf_flags;
+    _PyASTOptimizeState state;
+    state.optimize = optimize;
+    state.ff_features = merged;
+    if (!_PyAST_Optimize(mod, arena, &state)) {
         return NULL;
     }
     return (PyCodeObject *)PyAST_CompileObject2(mod, filename, flags, optimize, arena);
