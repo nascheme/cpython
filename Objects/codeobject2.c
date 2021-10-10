@@ -9,7 +9,7 @@
 #include "pycore_gc.h"
 #include "pycore_pystate.h"
 #include "pycore_tupleobject.h"
-#include "../Modules/hashtable.h"
+#include "pycore_hashtable.h"
 
 // An individual register can have an owning or non-owning reference
 // Deferred and immortal objects always have non-owning references (immortal for correctness, deferred for perf, helps)
@@ -376,7 +376,7 @@ compare_const(_Py_hashtable_t *ht,
               const _Py_hashtable_entry_t *he)
 {
     PyObject *op1 = *(PyObject **)pkey;
-    PyObject *op2 = *(PyObject **)_Py_HASHTABLE_ENTRY_PKEY(he);
+    PyObject *op2 = *(PyObject **)(he->key);
     return compare_constants(op1, op2);
 }
 
@@ -389,9 +389,9 @@ intern_immortal(_Py_hashtable_t *ht, PyObject *key, PyObject **ptr)
     _Py_hashtable_entry_t *entry;
     PyObject *op = *ptr;
 
-    entry = _Py_HASHTABLE_GET_ENTRY(ht, op);
+    entry = _Py_hashtable_get_entry(ht, op);
     if (entry == NULL) {
-        if (_Py_HASHTABLE_SET_NODATA(ht, op) != 0) {
+        if (_Py_hashtable_set(ht, op, NULL) != 0) {
             return -1;
         }
         if (PyType_HasFeature(Py_TYPE(op), Py_TPFLAGS_HAVE_GC)) {
@@ -401,7 +401,7 @@ intern_immortal(_Py_hashtable_t *ht, PyObject *key, PyObject **ptr)
         op->ob_tid = 0;
     }
     else {
-        PyObject *value = *(PyObject **)_Py_HASHTABLE_ENTRY_PKEY(entry);
+        PyObject *value = *(PyObject **)(entry->key);
         Py_INCREF(value);
         Py_SETREF(*ptr, value);
     }
@@ -476,8 +476,7 @@ _PyCode_InternConstants(PyCodeObject2 *co)
 
     _Py_hashtable_t *consts = is->consts;
     if (consts == NULL) {
-        consts = _Py_hashtable_new(sizeof(PyObject *), 0,
-                                   &hash_const, &compare_const);
+        consts = _Py_hashtable_new(&hash_const, &compare_const);
         if (consts == NULL) {
             goto error;
         }
