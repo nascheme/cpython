@@ -188,7 +188,7 @@ _PyEval_InitGIL(PyThreadState *tstate)
     }
 
     if (!_PyBeginOnce(&init_threads_once_flag)) {
-        return;
+        return _PyStatus_ERR("cannot init threads");
     }
 
     _PyRuntimeState *runtime = &_PyRuntime;
@@ -304,7 +304,7 @@ void
 _PyEval_TakeGIL(PyThreadState *tstate)
 {
     _PyRuntimeState *runtime = &_PyRuntime;
-    take_gil(&runtime->ceval, tstate);
+    take_gil(tstate);
     _PyRuntimeState_SetThreadState(runtime, tstate);
 }
 
@@ -313,12 +313,9 @@ _PyEval_DropGIL(PyThreadState *tstate)
 {
     _PyRuntimeState *runtime = &_PyRuntime;
     _PyRuntimeState_SetThreadState(runtime, NULL);
-    drop_gil(&runtime->ceval, tstate);
-#if 0
     struct _ceval_runtime_state *ceval = &runtime->ceval;
     struct _ceval_state *ceval2 = &tstate->interp->ceval;
     drop_gil(ceval, ceval2, tstate);
-#endif
 }
 
 void
@@ -525,7 +522,6 @@ make_pending_calls(PyThreadState *tstate)
     }
     busy = 1;
 
-    _PyRuntimeState *runtime = tstate->interp->runtime;
     /* unsignal before starting to call callbacks, so that any callback
        added in-between re-signals */
     _PyThreadState_Unsignal(tstate, EVAL_PENDING_CALLS);
@@ -605,7 +601,7 @@ Py_MakePendingCalls(void)
      * Ensure that the thread isn't currently running some other
      * interpreter.
      */
-    PyThreadState *tstate = _PyRuntimeState_GetThreadState(runtime);
+    tstate = _PyRuntimeState_GetThreadState(runtime);
     if (tstate->interp != runtime->interpreters.main) {
         return 0;
     }
@@ -772,11 +768,12 @@ _PyEval_HandleBreaker(PyThreadState *tstate)
         if (_PyThreadState_Swap(&runtime->gilstate, NULL) != tstate) {
             Py_FatalError("ceval: tstate mix-up");
         }
-        drop_gil(ceval, tstate);
+        struct _ceval_state *ceval2 = &tstate->interp->ceval;
+        drop_gil(ceval, ceval2, tstate);
 
         /* Other threads may run now */
 
-        take_gil(ceval, tstate);
+        take_gil(tstate);
 
         if (_PyThreadState_Swap(&runtime->gilstate, tstate) != NULL) {
             Py_FatalError("ceval: orphan tstate");

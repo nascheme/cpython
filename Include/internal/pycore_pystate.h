@@ -71,7 +71,7 @@ PyAPI_FUNC(void) _PyThreadState_Shutdown(PyThreadState *tstate);
 static inline void
 _PyThreadState_CheckForShutdown(PyThreadState *tstate)
 {
-    PyThreadState *finalizing = _Py_atomic_load_ptr_relaxed(&_PyRuntime.finalizing);
+    PyThreadState *finalizing = _PyRuntimeState_GetFinalizing(&_PyRuntime);
     if (finalizing != NULL && finalizing != tstate) {
         _PyThreadState_Shutdown(tstate);
     }

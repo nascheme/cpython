@@ -221,13 +221,14 @@ static void
 take_gil(PyThreadState *tstate)
 {
     int err = errno;
-    struct _gil_runtime_state *gil = &ceval->gil;
 
     assert(tstate != NULL);
 
     /* Check if a Python thread must exit immediately, rather than taking the GIL
        if Py_Finalize() has been called. */
     _PyThreadState_CheckForShutdown(tstate);
+
+    struct _gil_runtime_state *gil = &_PyRuntime.ceval.gil;
 
     if (!gil->enabled) {
         return;
