@@ -31,13 +31,114 @@ typedef struct {
     uintptr_t _gc_next;
 } PyGC_Head;
 
+
+/* GC runtime state */
+
+/* If we change this, we need to change the default value in the
+   signature of gc.collect. */
+#define NUM_GENERATIONS 3
+/*
+   NOTE: about untracking of mutable objects.
+
+   Certain types of container cannot participate in a reference cycle, and
+   so do not need to be tracked by the garbage collector. Untracking these
+   objects reduces the cost of garbage collections. However, determining
+   which objects may be untracked is not free, and the costs must be
+   weighed against the benefits for garbage collection.
+
+   There are two possible strategies for when to untrack a container:
+
+   i) When the container is created.
+   ii) When the container is examined by the garbage collector.
+
+   Tuples containing only immutable objects (integers, strings etc, and
+   recursively, tuples of immutable objects) do not need to be tracked.
+   The interpreter creates a large number of tuples, many of which will
+   not survive until garbage collection. It is therefore not worthwhile
+   to untrack eligible tuples at creation time.
+
+   Instead, all tuples except the empty tuple are tracked when created.
+   During garbage collection it is determined whether any surviving tuples
+   can be untracked. A tuple can be untracked if all of its contents are
+   already not tracked. Tuples are examined for untracking in all garbage
+   collection cycles. It may take more than one cycle to untrack a tuple.
+
+   Dictionaries containing only immutable objects also do not need to be
+   tracked. Dictionaries are untracked when created. If a tracked item is
+   inserted into a dictionary (either as a key or value), the dictionary
+   becomes tracked. During a full garbage collection (all generations),
+   the collector will untrack any dictionaries whose contents are not
+   tracked.
+
+   The module provides the python function is_tracked(obj), which returns
+   the CURRENT tracking status of the object. Subsequent garbage
+   collections may change the tracking status of the object.
+
+   Untracking of certain containers was introduced in issue #4688, and
+   the algorithm was refined in response to issue #14775.
+*/
+
+struct gc_generation {
+    PyGC_Head head;
+    int threshold; /* collection threshold */
+    int count; /* count of allocations or collections of younger
+                  generations */
+};
+
+/* Running stats per generation */
+struct gc_generation_stats {
+    /* total number of collections */
+    Py_ssize_t collections;
+    /* total number of collected objects */
+    Py_ssize_t collected;
+    /* total number of uncollectable objects (put into gc.garbage) */
+    Py_ssize_t uncollectable;
+};
+
+struct _gc_runtime_state {
+    /* List of objects that still need to be cleaned up, singly linked
+     * via their gc headers' gc_prev pointers.  */
+    PyObject *trash_delete_later;
+    /* Current call-stack depth of tp_dealloc calls. */
+    int trash_delete_nesting;
+
+    int enabled;
+    int debug;
+    /* linked lists of container objects */
+    struct gc_generation generations[NUM_GENERATIONS];
+    PyGC_Head *generation0;
+    /* a permanent generation which won't be collected */
+    struct gc_generation permanent_generation;
+    struct gc_generation_stats generation_stats[NUM_GENERATIONS];
+    /* true if we are currently running the collector */
+    int collecting;
+    /* list of uncollectable objects */
+    PyObject *garbage;
+    /* a list of callbacks to be invoked when collection is performed */
+    PyObject *callbacks;
+
+    int64_t gc_live;
+
+    int64_t gc_threshold;
+
+    int gc_scale;
+
+    /* Number of threads that must park themselves to stop-the-world.
+       Protected by HEAD_LOCK(runtime). */
+    int32_t gc_thread_countdown;
+
+    _PyRawEvent gc_stop_event;
+};
+
 #define _Py_AS_GC(o) ((PyGC_Head *)(o)-1)
 #define _Py_FROM_GC(g) ((PyObject *)(((PyGC_Head *)g)+1))
 
+#if 0
 /* See also private _PyObject_GC_IS_TRACKED() macro. */
 // TODO: should this be part of the public C-API and move to object.h?
 PyAPI_FUNC(int) PyObject_GC_IsTracked(void *);
 #define _PyObject_GC_IS_TRACKED(o) PyObject_GC_IsTracked(o)
+#endif
 
 /* Bit flags for _gc_prev */
 /* Bit 0 is set when tp_finalize is called */
@@ -208,103 +309,6 @@ _PyObject_GC_UNTRACK_impl(const char *filename, int lineno, PyObject *op)
 }
 
 
-/* GC runtime state */
-
-/* If we change this, we need to change the default value in the
-   signature of gc.collect. */
-#define NUM_GENERATIONS 3
-/*
-   NOTE: about untracking of mutable objects.
-
-   Certain types of container cannot participate in a reference cycle, and
-   so do not need to be tracked by the garbage collector. Untracking these
-   objects reduces the cost of garbage collections. However, determining
-   which objects may be untracked is not free, and the costs must be
-   weighed against the benefits for garbage collection.
-
-   There are two possible strategies for when to untrack a container:
-
-   i) When the container is created.
-   ii) When the container is examined by the garbage collector.
-
-   Tuples containing only immutable objects (integers, strings etc, and
-   recursively, tuples of immutable objects) do not need to be tracked.
-   The interpreter creates a large number of tuples, many of which will
-   not survive until garbage collection. It is therefore not worthwhile
-   to untrack eligible tuples at creation time.
-
-   Instead, all tuples except the empty tuple are tracked when created.
-   During garbage collection it is determined whether any surviving tuples
-   can be untracked. A tuple can be untracked if all of its contents are
-   already not tracked. Tuples are examined for untracking in all garbage
-   collection cycles. It may take more than one cycle to untrack a tuple.
-
-   Dictionaries containing only immutable objects also do not need to be
-   tracked. Dictionaries are untracked when created. If a tracked item is
-   inserted into a dictionary (either as a key or value), the dictionary
-   becomes tracked. During a full garbage collection (all generations),
-   the collector will untrack any dictionaries whose contents are not
-   tracked.
-
-   The module provides the python function is_tracked(obj), which returns
-   the CURRENT tracking status of the object. Subsequent garbage
-   collections may change the tracking status of the object.
-
-   Untracking of certain containers was introduced in issue #4688, and
-   the algorithm was refined in response to issue #14775.
-*/
-
-struct gc_generation {
-    PyGC_Head head;
-    int threshold; /* collection threshold */
-    int count; /* count of allocations or collections of younger
-                  generations */
-};
-
-/* Running stats per generation */
-struct gc_generation_stats {
-    /* total number of collections */
-    Py_ssize_t collections;
-    /* total number of collected objects */
-    Py_ssize_t collected;
-    /* total number of uncollectable objects (put into gc.garbage) */
-    Py_ssize_t uncollectable;
-};
-
-struct _gc_runtime_state {
-    /* List of objects that still need to be cleaned up, singly linked
-     * via their gc headers' gc_prev pointers.  */
-    PyObject *trash_delete_later;
-    /* Current call-stack depth of tp_dealloc calls. */
-    int trash_delete_nesting;
-
-    int enabled;
-    int debug;
-    /* linked lists of container objects */
-    struct gc_generation generations[NUM_GENERATIONS];
-    PyGC_Head *generation0;
-    /* a permanent generation which won't be collected */
-    struct gc_generation permanent_generation;
-    struct gc_generation_stats generation_stats[NUM_GENERATIONS];
-    /* true if we are currently running the collector */
-    int collecting;
-    /* list of uncollectable objects */
-    PyObject *garbage;
-    /* a list of callbacks to be invoked when collection is performed */
-    PyObject *callbacks;
-
-    int64_t gc_live;
-
-    int64_t gc_threshold;
-
-    int gc_scale;
-
-    /* Number of threads that must park themselves to stop-the-world.
-       Protected by HEAD_LOCK(runtime). */
-    int32_t gc_thread_countdown;
-
-    _PyRawEvent gc_stop_event;
-};
 
 PyAPI_FUNC(void) _PyGC_InitState(struct _gc_runtime_state *);
 PyAPI_FUNC(void) _PyGC_ResetHeap(void);
