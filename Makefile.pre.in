@@ -54,7 +54,6 @@ DTRACE=         @DTRACE@
 DFLAGS=         @DFLAGS@
 DTRACE_HEADERS= @DTRACE_HEADERS@
 DTRACE_OBJS=    @DTRACE_OBJS@
-WITH_MIMALLOC=	@WITH_MIMALLOC@
 
 GNULD=		@GNULD@
 
@@ -398,8 +397,24 @@ PYTHON_OBJS=	\
 		Python/$(DYNLOADFILE) \
 		$(LIBOBJS) \
 		$(MACHDEP_OBJS) \
-		$(DTRACE_OBJS)
+		$(DTRACE_OBJS) \
+		@MIMALLOC_OBJS@
 
+MIMALLOC_OBJS = \
+		Objects/mimalloc/alloc-aligned.o \
+		Objects/mimalloc/alloc-posix.o \
+		Objects/mimalloc/alloc.o \
+		Objects/mimalloc/arena.o \
+		Objects/mimalloc/bitmap.o \
+		Objects/mimalloc/heap.o \
+		Objects/mimalloc/init.o \
+		Objects/mimalloc/options.o \
+		Objects/mimalloc/os.o \
+		Objects/mimalloc/page.o \
+		Objects/mimalloc/random.o \
+		Objects/mimalloc/region.o \
+		Objects/mimalloc/segment.o \
+		Objects/mimalloc/stats.o
 
 ##########################################################################
 # Objects
@@ -448,26 +463,6 @@ OBJECT_OBJS=	\
 		Objects/unicodectype.o \
 		Objects/unionobject.o \
 		Objects/weakrefobject.o
-
-MIMALLOC_OBJS = \
-		Objects/mimalloc/alloc-aligned.o \
-		Objects/mimalloc/alloc-posix.o \
-		Objects/mimalloc/alloc.o \
-		Objects/mimalloc/arena.o \
-		Objects/mimalloc/bitmap.o \
-		Objects/mimalloc/heap.o \
-		Objects/mimalloc/init.o \
-		Objects/mimalloc/options.o \
-		Objects/mimalloc/os.o \
-		Objects/mimalloc/page.o \
-		Objects/mimalloc/random.o \
-		Objects/mimalloc/region.o \
-		Objects/mimalloc/segment.o \
-		Objects/mimalloc/stats.o
-
-ifeq ($(WITH_MIMALLOC),1)
-OBJECT_OBJS :=	$(OBJECT_OBJS) $(MIMALLOC_OBJS)
-endif
 
 ##########################################################################
 # objects that get linked into the Python library
@@ -1305,17 +1300,14 @@ PYTHON_HEADERS= \
 		$(srcdir)/Include/internal/pycore_warnings.h \
 		$(DTRACE_HEADERS) \
 		\
-		$(srcdir)/Python/stdlib_module_names.h
+		$(srcdir)/Python/stdlib_module_names.h \
+		@MIMALLOC_HEADERS@
 
 MIMALLOC_HEADERS = \
 		$(srcdir)/Include/mimalloc/mimalloc-atomic.h \
 		$(srcdir)/Include/mimalloc/mimalloc.h \
 		$(srcdir)/Include/mimalloc/mimalloc-internal.h \
-		$(srcdir)/Include/mimalloc/mimalloc-types.h \
-
-ifeq ($(WITH_MIMALLOC),1)
-PYTHON_HEADERS := $(PYTHON_HEADERS) $(MIMALLOC_HEADERS)
-endif
+		$(srcdir)/Include/mimalloc/mimalloc-types.h
 
 $(LIBRARY_OBJS) $(MODOBJS) Programs/python.o: $(PYTHON_HEADERS)
 
