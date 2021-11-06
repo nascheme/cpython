@@ -968,16 +968,12 @@ finalize_garbage(gc_state_t *state, cstate_t *cstate)
     return have_finalizers;
 }
 
-/* Walk the collectable list and check that they are really unreachable
-   from the outside (some objects could have been resurrected by a
-   finalizer). */
-static int
-check_garbage(gc_state_t *state, int generation, Py_ssize_t size_hint)
+static cstate_t *
+update_refs_garbage(gc_state_t *state, int generation, Py_ssize_t size_hint)
 {
-    int ret = 0;
     Py_ssize_t i = 0;
     PyGC_Head *head = HEAD(state);
-    cstate_t *cstate = gc_cstate_new(size_hint);
+    cstate_t *cstate = gc_cstate_new(size_hint); // FIXME: errors
     for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
         if (!IS_WHITE(gc)) {
             continue;
@@ -990,7 +986,16 @@ check_garbage(gc_state_t *state, int generation, Py_ssize_t size_hint)
     }
     cstate->size = i;
     //fprintf(stderr, "garbage cstate size %ld\n", cstate->size);
-    subtract_refs(state, cstate);
+    return cstate;
+}
+
+/* Walk the collectable list and check that they are really unreachable
+   from the outside (some objects could have been resurrected by a
+   finalizer). */
+static Py_ssize_t
+check_garbage(gc_state_t *state, cstate_t *cstate)
+{
+    Py_ssize_t revived = 0;
     for (Py_ssize_t i = 0; i < cstate->size; i++) {
         PyObject *op = cstate->objects[i];
         PyGC_Head *gc = AS_GC(op);
@@ -1002,74 +1007,66 @@ check_garbage(gc_state_t *state, int generation, Py_ssize_t size_hint)
                 PySys_WriteStderr("gc: check_garbage failed: %p\n",
                                   FROM_GC(gc));
             }
-            ret = -1;
             SET_COLOR(gc, COLOR_BLACK);
+            revived++;
         }
     }
-    restore_refs(state, cstate);
-    gc_cstate_free(cstate);
-    return ret;
+    return revived;
 }
 
 /* Break reference cycles by clearing the containers involved.  This is
  * tricky business as the lists can be changing and we don't know which
  * objects may be freed.  It is possible I screwed something up here.
  */
-static bool
-delete_garbage(gc_state_t *state, int generation)
+static void
+delete_garbage(gc_state_t *state, cstate_t *cstate)
 {
     assert(!PyErr_Occurred());
     // FIXME: this can go away when we iterate over bitmaps
     PyObject *garbage = PyList_New(0);
     _PyObject_GC_UNTRACK(garbage);
 
-    PyGC_Head *head = HEAD(state);
-    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
-        if (!IS_WHITE(gc)) {
-            continue;
+    for (Py_ssize_t i = 0; i < cstate->size; i++) {
+        PyObject *op = cstate->objects[i];
+        PyGC_Head *gc = AS_GC(op);
+        if (IS_WHITE(gc)) {
+            Py_INCREF(op);
+            cstate->refs[i] = -1;
         }
+    }
 
-        PyObject *op = FROM_GC(gc);
-
-        _PyObject_ASSERT_WITH_MSG(op, Py_REFCNT(op) > 0,
-                                  "refcount is too small");
-
-        if (state->debug & DEBUG_SAVEALL) {
-            assert(state->garbage != NULL);
-            if (PyList_Append(state->garbage, op) < 0) {
-                PyErr_Clear();
+    for (Py_ssize_t i = 0; i < cstate->size; i++) {
+        if (cstate->refs[i] == -1) {
+            PyObject *op = cstate->objects[i];
+            PyGC_Head *gc = AS_GC(op);
+            assert(IS_WHITE(gc));
+            if (state->debug & DEBUG_SAVEALL) {
+                assert(state->garbage != NULL);
+                if (PyList_Append(state->garbage, op) < 0) {
+                    PyErr_Clear();
+                }
             }
-        }
-        else {
-            PyList_Append(garbage, FROM_GC(gc));
-        }
-    }
-
-    Py_ssize_t n = PyList_GET_SIZE(garbage);
-
-    if (debug_verbose) {
-        fprintf(stderr, "delete_garbage %ld\n", n);
-    }
-
-    for (Py_ssize_t i=0; i < n; i++) {
-        PyObject *op = PyList_GET_ITEM(garbage, i);
-        if (debug_verbose) {
-            fprintf(stderr, "call tp_clear %p refcnt=%ld\n", op, op->ob_refcnt);
-        }
-        if (op->ob_refcnt > 1) {
-            inquiry clear;
-            if ((clear = Py_TYPE(op)->tp_clear) != NULL) {
-                (void) clear(op);
-                if (PyErr_Occurred()) {
-                    _PyErr_WriteUnraisableMsg("in tp_clear of",
-                                              (PyObject*)Py_TYPE(op));
+            else if (Py_REFCNT(op) > 1) {
+                // if refcnt == 1 then object will be freed without clear
+                inquiry clear;
+                if ((clear = Py_TYPE(op)->tp_clear) != NULL) {
+                    (void) clear(op);
+                    if (PyErr_Occurred()) {
+                        _PyErr_WriteUnraisableMsg("in tp_clear of",
+                                                  (PyObject*)Py_TYPE(op));
+                    }
                 }
             }
         }
-        Py_INCREF(Py_None);
-        PyList_SetItem(garbage, i, Py_None);
     }
-    return n > 0;
+
+    /* really free objects, cstate becomes unusable here */
+    for (Py_ssize_t i = 0; i < cstate->size; i++) {
+        if (cstate->refs[i] == -1) {
+            PyObject *op = cstate->objects[i];
+            Py_DECREF(op);
+        }
+    }
 }
 
 /* Clear all free lists
@@ -1227,13 +1224,23 @@ collect(gc_state_t *state, int generation,
     gc_cstate_free(cstate);
 
     if (m > 0) {
-        if (check_garbage(state, generation, m) == 0) {
-            /* Call tp_clear on objects in the unreachable set.  This will cause
-             * the reference cycles to be broken.  It may also cause some objects
-             * in finalizers to be freed.
-             */
-            delete_garbage(state, generation);
+        cstate = update_refs_garbage(state, generation, m);
+        subtract_refs(state, cstate);
+        Py_ssize_t revived = check_garbage(state, cstate);
+#if 0
+        fprintf(stderr, "check garbage %ld objects\n", cstate->size);
+        if (revived > 0) {
+            fprintf(stderr, "revived %ld objects\n", revived);
         }
+#endif
+        restore_refs(state, cstate);
+        /* Call tp_clear on objects in the unreachable set.  This will cause
+         * the reference cycles to be broken.  It may also cause some objects
+         * in finalizers to be freed.
+         */
+        delete_garbage(state, cstate);
+        gc_cstate_free(cstate);
+        m -= revived;
     }
 
     if (state->debug & DEBUG_STATS) {
