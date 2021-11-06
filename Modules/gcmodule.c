@@ -265,6 +265,7 @@ gc_cstate_new(Py_ssize_t size)
     //fprintf(stderr, "allocate %ld gc saved vector\n", size);
     cstate_t *cstate = PyMem_Malloc(sizeof(cstate_t));
     if (cstate == NULL) {
+        assert(0); // FIXME: handle error
         return NULL;
     }
     cstate->size = -1;
@@ -272,12 +273,14 @@ gc_cstate_new(Py_ssize_t size)
     cstate->objects = PyMem_Malloc(sizeof(void*) * size);
     if (cstate->objects == NULL) {
         PyMem_Free(cstate);
+        assert(0); // FIXME: handle error
         return NULL;
     }
     cstate->refs = PyMem_Malloc(sizeof(Py_ssize_t) * size);
     if (cstate->refs == NULL) {
         PyMem_Free(cstate->objects);
         PyMem_Free(cstate);
+        assert(0); // FIXME: handle error
         return NULL;
     }
     return cstate;
@@ -288,12 +291,13 @@ gc_cstate_grow(cstate_t *cstate)
 {
     Py_ssize_t n = cstate->max_size;
     n += (n >> 2) + 16;
-    // FIXME: check for errors
     cstate->objects = PyMem_Realloc(cstate->objects, n * sizeof(void*));
+    assert(cstate->objects); // FIXME: check errors
     cstate->refs = PyMem_Realloc(cstate->refs, n * sizeof(Py_ssize_t));
+    assert(cstate->refs); // FIXME: check errors
     cstate->max_size = n;
     //fprintf(stderr, "grow cstate %ld\n", cstate->max_size);
-    return true; // FIXME: errors
+    return true; // FIXME: return error
 }
 
 static void
@@ -1585,7 +1589,6 @@ Return the list of objects that directly refer to any of objs.");
 static PyObject *
 gc_get_referrers(PyObject *self, PyObject *args)
 {
-    int i;
     if (PySys_Audit("gc.get_referrers", "(O)", args) < 0) {
         return NULL;
     }
