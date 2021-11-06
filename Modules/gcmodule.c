@@ -251,6 +251,7 @@ gc_list_size(PyGC_Head *list)
 /* Collection state while collecting.  Stores a list of object being examined
  * and the original ref counts, allocated on heap. */
 typedef struct _gc_collection_state {
+    Py_ssize_t max_size;
     Py_ssize_t size;
     // objects currently being examined for cycles
     void **objects;
@@ -266,7 +267,8 @@ gc_cstate_new(Py_ssize_t size)
     if (cstate == NULL) {
         return NULL;
     }
-    cstate->size = size;
+    cstate->size = -1;
+    cstate->max_size = size;
     cstate->objects = PyMem_Malloc(sizeof(void*) * size);
     if (cstate->objects == NULL) {
         PyMem_Free(cstate);
@@ -281,6 +283,19 @@ gc_cstate_new(Py_ssize_t size)
     return cstate;
 }
 
+static bool
+gc_cstate_grow(cstate_t *cstate)
+{
+    Py_ssize_t n = cstate->max_size;
+    n += (n >> 2) + 16;
+    // FIXME: check for errors
+    cstate->objects = PyMem_Realloc(cstate->objects, n * sizeof(void*));
+    cstate->refs = PyMem_Realloc(cstate->refs, n * sizeof(Py_ssize_t));
+    cstate->max_size = n;
+    //fprintf(stderr, "grow cstate %ld\n", cstate->max_size);
+    return true; // FIXME: errors
+}
+
 static void
 gc_cstate_free(cstate_t *cstate)
 {
@@ -293,7 +308,10 @@ static void
 gc_save_refs(cstate_t *cstate, Py_ssize_t i, PyObject *op)
 {
     /* update saved info */
-    assert(i < cstate->size);
+    if (i >= cstate->max_size) {
+        gc_cstate_grow(cstate); // FIXME: check error
+    }
+    assert(i < cstate->max_size);
     cstate->objects[i] = op;
     Py_ssize_t count = Py_REFCNT(op);
     assert(count > 0);
@@ -355,31 +373,23 @@ _PyGC_Initialize(gc_state_t *state)
 static cstate_t *
 update_refs(gc_state_t *state, int generation)
 {
-    Py_ssize_t size = 0;
+    Py_ssize_t i = 0;
+    cstate_t *cstate = gc_cstate_new(1000);
     PyGC_Head *head = HEAD(state);
     for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
         if (GET_GEN(gc) > generation) {
+#if 0
             // FIXME: should not be unneeded?
             if (!IS_BLACK(gc)) {
                 SET_COLOR(gc, COLOR_BLACK);
             }
+#endif
             continue;
         }
         if (!_PyObject_GC_IS_TRACKED(FROM_GC(gc))) {
             continue;
         }
-        size++;
-    }
-    cstate_t *cstate = gc_cstate_new(size);
-    assert(cstate); // FIXME: error handling
-    Py_ssize_t i = 0;
-    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
-        if (GET_GEN(gc) > generation) {
-            continue;
-        }
-        if (!_PyObject_GC_IS_TRACKED(FROM_GC(gc))) {
-            continue;
-        }
+
         PyObject *op = FROM_GC(gc);
 
         /* Python's cyclic gc should never see an incoming refcount
@@ -402,14 +412,16 @@ update_refs(gc_state_t *state, int generation)
          */
         _PyObject_ASSERT(op, Py_REFCNT(op) > 0);
 
-        /* update cstate info */
-        gc_save_refs(cstate, i, op);
-        i++;
-
         /* update flags on object */
         _PyGC_CLEAR_FLAG(gc, GC_FLAG_FINIALIZER_REACHABLE);
         SET_COLOR(gc, COLOR_WHITE);
+
+        /* add cstate info for this object */
+        gc_save_refs(cstate, i, op);
+        i++;
     }
+    cstate->size = i;
+    //fprintf(stderr, "cstate size %ld\n", cstate->size);
     return cstate;
 }
 
@@ -443,7 +455,7 @@ subtract_refs(gc_state_t *state, cstate_t *cstate)
     traverseproc traverse;
     for (Py_ssize_t i = 0; i < cstate->size; i++) {
         PyObject *op = cstate->objects[i];
-        assert(IS_WHITE(gc));
+        assert(IS_WHITE(AS_GC(op)));
 #if 0
         if (state && state->debug & DEBUG_VERBOSE) {
             fprintf(stderr, "subtract op=%p gen=%d ", op, GET_GEN(gc));
@@ -647,13 +659,10 @@ has_legacy_finalizer(PyObject *op)
  * GC_FLAG_FINIALIZER_REACHABLE flag.
  */
 static void
-move_legacy_finalizers(gc_state_t *state, cstate_t *cstate)
+mark_legacy_finalizers(gc_state_t *state, cstate_t *cstate)
 {
     bool need_propogate = false;
 
-    /* March over unreachable.  Move objects with finalizers into
-     * `finalizers`.
-     */
     for (Py_ssize_t i = 0; i < cstate->size; i++) {
         PyObject *op = cstate->objects[i];
         PyGC_Head *gc = AS_GC(op);
@@ -661,7 +670,6 @@ move_legacy_finalizers(gc_state_t *state, cstate_t *cstate)
             continue;
         }
         assert(IS_WHITE(gc));
-
         if (has_legacy_finalizer(op)) {
             //fprintf(stderr, "move legacy %p\n", op);
             SET_COLOR(gc, COLOR_GREY);
@@ -966,26 +974,12 @@ finalize_garbage(gc_state_t *state, cstate_t *cstate)
    from the outside (some objects could have been resurrected by a
    finalizer). */
 static int
-check_garbage(gc_state_t *state, int generation)
+check_garbage(gc_state_t *state, int generation, Py_ssize_t size_hint)
 {
     int ret = 0;
-    Py_ssize_t size = 0;
-    PyGC_Head *head = HEAD(state);
-    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
-        if (!IS_WHITE(gc)) {
-            continue;
-        }
-        if (!_PyObject_GC_IS_TRACKED(FROM_GC(gc))) {
-            continue;
-        }
-        size++;
-    }
-    if (size == 0) {
-        return ret;
-    }
-    cstate_t *cstate = gc_cstate_new(size);
-    assert(cstate); // FIXME: error handling
     Py_ssize_t i = 0;
+    PyGC_Head *head = HEAD(state);
+    cstate_t *cstate = gc_cstate_new(size_hint);
     for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
         if (!IS_WHITE(gc)) {
             continue;
@@ -996,6 +990,8 @@ check_garbage(gc_state_t *state, int generation)
         gc_save_refs(cstate, i, FROM_GC(gc));
         i++;
     }
+    cstate->size = i;
+    //fprintf(stderr, "garbage cstate size %ld\n", cstate->size);
     subtract_refs(state, cstate);
     for (Py_ssize_t i = 0; i < cstate->size; i++) {
         PyObject *op = cstate->objects[i];
@@ -1117,8 +1113,6 @@ collect(gc_state_t *state, int generation,
     int i;
     Py_ssize_t m = 0; /* # objects collected */
     Py_ssize_t n = 0; /* # unreachable objects that couldn't be collected */
-    PyGC_Head *head = HEAD(state); /* head of list of container objects */
-    PyGC_Head *gc;
     _PyTime_t t1 = 0;   /* initialize to prevent a compiler warning */
 
     if (state->debug & DEBUG_STATS) {
@@ -1183,7 +1177,7 @@ collect(gc_state_t *state, int generation,
     /* All objects in unreachable are trash, but objects reachable from
      * legacy finalizers (e.g. tp_del) can't safely be deleted.
      */
-    move_legacy_finalizers(state, cstate);
+    mark_legacy_finalizers(state, cstate);
 #if 0
     /* finalizers contains the unreachable objects with a legacy finalizer;
      * unreachable objects reachable *from* those are also uncollectable,
@@ -1207,32 +1201,38 @@ collect(gc_state_t *state, int generation,
         }
     }
 
-    /* Clear weakrefs and invoke callbacks as necessary. */
-    m += handle_weakrefs(state, cstate);
-
-    /* Call tp_finalize on objects which have one. */
-    finalize_garbage(state, cstate);
-
-    gc_cstate_free(cstate);
-
-    if (check_garbage(state, generation) == 0) {
-        /* Call tp_clear on objects in the unreachable set.  This will cause
-         * the reference cycles to be broken.  It may also cause some objects
-         * in finalizers to be freed.
-         */
-        delete_garbage(state, generation);
-    }
-
     /* Collect statistics on uncollectable objects found and print
      * debugging information. */
-    for (gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+    for (Py_ssize_t i = 0; i < cstate->size; i++) {
+        PyObject *op = cstate->objects[i];
+        PyGC_Head *gc = AS_GC(op);
         if (!_PyGC_HAVE_FLAG(gc, GC_FLAG_FINIALIZER_REACHABLE)) {
             continue;
         }
         n++;
         if (state->debug & DEBUG_UNCOLLECTABLE)
-            debug_cycle("uncollectable", FROM_GC(gc));
+            debug_cycle("uncollectable", op);
     }
+
+    /* Clear weakrefs and invoke callbacks as necessary. */
+    m += handle_weakrefs(state, cstate);
+
+    /* Call tp_finalize on objects which have one.  cstate can't be used after
+     * this point.*/
+    finalize_garbage(state, cstate);
+
+    gc_cstate_free(cstate);
+
+    if (m > 0) {
+        if (check_garbage(state, generation, m) == 0) {
+            /* Call tp_clear on objects in the unreachable set.  This will cause
+             * the reference cycles to be broken.  It may also cause some objects
+             * in finalizers to be freed.
+             */
+            delete_garbage(state, generation);
+        }
+    }
+
     if (state->debug & DEBUG_STATS) {
         double d = _PyTime_AsSecondsDouble(_PyTime_GetMonotonicClock() - t1);
         PySys_WriteStderr(
@@ -1245,7 +1245,9 @@ collect(gc_state_t *state, int generation,
      * reachable list of garbage.  The programmer has to deal with
      * this if they insist on creating this type of structure.
      */
-    handle_legacy_finalizers(state);
+    if (n > 0) {
+        handle_legacy_finalizers(state);
+    }
 
     /* Clear free list only during the collection of the highest
      * generation */
