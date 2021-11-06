@@ -995,19 +995,12 @@ update_refs_garbage(gc_state_t *state, int generation, Py_ssize_t size_hint)
 static Py_ssize_t
 check_garbage(gc_state_t *state, cstate_t *cstate)
 {
+    mark_reachable(state, cstate);
     Py_ssize_t revived = 0;
     for (Py_ssize_t i = 0; i < cstate->size; i++) {
         PyObject *op = cstate->objects[i];
         PyGC_Head *gc = AS_GC(op);
         if (!IS_WHITE(gc)) {
-            continue;
-        }
-        if (Py_REFCNT(op) != 0) {
-            if (debug_verbose) {
-                PySys_WriteStderr("gc: check_garbage failed: %p\n",
-                                  FROM_GC(gc));
-            }
-            SET_COLOR(gc, COLOR_BLACK);
             revived++;
         }
     }
@@ -1220,27 +1213,26 @@ collect(gc_state_t *state, int generation,
     /* Call tp_finalize on objects which have one.  cstate can't be used after
      * this point.*/
     finalize_garbage(state, cstate);
-
     gc_cstate_free(cstate);
 
     if (m > 0) {
+        /* Second pass of of subtracting references.  Find previously
+         * unreachable objects that got resurrected and all other unreachable
+         * objects reachable from those.
+         */
         cstate = update_refs_garbage(state, generation, m);
         subtract_refs(state, cstate);
         Py_ssize_t revived = check_garbage(state, cstate);
-#if 0
-        fprintf(stderr, "check garbage %ld objects\n", cstate->size);
-        if (revived > 0) {
-            fprintf(stderr, "revived %ld objects\n", revived);
-        }
-#endif
         restore_refs(state, cstate);
-        /* Call tp_clear on objects in the unreachable set.  This will cause
-         * the reference cycles to be broken.  It may also cause some objects
-         * in finalizers to be freed.
-         */
-        delete_garbage(state, cstate);
-        gc_cstate_free(cstate);
         m -= revived;
+        if (m > 0) {
+            /* Call tp_clear on objects in the unreachable set.  This will
+             * cause the reference cycles to be broken.  It may also cause some
+             * objects in finalizers to be freed.
+             */
+            delete_garbage(state, cstate);
+        }
+        gc_cstate_free(cstate);
     }
 
     if (state->debug & DEBUG_STATS) {
