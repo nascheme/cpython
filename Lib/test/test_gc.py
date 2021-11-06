@@ -867,29 +867,25 @@ class GCTests(unittest.TestCase):
         self.assertEqual(c - oldc, 0)   # after
         self.assertEqual(nc - oldnc, 0)
 
-        # Unfortunately, a Z() prevents _anything_ from being collected.
-        # It should be possible to collect the A instances anyway, but
-        # that will require non-trivial code changes.
+        # Before the bug fix, a Z() prevented _anything_ from being collected.
+        # The A instances should be collected.
         oldc, oldnc = c, nc
         for i in range(N):
             A()
         Z()
-        # Z() prevents anything from being collected.
+        # Z() does not prevent rest from being collected.
         t = gc.collect()
         c, nc = getstats()
         #self.assertEqual(t, 2*N + 2)  # before
-        self.assertEqual(t, 0)  # after
+        self.assertEqual(t, 200)  # after
         #self.assertEqual(c - oldc, 2*N + 2)   # before
-        self.assertEqual(c - oldc, 0)   # after
+        self.assertEqual(c - oldc, 200)   # after
         self.assertEqual(nc - oldnc, 0)
 
-        # But the A() trash is reclaimed on the next run.
+        # the A() trash is was already reclaimed
         oldc, oldnc = c, nc
         t = gc.collect()
-        c, nc = getstats()
-        self.assertEqual(t, 2*N)
-        self.assertEqual(c - oldc, 2*N)
-        self.assertEqual(nc - oldnc, 0)
+        self.assertEqual(t, 0)
 
         gc.enable()
 
