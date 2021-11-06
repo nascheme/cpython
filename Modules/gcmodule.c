@@ -85,20 +85,6 @@ typedef struct _gc_runtime_state gc_state_t;
 
 bool debug_verbose;
 
-static void
-dump_obj(PyObject *op)
-{
-    PyObject *repr = NULL, *bytes = NULL;
-    repr = PyObject_Repr(op);
-    if (!repr || !(bytes = PyUnicode_EncodeFSDefault(repr)))
-        PyErr_WriteUnraisable(op);
-    else {
-        PySys_WriteStderr("%s\n", PyBytes_AS_STRING(bytes));
-    }
-    Py_XDECREF(repr);
-    Py_XDECREF(bytes);
-}
-
 static inline int
 gc_is_finalized(PyObject *obj)
 {
@@ -457,12 +443,13 @@ subtract_refs(gc_state_t *state, cstate_t *cstate)
     traverseproc traverse;
     for (Py_ssize_t i = 0; i < cstate->size; i++) {
         PyObject *op = cstate->objects[i];
-        PyGC_Head *gc = AS_GC(op);
         assert(IS_WHITE(gc));
+#if 0
         if (state && state->debug & DEBUG_VERBOSE) {
-            fprintf(stderr, "subtract gen=%d ", GET_GEN(gc));
-            dump_obj(op);
+            fprintf(stderr, "subtract op=%p gen=%d ", op, GET_GEN(gc));
+            //dump_obj(op);
         }
+#endif
         traverse = Py_TYPE(op)->tp_traverse;
         (void) traverse(op,
                        (visitproc)visit_decref,
@@ -489,10 +476,12 @@ visit_reachable(PyObject *op, struct mark_state *state)
         case COLOR_WHITE:
             // We thought this object was dead but it turns out to be alive.
             // Mark as grey because we have to traverse it yet.
+#if 0
             if (debug_verbose) {
                 fprintf(stderr, "became reachable %p->%p\n", state->ref,
                         FROM_GC(gc));
             }
+#endif
             SET_COLOR(gc, COLOR_GREY);
             /* no break, continue to grey case */
             __attribute__ ((fallthrough));
@@ -1032,7 +1021,7 @@ check_garbage(gc_state_t *state, int generation)
  * tricky business as the lists can be changing and we don't know which
  * objects may be freed.  It is possible I screwed something up here.
  */
-static void
+static bool
 delete_garbage(gc_state_t *state, int generation)
 {
     assert(!PyErr_Occurred());
@@ -1062,11 +1051,13 @@ delete_garbage(gc_state_t *state, int generation)
         }
     }
 
+    Py_ssize_t n = PyList_GET_SIZE(garbage);
+
     if (debug_verbose) {
-        fprintf(stderr, "delete_garbage %ld\n", PyList_GET_SIZE(garbage));
+        fprintf(stderr, "delete_garbage %ld\n", n);
     }
 
-    for (Py_ssize_t i=0; i<PyList_GET_SIZE(garbage); i++) {
+    for (Py_ssize_t i=0; i < n; i++) {
         PyObject *op = PyList_GET_ITEM(garbage, i);
         if (debug_verbose) {
             fprintf(stderr, "call tp_clear %p refcnt=%ld\n", op, op->ob_refcnt);
@@ -1084,6 +1075,7 @@ delete_garbage(gc_state_t *state, int generation)
         Py_INCREF(Py_None);
         PyList_SetItem(garbage, i, Py_None);
     }
+    return n > 0;
 }
 
 /* Clear all free lists
