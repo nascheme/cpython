@@ -64,9 +64,9 @@ struct mark_state {
 
 typedef struct _gc_runtime_state gc_state_t;
 
-#define COLOR_BLACK 'B' // alive
-#define COLOR_GREY  'G' // alive but needs traverse
-#define COLOR_WHITE 'W' // dead (or potentially dead before traversal)
+#define COLOR_BLACK 1 // alive
+#define COLOR_GREY  2 // alive but needs traverse
+#define COLOR_WHITE 3 // dead (or potentially dead before traversal)
 
 #define GET_COLOR(g) ((g)->gc_color)
 #define SET_COLOR(g, v) ((g)->gc_color = v)

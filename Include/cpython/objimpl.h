@@ -51,10 +51,9 @@ typedef struct _gc_head {
     // Pointer to previous object in the list.
     // Lowest two bits are used for flags documented later.
     struct _gc_head *_gc_prev;
-    Py_ssize_t _gc_refs;
-    unsigned char gc_color;
-    unsigned char gc_flags;
-    unsigned char gc_gen;
+    uint32_t gc_color;
+    uint32_t gc_flags;
+    int64_t gc_gen;
 } PyGC_Head;
 
 #define _Py_AS_GC(o) ((PyGC_Head *)(o)-1)
