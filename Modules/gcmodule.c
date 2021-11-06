@@ -427,10 +427,9 @@ update_refs(gc_state_t *state, int generation)
 
 /* A traversal callback for subtract_refs. */
 static int
-visit_decref(PyObject *op, void *data)
+visit_decref(PyObject *op, void *parent)
 {
-    // FIXME: restore this?
-    //_PyObject_ASSERT(_PyObject_CAST(parent), !_PyObject_IsFreed(op));
+    _PyObject_ASSERT(_PyObject_CAST(parent), !_PyObject_IsFreed(op));
     assert(op != NULL);
     if (op->ob_refcnt < 0) {
         // negative refcnt, an object in the current collection set
@@ -464,8 +463,8 @@ subtract_refs(gc_state_t *state, cstate_t *cstate)
 #endif
         traverse = Py_TYPE(op)->tp_traverse;
         (void) traverse(op,
-                       (visitproc)visit_decref,
-                       (void*)(state));
+                        (visitproc)visit_decref,
+                        op);
     }
 }
 
@@ -950,7 +949,6 @@ finalize_garbage(gc_state_t *state, cstate_t *cstate)
             continue;
         }
         if (!gc_is_finalized(op) &&
-                PyType_HasFeature(Py_TYPE(op), Py_TPFLAGS_HAVE_FINALIZE) &&
                 (finalize = Py_TYPE(op)->tp_finalize) != NULL) {
             PyList_Append(garbage, op);
         }
@@ -1104,6 +1102,27 @@ tally_gen_counts(gc_state_t *state, Py_ssize_t *counts)
     }
 }
 
+// Show stats for objects in each gennerations.
+static void
+show_stats_each_generations(struct _gc_runtime_state *state)
+{
+    char buf[100];
+    size_t pos = 0;
+    Py_ssize_t counts[NUM_GENERATIONS+1];
+
+    tally_gen_counts(state, counts);
+    for (int i = 0; i < NUM_GENERATIONS && pos < sizeof(buf); i++) {
+        pos += PyOS_snprintf(buf+pos, sizeof(buf)-pos,
+                             " %"PY_FORMAT_SIZE_T"d",
+                             counts[i]);
+    }
+
+    PySys_FormatStderr(
+        "gc: objects in each generation:%s\n"
+        "gc: objects in permanent generation: %zd\n",
+        buf, counts[PERMANENT_GENERATION]);
+}
+
 /* This is the main function.  Read this to understand how the
  * collection process works. */
 static Py_ssize_t
@@ -1116,16 +1135,8 @@ collect(gc_state_t *state, int generation,
     _PyTime_t t1 = 0;   /* initialize to prevent a compiler warning */
 
     if (state->debug & DEBUG_STATS) {
-        Py_ssize_t counts[NUM_GENERATIONS+1];
-        PySys_WriteStderr("gc: collecting generation %d...\n",
-                          generation);
-        PySys_WriteStderr("gc: objects in each generation:");
-        memset(counts, 0, sizeof(counts));
-        tally_gen_counts(state, counts);
-        for (i = 0; i < NUM_GENERATIONS; i++)
-            PySys_FormatStderr(" %zd", counts[i]);
-        PySys_WriteStderr("\ngc: objects in permanent generation: %zd",
-                          counts[PERMANENT_GENERATION]);
+        PySys_WriteStderr("gc: collecting generation %d...\n", generation);
+        show_stats_each_generations(state);
         t1 = _PyTime_GetMonotonicClock();
     }
 
@@ -1186,32 +1197,24 @@ collect(gc_state_t *state, int generation,
     move_legacy_finalizer_reachable(&finalizers);
 #endif
 
-    /* Collect statistics on collectable objects found and print
-     * debugging information.
+    /* Collect statistics on collectable and uncollectable objects found and
+     * print debugging information.
      */
     for (Py_ssize_t i = 0; i < cstate->size; i++) {
         PyObject *op = cstate->objects[i];
         PyGC_Head *gc = AS_GC(op);
         if (IS_WHITE(gc)) {
             m++;
-            if (state->debug & DEBUG_COLLECTABLE || 0) {
-                debug_cycle("collectable", FROM_GC(gc));
-                //dump_obj(FROM_GC(gc));
+            if (state->debug & DEBUG_COLLECTABLE) {
+                debug_cycle("collectable", op);
             }
         }
-    }
-
-    /* Collect statistics on uncollectable objects found and print
-     * debugging information. */
-    for (Py_ssize_t i = 0; i < cstate->size; i++) {
-        PyObject *op = cstate->objects[i];
-        PyGC_Head *gc = AS_GC(op);
-        if (!_PyGC_HAVE_FLAG(gc, GC_FLAG_FINIALIZER_REACHABLE)) {
-            continue;
+        if (_PyGC_HAVE_FLAG(gc, GC_FLAG_FINIALIZER_REACHABLE)) {
+            n++;
+            if (state->debug & DEBUG_UNCOLLECTABLE) {
+                debug_cycle("uncollectable", op);
+            }
         }
-        n++;
-        if (state->debug & DEBUG_UNCOLLECTABLE)
-            debug_cycle("uncollectable", op);
     }
 
     /* Clear weakrefs and invoke callbacks as necessary. */
