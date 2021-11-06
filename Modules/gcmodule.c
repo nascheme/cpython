@@ -930,7 +930,7 @@ handle_legacy_finalizers(struct _gc_runtime_state *state)
  * list, due to refcounts falling to 0.
  */
 static bool
-finalize_garbage(gc_state_t *state)
+finalize_garbage(gc_state_t *state, cstate_t *cstate)
 {
     bool have_finalizers = false;
     destructor finalize;
@@ -946,12 +946,12 @@ finalize_garbage(gc_state_t *state)
      * care.
      */
 
-    PyGC_Head *head = HEAD(state);
-    for (PyGC_Head *gc = GC_NEXT(head); gc != head; gc = GC_NEXT(gc)) {
+    for (Py_ssize_t i = 0; i < cstate->size; i++) {
+        PyObject *op = cstate->objects[i];
+        PyGC_Head *gc = AS_GC(op);
         if (!IS_WHITE(gc)) {
             continue;
         }
-        PyObject *op = FROM_GC(gc);
         if (!gc_is_finalized(op) &&
                 PyType_HasFeature(Py_TYPE(op), Py_TPFLAGS_HAVE_FINALIZE) &&
                 (finalize = Py_TYPE(op)->tp_finalize) != NULL) {
@@ -1218,10 +1218,10 @@ collect(gc_state_t *state, int generation,
     /* Clear weakrefs and invoke callbacks as necessary. */
     m += handle_weakrefs(state, cstate);
 
-    gc_cstate_free(cstate);
-
     /* Call tp_finalize on objects which have one. */
-    finalize_garbage(state);
+    finalize_garbage(state, cstate);
+
+    gc_cstate_free(cstate);
 
     if (check_garbage(state, generation) == 0) {
         /* Call tp_clear on objects in the unreachable set.  This will cause
