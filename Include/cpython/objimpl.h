@@ -82,6 +82,10 @@ typedef struct _gc_head {
 #define GC_FLAG_LEGACY_FINIALIZER_REACHABLE (1<<1)
 /* set when tp_finalize is called */
 #define GC_FLAG_FINALIZED  (1<<3)
+/* set when object is member of cstate list */
+#define GC_FLAG_IN_CSTATE  (1<<4)
+/* set if object memory needs to be freed at end of GC */
+#define GC_FLAG_NEED_FREE  (1<<5)
 
 #define _PyGC_SET_FLAG(g, v) ((g)->gc_flags |= v)
 #define _PyGC_CLEAR_FLAG(g, v) ((g)->gc_flags &= ~(v))
