@@ -57,7 +57,8 @@ class TestInteractiveInterpreter(unittest.TestCase):
         output = kill_python(p)
         self.assertIn('After the exception.', output)
         # Exit code 120: Py_FinalizeEx() failed to flush stdout and stderr.
-        self.assertIn(p.returncode, (1, 120))
+        # Exit code -6: Fatal Python error: out of memory ...
+        self.assertIn(p.returncode, (1, -6, 120))
 
     @cpython_only
     def test_multiline_string_parsing(self):
