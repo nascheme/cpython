@@ -268,7 +268,7 @@ gc_cstate_new(Py_ssize_t size)
     //fprintf(stderr, "allocate %ld gc saved vector\n", size);
     cstate_t *cstate = PyMem_Malloc(sizeof(cstate_t));
     if (cstate == NULL) {
-        assert(0); // FIXME: handle error
+        Py_FatalError("out of memory in GC allocating cstate"); // FIXME
         return NULL;
     }
     cstate->size = 0;
@@ -276,14 +276,14 @@ gc_cstate_new(Py_ssize_t size)
     cstate->objects = PyMem_Malloc(sizeof(void*) * size);
     if (cstate->objects == NULL) {
         PyMem_Free(cstate);
-        assert(0); // FIXME: handle error
+        Py_FatalError("out of memory in GC allocating cstate"); // FIXME
         return NULL;
     }
     cstate->refs = PyMem_Malloc(sizeof(Py_ssize_t) * size);
     if (cstate->refs == NULL) {
         PyMem_Free(cstate->objects);
         PyMem_Free(cstate);
-        assert(0); // FIXME: handle error
+        Py_FatalError("out of memory in GC allocating cstate"); // FIXME
         return NULL;
     }
 #if 0
