@@ -218,7 +218,7 @@ def _divmod_pos(a, b):
     """Divide a positive integer a by a positive integer b, giving
     quotient and remainder."""
     # Use grade-school algorithm in base 2**n, n = nbits(b)
-    n = len(bin(b)) - 2
+    n = b.bit_length()
     mask = (1 << n) - 1
     a_digits = []
     while a:
