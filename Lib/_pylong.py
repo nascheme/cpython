@@ -13,10 +13,8 @@ tricky or non-obvious code is not worth it.  For people looking for
 maximum performance, they should use something like gmpy2."""
 
 import sys
-import io
 import re
 import decimal
-import functools
 
 _DEBUG = False
 
@@ -91,6 +89,81 @@ def int_to_decimal(n):
 def int_to_decimal_string(n):
     """Asymptotically fast conversion of an 'int' to a decimal string."""
     return str(int_to_decimal(n))
+
+
+def _str_to_int_inner(s):
+    """Asymptotically fast conversion of a 'str' to an 'int'."""
+
+    # Function due to Bjorn Martinsson.  See GH issue #90716 for details.
+    # https://github.com/python/cpython/issues/90716
+    #
+    # The implementation in longobject.c of base conversion algorithms
+    # between power-of-2 and non-power-of-2 bases are quadratic time.
+    # This function implements a divide-and-conquer algorithm making use
+    # of Python's built in big int multiplication. Since Python uses the
+    # Karatsuba algorithm for multiplication, the time complexity
+    # of this function is O(len(s)**1.58).
+
+    DIGLIM = 2048
+
+    mem = {}
+
+    def w5pow(w):
+        """Return 5**w and store the result.
+        Also possibly save some intermediate results. In context, these
+        are likely to be reused across various levels of the conversion
+        to 'int'.
+        """
+        if (result := mem.get(w)) is None:
+            if w <= DIGLIM:
+                result = 5**w
+            elif w - 1 in mem:
+                result = mem[w - 1] * 5
+            else:
+                w2 = w >> 1
+                # If w happens to be odd, w-w2 is one larger then w2
+                # now. Recurse on the smaller first (w2), so that it's
+                # in the cache and the larger (w-w2) can be handled by
+                # the cheaper `w-1 in mem` branch instead.
+                result = w5pow(w2) * w5pow(w - w2)
+            mem[w] = result
+        return result
+
+    def inner(a, b):
+        if b - a <= DIGLIM:
+            return int(s[a:b])
+        mid = (a + b + 1) >> 1
+        return inner(mid, b) + ((inner(a, mid) * w5pow(b - mid)) << (b - mid))
+
+    return inner(0, len(s))
+
+
+def int_from_string(s):
+    """Asymptotically fast version of PyLong_FromString(), conversion
+    of a string of decimal digits into an 'int'."""
+    if _DEBUG:
+        print('int_from_string', len(s), file=sys.stderr)
+    # PyLong_FromString() has already removed leading +/-, checked for invalid
+    # use of underscore characters and stripped leading whitespace.  The input
+    # can still contain underscores and have trailing whitespace.  If not
+    # valid, return the index of the first invalid character.
+    m = re.match(r'[0-9_]+\s*', s)
+    if not m:
+        return None, 0
+    if m.end() != len(s):
+        # Invalid characters at end.
+        return None, m.end()
+    s = s.rstrip().replace('_', '')
+    return _str_to_int_inner(s), None
+
+
+def str_to_int(s):
+    """Asymptotically fast version of decimal string to 'int' conversion."""
+    # FIXME: this doesn't support the full syntax that int() supports.
+    v, error_index = int_from_string(s)
+    if v is not None:
+        return v
+    raise ValueError('invalid literal for int() with base 10')
 
 
 # Fast integer division, based on code from mdickinson, fast_div.py GH #47701
@@ -175,55 +248,3 @@ def int_divmod(a, b):
         return 0, 0
     else:
         return _divmod_pos(a, b)
-
-
-# Based on code from bjorn-martinsson GH-90716, str-to-int conversion
-
-
-def _str_to_int_inner(s):
-    @functools.cache
-    def pow5(n):
-        if n <= 5:
-            return 5 ** (1 << n)
-        else:
-            p = pow5(n - 1)
-            return p * p
-
-    def inner(a, b):
-        if b - a <= 3000:
-            return int(s[a:b])
-        lg_split = (b - a - 1).bit_length() - 1
-        split = 1 << lg_split
-        x = (inner(a, b - split) * pow5(lg_split)) << split
-        y = inner(b - split, b)
-        return x + y
-
-    return inner(0, len(s))
-
-
-def int_from_string(s):
-    """Asymptotically fast version of PyLong_FromString(), conversion
-    of a string of decimal digits into an 'int'."""
-    if _DEBUG:
-        print('int_from_string', len(s), file=sys.stderr)
-    # PyLong_FromString() has already removed leading +/-, checked for invalid
-    # use of underscore characters and stripped leading whitespace.  The input
-    # can still contain underscores and have trailing whitespace.  If not
-    # valid, return the index of the first invalid character.
-    m = re.match(r'[0-9_]+\s*', s)
-    if not m:
-        return None, 0
-    if m.end() != len(s):
-        # Invalid characters at end.
-        return None, m.end()
-    s = s.rstrip().replace('_', '')
-    return _str_to_int_inner(s), None
-
-
-def str_to_int(s):
-    """Asymptotically fast version of decimal string to 'int' conversion."""
-    # FIXME: this doesn't support the full syntax that int() supports.
-    v, error_index = int_from_string(s)
-    if v is not None:
-        return v
-    raise ValueError('invalid literal for int() with base 10')
