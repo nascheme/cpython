@@ -166,7 +166,9 @@ def str_to_int(s):
     raise ValueError('invalid literal for int() with base 10')
 
 
-# Fast integer division, based on code from mdickinson, fast_div.py GH #47701
+# Fast integer division, based on code from Mark Dickinson, fast_div.py
+# GH-47701. The algorithm is due to Burnikel and Ziegler, in their paper
+# "Fast Recursive Division".
 
 _DIV_LIMIT = 1000
 
