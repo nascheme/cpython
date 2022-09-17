@@ -4094,9 +4094,9 @@ l_divmod(PyLongObject *v, PyLongObject *w,
         return 0;
     }
 #if WITH_PYLONG_MODULE
-    Py_ssize_t size_w = Py_ABS(Py_SIZE(w));
-    Py_ssize_t size_v = Py_ABS(Py_SIZE(v));
-    if (size_w > 1000 && (size_w - size_v) > 1) {
+    Py_ssize_t size_v = Py_ABS(Py_SIZE(v)); /* digits in numerator */
+    Py_ssize_t size_w = Py_ABS(Py_SIZE(w)); /* digits in denominator */
+    if (size_w > 300 && (size_v - size_w) > 300) {
         /* Switch to _pylong.int_divmod().  If the quotient is small then
           "schoolbook" division is linear-time so don't use in that case. */
         return pylong_int_divmod(v, w, pdiv, pmod);
