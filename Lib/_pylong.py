@@ -237,7 +237,7 @@ def _divmod_pos(a, b):
 def int_divmod(a, b):
     """Asymptotically fast replacement for divmod, for 'int'."""
     if _DEBUG:
-        print('int_divmod', b.bit_length(), file=sys.stderr)
+        print('int_divmod', a.bit_length(), b.bit_length(), file=sys.stderr)
     if b == 0:
         raise ZeroDivisionError
     elif b < 0:

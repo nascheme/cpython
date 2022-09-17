@@ -4010,22 +4010,34 @@ pylong_int_divmod(PyLongObject *v, PyLongObject *w,
     if (mod == NULL) {
         return -1;
     }
-    PyObject *r = PyObject_CallMethod(mod, "int_divmod", "OO", v, w);
-    if (r == NULL) {
-        Py_DECREF(mod);
+    PyObject *result = PyObject_CallMethod(mod, "int_divmod", "OO", v, w);
+    Py_DECREF(mod);
+    if (result == NULL) {
         return -1;
     }
-    assert(PyTuple_Check(r));
-    PyObject *a = PyTuple_GET_ITEM(r, 0);
-    PyObject *b = PyTuple_GET_ITEM(r, 1);
-    Py_INCREF(a);
-    Py_INCREF(b);
-    assert(PyLong_Check(a));
-    assert(PyLong_Check(b));
-    *pdiv = (PyLongObject *)a;
-    *pmod = (PyLongObject *)b;
-    Py_DECREF(r);
-    Py_DECREF(mod);
+    if (!PyTuple_Check(result)) {
+        Py_DECREF(result);
+        PyErr_SetString(PyExc_ValueError,
+                        "tuple is required from int_divmod()");
+        return -1;
+    }
+    PyObject *q = PyTuple_GET_ITEM(result, 0);
+    PyObject *r = PyTuple_GET_ITEM(result, 1);
+    if (!PyLong_Check(q) || !PyLong_Check(r)) {
+        Py_DECREF(result);
+        PyErr_SetString(PyExc_ValueError,
+                        "tuple of int is required from int_divmod()");
+        return -1;
+    }
+    if (pdiv != NULL) {
+        Py_INCREF(q);
+        *pdiv = (PyLongObject *)q;
+    }
+    if (pmod != NULL) {
+        Py_INCREF(r);
+        *pmod = (PyLongObject *)r;
+    }
+    Py_DECREF(result);
     return 0;
 }
 #endif /* WITH_PYLONG_MODULE */
