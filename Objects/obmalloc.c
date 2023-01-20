@@ -4,6 +4,7 @@
 
 #include <stdbool.h>
 #include <stdlib.h>               // malloc()
+#include <sys/resource.h>
 
 
 /* Defined in tracemalloc.c */
@@ -83,6 +84,12 @@ static void* _PyObject_Realloc(void *ctx, void *ptr, size_t size);
 #endif
 
 
+/* estimate of the number of bytes allocated from heap, used by GC module.
+ * This is only a rough estimate but helps to avoid extra GC collection runs.
+ */
+static Py_ssize_t raw_allocated_bytes;
+
+
 /* bpo-35053: Declare tracemalloc configuration here rather than
    Modules/_tracemalloc.c because _tracemalloc can be compiled as dynamic
    library, whereas _Py_NewReference() requires it. */
@@ -98,6 +105,7 @@ _PyMem_RawMalloc(void *ctx, size_t size)
        To solve these problems, allocate an extra byte. */
     if (size == 0)
         size = 1;
+    raw_allocated_bytes += size;
     return malloc(size);
 }
 
@@ -112,6 +120,7 @@ _PyMem_RawCalloc(void *ctx, size_t nelem, size_t elsize)
         nelem = 1;
         elsize = 1;
     }
+    raw_allocated_bytes += (nelem * elsize);
     return calloc(nelem, elsize);
 }
 
@@ -120,6 +129,7 @@ _PyMem_RawRealloc(void *ctx, void *ptr, size_t size)
 {
     if (size == 0)
         size = 1;
+    raw_allocated_bytes += size;
     return realloc(ptr, size);
 }
 
@@ -2946,6 +2956,66 @@ pool_is_in_list(const poolp target, poolp list)
     return 0;
 }
 #endif
+
+#if 0
+static size_t
+_PyMem_LinuxEstimateTotalBytes(void) {
+    FILE *f = fopen("/proc/self/statm", "r");
+    if (!f) {
+        return 0;
+    }
+    unsigned long size = 0;
+    unsigned long res = 0;
+    unsigned long shared = 0;
+    unsigned long text = 0;
+    unsigned long lib = 0;
+    unsigned long data = 0;
+    unsigned long dt = 0;
+    if (fscanf(f, "%ld %ld %ld %ld %ld %ld %ld",
+               &size, &res, &shared, &text, &lib, &data, &dt) != 7) {
+        goto out;
+    }
+    data *= getpagesize();
+out:
+    fclose(f);
+    return data;
+}
+#endif
+
+// Return an estimate of the memory use of the process.  This doesn't
+// need to be exact as it is used as a hint to the GC for deciding when
+// to trigger automatic collection.
+size_t
+_PyMem_EstimateTotalBytes(void)
+{
+    //return _PyMem_LinuxEstimateTotalBytes();
+#if 0
+    // Use OS API to estimate process memory usage
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) == -1) {
+        return 0;
+    }
+    return ru.ru_maxrss * 1024;
+#endif
+#if 1
+    // Use estimate based on used arenas.
+    size_t arena_bytes = 0;
+    if (_PyMem_PymallocEnabled()) {
+        /* # of arenas actually allocated. */
+        size_t narenas = 0;
+        for (uint i = 0; i < maxarenas; ++i) {
+            if (arenas[i].address == (uintptr_t)NULL) {
+                /* Skip arenas which are not allocated. */
+                continue;
+            }
+            narenas += 1;
+        }
+        arena_bytes = narenas * ARENA_SIZE;
+    }
+    // estimate based on obmalloc arenas used and memory from PyMem_* malloc
+    return arena_bytes + raw_allocated_bytes;
+#endif
+}
 
 /* Print summary info to "out" about the state of pymalloc's structures.
  * In Py_DEBUG mode, also perform some expensive internal consistency

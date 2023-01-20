@@ -180,6 +180,10 @@ _PyInitGCStats() {
 }
 #endif
 
+/* likely should be some multiple larger than obmalloc ARENA_SIZE */
+static size_t pymem_size_threshold = 5000000;
+static size_t pymem_size_last = 0;
+
 void
 _PyGC_InitState(GCState *gcstate)
 {
@@ -195,10 +199,21 @@ _PyGC_InitState(GCState *gcstate)
     };
     gcstate->generation0 = GEN_HEAD(gcstate, 0);
     INIT_HEAD(gcstate->permanent_generation);
-
 #undef INIT_HEAD
+
+    char *s = Py_GETENV("PYTHONGCTHRESHOLD");
+    if (s) {
+        long n = atol(s);
+        if (n > 0) {
+            gcstate->generations[0].threshold = n;
+        }
+    }
 }
 
+
+static bool gc_debug;
+static int gc_num_deferred;
+static int gc_num_run;
 
 PyStatus
 _PyGC_Init(PyInterpreterState *interp)
@@ -220,6 +235,9 @@ _PyGC_Init(PyInterpreterState *interp)
         Py_FatalError("Could not initialize GC stats");
     }
 #endif
+    if (is_main_interpreter() && Py_GETENV("PYTHON_GC_STATS")) {
+        gc_debug = true;
+    }
 
     return _PyStatus_OK();
 }
@@ -2371,6 +2389,9 @@ _PyGC_Fini(PyInterpreterState *interp)
             gc_fini_untrack(gen);
         }
     }
+    if (gc_debug) {
+        fprintf(stderr, "gc deferred %d run %d\n", gc_num_deferred, gc_num_run);
+    }
 }
 
 /* for debugging */
@@ -2435,6 +2456,9 @@ PyObject_IS_GC(PyObject *obj)
     return _PyObject_IS_GC(obj);
 }
 
+// implemented in obmalloc.c
+extern size_t _PyMem_EstimateTotalBytes(void);
+
 void
 _PyObject_GC_Link(PyObject *op)
 {
@@ -2452,9 +2476,21 @@ _PyObject_GC_Link(PyObject *op)
         !gcstate->collecting &&
         !_PyErr_Occurred(tstate))
     {
-        gcstate->collecting = 1;
-        gc_collect_generations(tstate);
-        gcstate->collecting = 0;
+        size_t pymem_size = _PyMem_EstimateTotalBytes();
+        size_t pymem_inc = pymem_size - pymem_size_last;
+        // only collect if both object threshold is exceeded AND the
+        // process size has increased by some significant amount
+        if (pymem_inc > pymem_size_threshold) {
+            gcstate->collecting = 1;
+            gc_collect_generations(tstate);
+            gcstate->collecting = 0;
+            pymem_size_last = pymem_size;
+            gc_num_run++;
+        } else {
+            gcstate->generations[0].count = 0;
+            //fprintf(stderr, "gc size inc %ld\n", pymem_inc);
+            gc_num_deferred++;
+        }
     }
 }
 
