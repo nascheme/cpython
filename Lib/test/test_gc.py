@@ -1267,22 +1267,20 @@ class GCCallbackTests(unittest.TestCase):
         p.stderr.close()
         # Verify that stderr has a useful error message:
         self.assertRegex(stderr,
-            br'gcmodule\.c:[0-9]+: gc_decref: Assertion "gc_get_refs\(g\) > 0" failed.')
-        self.assertRegex(stderr,
-            br'refcount is too small')
+            br'object has negative ref count')
         # "address : 0x7fb5062efc18"
         # "address : 7FB5062EFC18"
         address_regex = br'[0-9a-fA-Fx]+'
         self.assertRegex(stderr,
             br'object address  : ' + address_regex)
         self.assertRegex(stderr,
-            br'object refcount : 1')
+            br'object refcount : -1')
         self.assertRegex(stderr,
             br'object type     : ' + address_regex)
         self.assertRegex(stderr,
             br'object type name: list')
         self.assertRegex(stderr,
-            br'object repr     : \[1, 2, 3\]')
+            br'object repr     : <refcnt -1 at ')
 
 
 class GCTogglingTests(unittest.TestCase):

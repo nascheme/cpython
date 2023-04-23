@@ -2369,10 +2369,15 @@ _PyObject_AssertFailed(PyObject *obj, const char *expr, const char *msg,
 }
 
 
+bool _PyGC_Defer_Dealloc(PyObject *op);
+
 void
 _Py_Dealloc(PyObject *op)
 {
     PyTypeObject *type = Py_TYPE(op);
+    if (_PyType_IS_GC(type) && _PyGC_Defer_Dealloc(op)) {
+        return; // tp_dealloc will be called by the GC, don't call now
+    }
     destructor dealloc = type->tp_dealloc;
 #ifdef Py_DEBUG
     PyThreadState *tstate = _PyThreadState_GET();

@@ -8,7 +8,6 @@ extern "C" {
 #  error "this header requires Py_BUILD_CORE define"
 #endif
 
-#include <stdbool.h>
 #include "pycore_gc.h"            // _PyObject_GC_IS_TRACKED()
 #include "pycore_interp.h"        // PyInterpreterState.gc
 #include "pycore_pystate.h"       // _PyInterpreterState_GET()
@@ -112,10 +111,6 @@ _PyObject_InitVar(PyVarObject *op, PyTypeObject *typeobj, Py_ssize_t size)
  * NB: While the object is tracked by the collector, it must be safe to call the
  * ob_traverse method.
  *
- * Internal note: interp->gc.generation0->_gc_prev doesn't have any bit flags
- * because it's not object header.  So we don't use _PyGCHead_PREV() and
- * _PyGCHead_SET_PREV() for it to avoid unnecessary bitwise operations.
- *
  * See also the public PyObject_GC_Track() function.
  */
 static inline void _PyObject_GC_TRACK(
@@ -130,18 +125,20 @@ static inline void _PyObject_GC_TRACK(
                           filename, lineno, __func__);
 
     PyGC_Head *gc = _Py_AS_GC(op);
+#if 0
     _PyObject_ASSERT_FROM(op,
                           (gc->_gc_prev & _PyGC_PREV_MASK_COLLECTING) == 0,
                           "object is in generation which is garbage collected",
                           filename, lineno, __func__);
+#endif
 
     PyInterpreterState *interp = _PyInterpreterState_GET();
-    PyGC_Head *generation0 = interp->gc.generation0;
-    PyGC_Head *last = (PyGC_Head*)(generation0->_gc_prev);
+    PyGC_Head *head = &interp->gc.gc_head;
+    PyGC_Head *last = (PyGC_Head*)(head->_gc_prev);
     _PyGCHead_SET_NEXT(last, gc);
     _PyGCHead_SET_PREV(gc, last);
-    _PyGCHead_SET_NEXT(gc, generation0);
-    generation0->_gc_prev = (uintptr_t)gc;
+    _PyGCHead_SET_NEXT(gc, head);
+    head->_gc_prev = gc;
 }
 
 /* Tell the GC to stop tracking this object.
@@ -171,7 +168,7 @@ static inline void _PyObject_GC_UNTRACK(
     _PyGCHead_SET_NEXT(prev, next);
     _PyGCHead_SET_PREV(next, prev);
     gc->_gc_next = 0;
-    gc->_gc_prev &= _PyGC_PREV_MASK_FINALIZED;
+    gc->_gc_prev = 0;
 }
 
 // Macros to accept any type for the parameter, and to automatically pass
@@ -249,6 +246,8 @@ extern int _PyObject_StoreInstanceAttribute(PyObject *obj, PyDictValues *values,
                                           PyObject *name, PyObject *value);
 PyObject * _PyObject_GetInstanceAttribute(PyObject *obj, PyDictValues *values,
                                         PyObject *name);
+
+#define _GC_HEAD_WORDS 4
 
 static inline PyDictValues **_PyObject_ValuesPointer(PyObject *obj)
 {
