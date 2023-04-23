@@ -253,16 +253,16 @@ PyObject * _PyObject_GetInstanceAttribute(PyObject *obj, PyDictValues *values,
 static inline PyDictValues **_PyObject_ValuesPointer(PyObject *obj)
 {
     assert(Py_TYPE(obj)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
-    return ((PyDictValues **)obj)-4;
+    return ((PyDictValues **)obj)-(_PyGC_HEAD_WORDS+2);
 }
 
 static inline PyObject **_PyObject_ManagedDictPointer(PyObject *obj)
 {
     assert(Py_TYPE(obj)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
-    return ((PyObject **)obj)-3;
+    return ((PyObject **)obj)-(_PyGC_HEAD_WORDS+1);
 }
 
-#define MANAGED_DICT_OFFSET (((int)sizeof(PyObject *))*-3)
+#define MANAGED_DICT_OFFSET (((int)sizeof(PyObject *))*-(_PyGC_HEAD_WORDS+1))
 
 extern PyObject ** _PyObject_DictPointer(PyObject *);
 extern int _PyObject_VisitInstanceAttributes(PyObject *self, visitproc visit, void *arg);

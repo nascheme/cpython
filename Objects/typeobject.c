@@ -2999,7 +2999,7 @@ type_new_descriptors(const type_new_ctx *ctx, PyTypeObject *type)
     if (ctx->add_dict && ctx->base->tp_itemsize == 0) {
         assert((type->tp_flags & Py_TPFLAGS_MANAGED_DICT) == 0);
         type->tp_flags |= Py_TPFLAGS_MANAGED_DICT;
-        type->tp_dictoffset = -slotoffset - sizeof(PyObject *)*3;
+        type->tp_dictoffset = -slotoffset - sizeof(PyObject *)*(_PyGC_HEAD_WORDS+1);
     }
 
     type->tp_basicsize = slotoffset;

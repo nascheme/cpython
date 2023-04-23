@@ -17,7 +17,21 @@ typedef struct {
     // Pointer to previous object in the list.
     // Lowest two bits are used for flags documented later.
     uintptr_t _gc_prev;
+
+#if 1
+    // Add two words for "colors" version of cyclic GC.  We don't actually need
+    // two words, just a few bits, but we want to preserve alignment.  Ideally
+    // this state would be moved into PyObject (bits in ob_refcnt) or as
+    // bitmaps in arena headers.
+    uint32_t _gc_color; // white, grey or black
+    uint32_t _gc_flags; // various flags used during and between collection
+    int64_t _gc_gen; // current GC generation of object
+#endif
+
 } PyGC_Head;
+
+#define _PyGC_HEAD_WORDS 4
+
 
 #define _Py_AS_GC(o) ((PyGC_Head *)(o)-1)
 #define _PyGC_Head_UNUSED PyGC_Head
