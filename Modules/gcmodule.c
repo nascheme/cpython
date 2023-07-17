@@ -198,29 +198,6 @@ gc_list_init(PyGC_Head *list)
     list->_gc_next = list;
 }
 
-#if 0
-static inline int
-gc_list_is_empty(PyGC_Head *list)
-{
-    return (list->_gc_next == (uintptr_t)list);
-}
-
-/* Append `node` to `list`. */
-static inline void
-gc_list_append(PyGC_Head *node, PyGC_Head *list)
-{
-    PyGC_Head *last = (PyGC_Head *)list->_gc_prev;
-
-    // last <-> node
-    _PyGCHead_SET_PREV(node, last);
-    _PyGCHead_SET_NEXT(last, node);
-
-    // node <-> list
-    _PyGCHead_SET_NEXT(node, list);
-    list->_gc_prev = (uintptr_t)node;
-}
-#endif
-
 /* Remove `node` from the gc list it's currently in. */
 static inline void
 gc_list_remove(PyGC_Head *node)
@@ -233,66 +210,6 @@ gc_list_remove(PyGC_Head *node)
 
     node->_gc_next = 0; /* object is not currently tracked */
 }
-
-#if 0
-/* Move `node` from the gc list it's currently in (which is not explicitly
- * named here) to the end of `list`.  This is semantically the same as
- * gc_list_remove(node) followed by gc_list_append(node, list).
- */
-static void
-gc_list_move(PyGC_Head *node, PyGC_Head *list)
-{
-    /* Unlink from current list. */
-    PyGC_Head *from_prev = GC_PREV(node);
-    PyGC_Head *from_next = GC_NEXT(node);
-    _PyGCHead_SET_NEXT(from_prev, from_next);
-    _PyGCHead_SET_PREV(from_next, from_prev);
-
-    /* Relink at end of new list. */
-    // list must not have flags.  So we can skip macros.
-    PyGC_Head *to_prev = (PyGC_Head*)list->_gc_prev;
-    _PyGCHead_SET_PREV(node, to_prev);
-    _PyGCHead_SET_NEXT(to_prev, node);
-    list->_gc_prev = (uintptr_t)node;
-    _PyGCHead_SET_NEXT(node, list);
-}
-#endif
-
-#if 0
-/* append list `from` onto list `to`; `from` becomes an empty list */
-static void
-gc_list_merge(PyGC_Head *from, PyGC_Head *to)
-{
-    assert(from != to);
-    if (!gc_list_is_empty(from)) {
-        PyGC_Head *to_tail = GC_PREV(to);
-        PyGC_Head *from_head = GC_NEXT(from);
-        PyGC_Head *from_tail = GC_PREV(from);
-        assert(from_head != from);
-        assert(from_tail != from);
-
-        _PyGCHead_SET_NEXT(to_tail, from_head);
-        _PyGCHead_SET_PREV(from_head, to_tail);
-
-        _PyGCHead_SET_NEXT(from_tail, to);
-        _PyGCHead_SET_PREV(to, from_tail);
-    }
-    gc_list_init(from);
-}
-#endif
-
-#if 0
-static Py_ssize_t
-gc_list_size(PyGC_Head *list)
-{
-    PyGC_Head *gc;
-    Py_ssize_t n = 0;
-    for (gc = GC_NEXT(list); gc != list; gc = GC_NEXT(gc)) {
-        n++;
-    }
-    return n;
-}
-#endif
 
 /* Collection state while collecting.  Stores a list of object being examined
  * and the original ref counts, allocated on heap. */
@@ -331,16 +248,6 @@ gc_cstate_new(Py_ssize_t size)
         Py_FatalError("out of memory in GC allocating cstate"); // FIXME
         return NULL;
     }
-#if 0
-    cstate->flags = PyMem_Malloc(sizeof(uint8_t) * size);
-    if (cstate->flags == NULL) {
-        PyMem_Free(cstate->refs);
-        PyMem_Free(cstate->objects);
-        PyMem_Free(cstate);
-        assert(0); // FIXME: handle error
-        return NULL;
-    }
-#endif
     return cstate;
 }
 
@@ -353,10 +260,6 @@ gc_cstate_grow(cstate_t *cstate)
     assert(cstate->objects); // FIXME: check errors
     cstate->refs = PyMem_Realloc(cstate->refs, n * sizeof(Py_ssize_t));
     assert(cstate->refs); // FIXME: check errors
-#if 0
-    cstate->flags = PyMem_Realloc(cstate->flags, n * sizeof(uint8_t));
-    assert(cstate->flags); // FIXME: check errors
-#endif
     cstate->max_size = n;
     //fprintf(stderr, "grow cstate %ld\n", cstate->max_size);
     return true; // FIXME: return error
@@ -394,18 +297,6 @@ gc_cstate_add(cstate_t *cstate, PyObject *op)
     return i;
 }
 
-#if 0
-/* Walk the list and mark all objects as non-collecting */
-static inline void
-gc_list_clear_collecting(PyGC_Head *collectable)
-{
-    PyGC_Head *gc;
-    for (gc = GC_NEXT(collectable); gc != collectable; gc = GC_NEXT(gc)) {
-        gc_clear_collecting(gc);
-    }
-}
-#endif
-
 /* Append objects in a GC list to a Python list.
  * Return 0 if all OK, < 0 if error (out of memory for list)
  */
@@ -432,58 +323,6 @@ enum flagstates {collecting_clear_unreachable_clear,
                  collecting_clear_unreachable_set,
                  collecting_set_unreachable_clear,
                  collecting_set_unreachable_set};
-
-#if 0
-#ifdef GC_DEBUG
-// validate_list checks list consistency.  And it works as document
-// describing when flags are expected to be set / unset.
-// `head` must be a doubly-linked gc list, although it's fine (expected!) if
-// the prev and next pointers are "polluted" with flags.
-// What's checked:
-// - The `head` pointers are not polluted.
-// - The objects' PREV_MASK_COLLECTING and NEXT_MASK_UNREACHABLE flags are all
-//   `set or clear, as specified by the 'flags' argument.
-// - The prev and next pointers are mutually consistent.
-static void
-validate_list(PyGC_Head *head, enum flagstates flags)
-{
-    assert((head->_gc_prev & PREV_MASK_COLLECTING) == 0);
-    assert((head->_gc_next & NEXT_MASK_UNREACHABLE) == 0);
-    uintptr_t prev_value = 0, next_value = 0;
-    switch (flags) {
-        case collecting_clear_unreachable_clear:
-            break;
-        case collecting_set_unreachable_clear:
-            prev_value = PREV_MASK_COLLECTING;
-            break;
-        case collecting_clear_unreachable_set:
-            next_value = NEXT_MASK_UNREACHABLE;
-            break;
-        case collecting_set_unreachable_set:
-            prev_value = PREV_MASK_COLLECTING;
-            next_value = NEXT_MASK_UNREACHABLE;
-            break;
-        default:
-            assert(! "bad internal flags argument");
-    }
-    PyGC_Head *prev = head;
-    PyGC_Head *gc = GC_NEXT(head);
-    while (gc != head) {
-        PyGC_Head *trueprev = GC_PREV(gc);
-        PyGC_Head *truenext = (PyGC_Head *)(gc->_gc_next  & ~NEXT_MASK_UNREACHABLE);
-        assert(truenext != NULL);
-        assert(trueprev == prev);
-        assert((gc->_gc_prev & PREV_MASK_COLLECTING) == prev_value);
-        assert((gc->_gc_next & NEXT_MASK_UNREACHABLE) == next_value);
-        prev = gc;
-        gc = truenext;
-    }
-    assert(prev == GC_PREV(head));
-}
-#else
-#define validate_list(x, y) do{}while(0)
-#endif
-#endif
 
 /*** end of list stuff ***/
 
@@ -586,12 +425,6 @@ subtract_refs(GCState *gcstate, cstate_t *cstate)
         if (!IS_WHITE(AS_GC(op))) {
             continue;
         }
-#if 0
-        if (gcstate && gcstate->debug & DEBUG_VERBOSE) {
-            fprintf(stderr, "subtract op=%p gen=%d ", op, GET_GEN(gc));
-            //dump_obj(op);
-        }
-#endif
         traverse = Py_TYPE(op)->tp_traverse;
         (void) traverse(op,
                         (visitproc)visit_decref,
@@ -642,12 +475,6 @@ visit_reachable(PyObject *op, struct mark_state *state)
         case COLOR_WHITE:
             // We thought this object was dead but it turns out to be alive.
             // Mark as grey because we have to traverse it yet.
-#if 0
-            if (debug_verbose) {
-                fprintf(stderr, "became reachable %p->%p\n", state->ref,
-                        FROM_GC(gc));
-            }
-#endif
             state->found++;
             SET_COLOR(gc, COLOR_GREY);
             /* no break, continue to grey case */
@@ -836,57 +663,6 @@ mark_legacy_finalizers(GCState *gcstate, cstate_t *cstate)
         propagate_reachable(gcstate, cstate, true);
     }
 }
-
-#if 0
-static inline void
-clear_unreachable_mask(PyGC_Head *unreachable)
-{
-    /* Check that the list head does not have the unreachable bit set */
-    assert(((uintptr_t)unreachable & NEXT_MASK_UNREACHABLE) == 0);
-
-    PyGC_Head *gc, *next;
-    assert((unreachable->_gc_next & NEXT_MASK_UNREACHABLE) == 0);
-    for (gc = GC_NEXT(unreachable); gc != unreachable; gc = next) {
-        _PyObject_ASSERT((PyObject*)FROM_GC(gc), gc->_gc_next & NEXT_MASK_UNREACHABLE);
-        gc->_gc_next &= ~NEXT_MASK_UNREACHABLE;
-        next = (PyGC_Head*)gc->_gc_next;
-    }
-    validate_list(unreachable, collecting_set_unreachable_clear);
-}
-#endif
-
-#if 0
-/* A traversal callback for move_legacy_finalizer_reachable. */
-static int
-visit_move(PyObject *op, PyGC_Head *tolist)
-{
-    if (_PyObject_IS_GC(op)) {
-        PyGC_Head *gc = AS_GC(op);
-        if (gc_is_collecting(gc)) {
-            gc_list_move(gc, tolist);
-            gc_clear_collecting(gc);
-        }
-    }
-    return 0;
-}
-
-/* Move objects that are reachable from finalizers, from the unreachable set
- * into finalizers set.
- */
-static void
-move_legacy_finalizer_reachable(PyGC_Head *finalizers)
-{
-    traverseproc traverse;
-    PyGC_Head *gc = GC_NEXT(finalizers);
-    for (; gc != finalizers; gc = GC_NEXT(gc)) {
-        /* Note that the finalizers list may grow during this. */
-        traverse = Py_TYPE(FROM_GC(gc))->tp_traverse;
-        (void) traverse(FROM_GC(gc),
-                        (visitproc)visit_move,
-                        (void *)finalizers);
-    }
-}
-#endif
 
 /* Clear all weakrefs to unreachable objects, and if such a weakref has a
  * callback, invoke it if necessary.  Note that it's possible for such
@@ -1426,13 +1202,6 @@ gc_collect_main(PyThreadState *tstate, int generation,
      * legacy finalizers (e.g. tp_del) can't safely be deleted.
      */
     mark_legacy_finalizers(gcstate, cstate);
-#if 0
-    /* finalizers contains the unreachable objects with a legacy finalizer;
-     * unreachable objects reachable *from* those are also uncollectable,
-     * and we move those into the finalizers list too.
-     */
-    move_legacy_finalizer_reachable(&finalizers);
-#endif
 
     /* Collect statistics on collectable and uncollectable objects found and
      * print debugging information.
