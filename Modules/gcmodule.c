@@ -74,6 +74,20 @@ module gc
 #define AS_GC(op) _Py_AS_GC(op)
 #define FROM_GC(gc) _Py_FROM_GC(gc)
 
+// Automatically choose the generation that needs collecting.
+#define GENERATION_AUTO (-1)
+
+typedef enum {
+    // GC was triggered by heap allocation
+    _Py_GC_REASON_HEAP,
+
+    // GC was called during shutdown
+    _Py_GC_REASON_SHUTDOWN,
+
+    // GC was called by gc.collect() or PyGC_Collect()
+    _Py_GC_REASON_MANUAL
+} _PyGC_Reason;
+
 
 static inline int
 gc_is_collecting(PyGC_Head *g)
@@ -1192,14 +1206,20 @@ handle_resurrected_objects(PyGC_Head *unreachable, PyGC_Head* still_unreachable,
     gc_list_merge(resurrected, old_generation);
 }
 
+
+static void
+invoke_gc_callback(PyThreadState *tstate, const char *phase,
+                   int generation, Py_ssize_t collected,
+                   Py_ssize_t uncollectable);
+
+static int
+gc_select_generation(GCState *gcstate);
+
 /* This is the main function.  Read this to understand how the
  * collection process works. */
 static Py_ssize_t
-gc_collect_main(PyThreadState *tstate, int generation,
-                Py_ssize_t *n_collected, Py_ssize_t *n_uncollectable,
-                int nofail)
+gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
 {
-    GC_STAT_ADD(generation, collections, 1);
 #ifdef Py_STATS
     if (_Py_stats) {
         _Py_stats->object_stats.object_visits = 0;
@@ -1220,6 +1240,31 @@ gc_collect_main(PyThreadState *tstate, int generation,
     // or after _PyGC_Fini()
     assert(gcstate->garbage != NULL);
     assert(!_PyErr_Occurred(tstate));
+
+    int expected = 0;
+    if (!_Py_atomic_compare_exchange_int(&gcstate->collecting, &expected, 1)) {
+        // Don't start a garbage collection if one is already in progress.
+        return 0;
+    }
+
+    if (generation == GENERATION_AUTO) {
+        // Select the oldest generation that needs collecting. We will collect
+        // objects from that generation and all generations younger than it.
+        generation = gc_select_generation(gcstate);
+        if (generation < 0) {
+            // No generation needs to be collected.
+            _Py_atomic_store_int(&gcstate->collecting, 0);
+            return 0;
+        }
+    }
+
+    assert(generation >= 0 && generation < NUM_GENERATIONS);
+
+    GC_STAT_ADD(generation, collections, 1);
+
+    if (reason != _Py_GC_REASON_SHUTDOWN) {
+        invoke_gc_callback(tstate, "start", generation, 0, 0);
+    }
 
     if (gcstate->debug & DEBUG_STATS) {
         PySys_WriteStderr("gc: collecting generation %d...\n", generation);
@@ -1340,7 +1385,7 @@ gc_collect_main(PyThreadState *tstate, int generation,
     }
 
     if (_PyErr_Occurred(tstate)) {
-        if (nofail) {
+        if (reason == _Py_GC_REASON_SHUTDOWN) {
             _PyErr_Clear(tstate);
         }
         else {
@@ -1349,13 +1394,6 @@ gc_collect_main(PyThreadState *tstate, int generation,
     }
 
     /* Update stats */
-    if (n_collected) {
-        *n_collected = m;
-    }
-    if (n_uncollectable) {
-        *n_uncollectable = n;
-    }
-
     struct gc_generation_stats *stats = &gcstate->generation_stats[generation];
     stats->collections++;
     stats->collected += m;
@@ -1374,7 +1412,12 @@ gc_collect_main(PyThreadState *tstate, int generation,
         PyDTrace_GC_DONE(n + m);
     }
 
+    if (reason != _Py_GC_REASON_SHUTDOWN) {
+        invoke_gc_callback(tstate, "stop", generation, m, n);
+    }
+
     assert(!_PyErr_Occurred(tstate));
+    _Py_atomic_store_int(&gcstate->collecting, 0);
     return n + m;
 }
 
@@ -1433,29 +1476,12 @@ invoke_gc_callback(PyThreadState *tstate, const char *phase,
     assert(!_PyErr_Occurred(tstate));
 }
 
-/* Perform garbage collection of a generation and invoke
- * progress callbacks.
- */
-static Py_ssize_t
-gc_collect_with_callback(PyThreadState *tstate, int generation)
+/* Find the oldest generation (highest numbered) where the count
+ * exceeds the threshold.  Objects in the that generation and
+ * generations younger than it will be collected. */
+static int
+gc_select_generation(GCState *gcstate)
 {
-    assert(!_PyErr_Occurred(tstate));
-    Py_ssize_t result, collected, uncollectable;
-    invoke_gc_callback(tstate, "start", generation, 0, 0);
-    result = gc_collect_main(tstate, generation, &collected, &uncollectable, 0);
-    invoke_gc_callback(tstate, "stop", generation, collected, uncollectable);
-    assert(!_PyErr_Occurred(tstate));
-    return result;
-}
-
-static Py_ssize_t
-gc_collect_generations(PyThreadState *tstate)
-{
-    GCState *gcstate = &tstate->interp->gc;
-    /* Find the oldest generation (highest numbered) where the count
-     * exceeds the threshold.  Objects in the that generation and
-     * generations younger than it will be collected. */
-    Py_ssize_t n = 0;
     for (int i = NUM_GENERATIONS-1; i >= 0; i--) {
         if (gcstate->generations[i].count > gcstate->generations[i].threshold) {
             /* Avoid quadratic performance degradation in number
@@ -1497,12 +1523,15 @@ gc_collect_generations(PyThreadState *tstate)
             if (i == NUM_GENERATIONS - 1
                 && gcstate->long_lived_pending < gcstate->long_lived_total / 4)
                 continue;
-            n = gc_collect_with_callback(tstate, i);
-            break;
+            return i;
         }
     }
-    return n;
+    return -1;
 }
+
+
+
+
 
 #include "clinic/gcmodule.c.h"
 
@@ -1572,18 +1601,7 @@ gc_collect_impl(PyObject *module, int generation)
         return -1;
     }
 
-    GCState *gcstate = &tstate->interp->gc;
-    Py_ssize_t n;
-    if (gcstate->collecting) {
-        /* already collecting, don't do anything */
-        n = 0;
-    }
-    else {
-        gcstate->collecting = 1;
-        n = gc_collect_with_callback(tstate, generation);
-        gcstate->collecting = 0;
-    }
-    return n;
+    return gc_collect_main(tstate, generation, _Py_GC_REASON_MANUAL);
 }
 
 /*[clinic input]
@@ -2120,17 +2138,9 @@ PyGC_Collect(void)
     }
 
     Py_ssize_t n;
-    if (gcstate->collecting) {
-        /* already collecting, don't do anything */
-        n = 0;
-    }
-    else {
-        gcstate->collecting = 1;
-        PyObject *exc = _PyErr_GetRaisedException(tstate);
-        n = gc_collect_with_callback(tstate, NUM_GENERATIONS - 1);
-        _PyErr_SetRaisedException(tstate, exc);
-        gcstate->collecting = 0;
-    }
+    PyObject *exc = _PyErr_GetRaisedException(tstate);
+    n = gc_collect_main(tstate, NUM_GENERATIONS - 1, _Py_GC_REASON_MANUAL);
+    _PyErr_SetRaisedException(tstate, exc);
 
     return n;
 }
@@ -2144,16 +2154,7 @@ _PyGC_CollectNoFail(PyThreadState *tstate)
        during interpreter shutdown (and then never finish it).
        See http://bugs.python.org/issue8713#msg195178 for an example.
        */
-    GCState *gcstate = &tstate->interp->gc;
-    if (gcstate->collecting) {
-        return 0;
-    }
-
-    Py_ssize_t n;
-    gcstate->collecting = 1;
-    n = gc_collect_main(tstate, NUM_GENERATIONS - 1, NULL, NULL, 1);
-    gcstate->collecting = 0;
-    return n;
+    return gc_collect_main(tstate, NUM_GENERATIONS - 1, _Py_GC_REASON_SHUTDOWN);
 }
 
 void
@@ -2271,10 +2272,6 @@ PyObject_IS_GC(PyObject *obj)
 void
 _Py_ScheduleGC(PyInterpreterState *interp)
 {
-    GCState *gcstate = &interp->gc;
-    if (gcstate->collecting == 1) {
-        return;
-    }
     _Py_set_eval_breaker_bit(interp, _PY_GC_SCHEDULED_BIT, 1);
 }
 
@@ -2292,7 +2289,7 @@ _PyObject_GC_Link(PyObject *op)
     if (gcstate->generations[0].count > gcstate->generations[0].threshold &&
         gcstate->enabled &&
         gcstate->generations[0].threshold &&
-        !gcstate->collecting &&
+        !_Py_atomic_load_int_relaxed(&gcstate->collecting) &&
         !_PyErr_Occurred(tstate))
     {
         _Py_ScheduleGC(tstate->interp);
@@ -2302,10 +2299,7 @@ _PyObject_GC_Link(PyObject *op)
 void
 _Py_RunGC(PyThreadState *tstate)
 {
-    GCState *gcstate = &tstate->interp->gc;
-    gcstate->collecting = 1;
-    gc_collect_generations(tstate);
-    gcstate->collecting = 0;
+    gc_collect_main(tstate, GENERATION_AUTO, _Py_GC_REASON_HEAP);
 }
 
 static PyObject *
