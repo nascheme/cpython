@@ -49,8 +49,10 @@ static inline int _PyObject_GC_MAY_BE_TRACKED(PyObject *obj) {
 #define _PyGC_PREV_MASK_FINALIZED  (1)
 /* Bit 1 is set when the object is in generation which is GCed currently. */
 #define _PyGC_PREV_MASK_COLLECTING (2)
-/* The (N-2) most significant bits contain the real address. */
-#define _PyGC_PREV_SHIFT           (2)
+/* Bit 2 is set when the GC color is black (alive, visited) */
+#define _PyGC_PREV_MASK_BLACK (4)
+/* The (N-3) most significant bits contain the real address. */
+#define _PyGC_PREV_SHIFT           (3)
 #define _PyGC_PREV_MASK            (((uintptr_t) -1) << _PyGC_PREV_SHIFT)
 
 // Lowest bit of _gc_next is used for flags only in GC.
@@ -90,6 +92,37 @@ static inline void _PyGC_SET_FINALIZED(PyObject *op) {
     _PyGCHead_SET_FINALIZED(gc);
 }
 
+#if 1
+static inline int _PyGCHead_IS_BLACK(PyGC_Head *gc) {
+    return ((gc->_gc_prev & _PyGC_PREV_MASK_BLACK) != 0);
+}
+static inline void _PyGCHead_SET_BLACK(PyGC_Head *gc) {
+    gc->_gc_prev |= _PyGC_PREV_MASK_BLACK;
+}
+static inline void _PyGCHead_CLEAR_BLACK(PyGC_Head *gc) {
+    gc->_gc_prev &= ~(_PyGC_PREV_MASK_BLACK);
+}
+#endif
+
+#if 0
+static inline void
+_PyGC_Set_Flag(PyObject *op, uint32_t flag)
+{
+    _Py_AS_GC(op)->_gc_flags |= flag;
+}
+
+static inline void
+_PyGC_Clear_Flag(PyObject *op, uint32_t flag)
+{
+    _Py_AS_GC(op)->_gc_flags &= ~flag;
+}
+
+static inline bool
+_PyGC_Have_Flag(PyObject *op, uint32_t flag)
+{
+    return _Py_AS_GC(op)->_gc_flags & flag;
+}
+#endif
 
 /* GC runtime state */
 

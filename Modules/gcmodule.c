@@ -74,6 +74,17 @@ module gc
 /* Get the object given the GC head */
 #define FROM_GC(g) ((PyObject *)(((char *)(g))+sizeof(PyGC_Head)))
 
+/* Queue to avoid stack overflow when marking reachable objects */
+#define MARK_MAX_DEPTH 40
+
+struct mark_state {
+    //PyObject *queue[MARK_MAX_DEPTH];
+    int queue_depth;
+    int aborted; /* true if queue depth would have been exceeded, restart */
+    Py_ssize_t alive; // number of objects found alive
+    Py_ssize_t deepest; // max recursive depth used for traverse
+};
+
 static inline int
 gc_is_collecting(PyGC_Head *g)
 {
@@ -85,6 +96,21 @@ gc_clear_collecting(PyGC_Head *g)
 {
     g->_gc_prev &= ~PREV_MASK_COLLECTING;
 }
+
+static inline void
+gc_set_collecting(PyGC_Head *g)
+{
+    g->_gc_prev |= PREV_MASK_COLLECTING;
+}
+
+#define IS_BLACK(g) _PyGCHead_IS_BLACK(g)
+#define SET_BLACK(g) _PyGCHead_SET_BLACK(g)
+#define CLEAR_BLACK(g) _PyGCHead_CLEAR_BLACK(g)
+// re-use collecting bit for grey color
+#define IS_GREY(g) gc_is_collecting(g)
+#define SET_GREY(g) gc_set_collecting(g)
+#define CLEAR_GREY(g) gc_clear_collecting(g)
+#define IS_WHITE(g) (!IS_BLACK(g) && !IS_GREY(g))
 
 static inline Py_ssize_t
 gc_get_refs(PyGC_Head *g)
@@ -403,6 +429,9 @@ validate_list(PyGC_Head *head, enum flagstates flags)
         prev = gc;
         gc = truenext;
     }
+    if (prev != GC_PREV(head)) {
+        fprintf(stderr, "prev %p prev2 %p", prev, GC_PREV(head));
+    }
     assert(prev == GC_PREV(head));
 }
 #else
@@ -493,6 +522,143 @@ subtract_refs(PyGC_Head *containers)
                         op);
     }
 }
+
+static int visit_reachable_colors(PyObject *op, struct mark_state *state);
+
+static void
+visit_reachable_grey(PyObject *op, struct mark_state *state)
+{
+    PyGC_Head *gc = AS_GC(op);
+    /* mark it black as it is proven reachable and we don't have
+     * to look at it anymore.  Note that every loop in
+     * mark_reachable() must at least turn some GREY to BLACK in
+     * order for us to make progress. */
+    SET_BLACK(gc);
+    CLEAR_GREY(gc);
+    state->alive++;
+    traverseproc traverse = Py_TYPE(op)->tp_traverse;
+    traverse(op, (visitproc)visit_reachable_colors, state);
+}
+
+/* A traversal callback for visit_reachable_grey. */
+static int
+visit_reachable_colors(PyObject *op, struct mark_state *state)
+{
+    if (!(_PyObject_IS_GC(op) && _PyObject_GC_IS_TRACKED(op))) {
+        return 0;
+    }
+    PyGC_Head *gc = AS_GC(op);
+    if (IS_WHITE(gc)) {
+        SET_GREY(gc);
+    }
+    if (IS_GREY(gc)) {
+        state->queue_depth += 1;
+        if (state->queue_depth > state->deepest) {
+            state->deepest = state->queue_depth;
+        }
+        if (state->queue_depth >= MARK_MAX_DEPTH) {
+            /* we can't recurse further, leave it grey, next loop will
+             * get it */
+            state->aborted = 1;
+        }
+        else {
+            visit_reachable_grey(op, state);
+        }
+        state->queue_depth -= 1;
+    }
+    return 0;
+}
+
+#define USE_MARK_ALIVE 1
+
+#if USE_MARK_ALIVE
+static Py_ssize_t
+mark_reachable_colors(PyThreadState *tstate, PyGC_Head *containers, PyGC_Head *maybe_garbage)
+{
+    struct mark_state mstate;
+    int done = 0;
+    int mark_passes = 0;
+    mstate.alive = 0;
+    mstate.deepest = 0;
+
+    size_t n  = 0;
+    PyGC_Head *gc = GC_NEXT(containers);
+#if 0
+    // should not be required since these are not set outside of gc
+    for (; gc != containers; gc = GC_NEXT(gc)) {
+        CLEAR_BLACK(gc);
+        CLEAR_GREY(gc);
+    }
+#endif
+
+    // start process by marking the known roots.
+    PyObject *root = NULL;
+    _PyInterpreterFrame *frame = tstate->cframe->current_frame;
+    if (frame != NULL) {
+        root = _PyFrame_GetFrameObject(frame);
+    }
+    if (root == NULL) {
+        root = tstate->interp->sysdict;
+    }
+    assert(root);
+    if (!_PyObject_GC_IS_TRACKED(root)) {
+        return 0;
+    }
+    SET_GREY(AS_GC(root));
+    mstate.aborted = 0;
+    mstate.queue_depth = 0;
+    mark_passes += 1;
+    visit_reachable_grey(root, &mstate);
+
+    while (!done) {
+        mark_passes += 1;
+        mstate.aborted = 0;
+        mstate.queue_depth = 0;
+        /* turn grey to black and all reachable from those also black */
+        PyGC_Head *gc = GC_NEXT(containers);
+        for (; gc != containers; gc = GC_NEXT(gc)) {
+            if (IS_GREY(gc)) {
+                visit_reachable_grey(FROM_GC(gc), &mstate);
+            }
+        }
+        /* if queue depth was exceeded, need another pass */
+        done = !mstate.aborted;
+    }
+#if Py_DEBUG
+    // done propagate, there must be no grey left at this point
+    gc = GC_NEXT(containers);
+    for (; gc != containers; gc = GC_NEXT(gc)) {
+        if (!IS_BLACK(gc)) {
+            assert(!gc_is_collecting(gc));
+        }
+    }
+#endif
+    PyGC_Head *next;
+    gc = GC_NEXT(containers);
+    size_t n_alive = 0;
+    while (gc != containers) {
+        next = GC_NEXT(gc);
+        if (IS_BLACK(gc)) {
+            n_alive += 1;
+        }
+        else {
+            // better to move suspected garbage rather than known alive
+            // objects.  There will be much more known alive objects.
+            gc_list_move(gc, maybe_garbage);
+        }
+        CLEAR_BLACK(gc);
+        CLEAR_GREY(gc);
+        n++;
+        gc = next;
+    }
+#if 1
+    fprintf(stderr, "mark passes needed %d deepest = %ld ", mark_passes,
+            mstate.deepest);
+    fprintf(stderr, "marked n = %ld alive = %ld\n", n, mstate.alive);
+#endif
+    return n_alive;
+}
+#endif // USE_MARK_ALIVE
 
 /* A traversal callback for move_unreachable. */
 static int
@@ -1211,6 +1377,16 @@ gc_collect_main(PyThreadState *tstate, int generation,
     assert(gcstate->garbage != NULL);
     assert(!_PyErr_Occurred(tstate));
 
+#if 0
+    // turn on DEBUG_STATS if doing full collection
+    if (generation == NUM_GENERATIONS-1) {
+        gcstate->debug |= DEBUG_STATS;
+    }
+    else {
+        gcstate->debug &= ~DEBUG_STATS;
+    }
+#endif
+
     if (gcstate->debug & DEBUG_STATS) {
         PySys_WriteStderr("gc: collecting generation %d...\n", generation);
         show_stats_each_generations(gcstate);
@@ -1239,7 +1415,39 @@ gc_collect_main(PyThreadState *tstate, int generation,
         old = young;
     validate_list(old, collecting_clear_unreachable_clear);
 
-    deduce_unreachable(young, &unreachable);
+    _PyTime_t t2 = _PyTime_GetPerfCounter();
+#if 1
+    PyGC_Head maybe_garbage;
+    gc_list_init(&maybe_garbage);
+
+#if USE_MARK_ALIVE
+    size_t n_alive = 0;
+#endif
+
+    if (generation == NUM_GENERATIONS-1) {
+#if USE_MARK_ALIVE
+        n_alive = mark_reachable_colors(tstate, young, &maybe_garbage);
+#endif
+    }
+#endif
+    _PyTime_t t3 = _PyTime_GetPerfCounter();
+
+    if (generation == NUM_GENERATIONS-1) {
+#if USE_MARK_ALIVE
+        deduce_unreachable(&maybe_garbage, &unreachable);
+#else
+        deduce_unreachable(young, &unreachable);
+#endif
+    }
+    else {
+        deduce_unreachable(young, &unreachable);
+    }
+
+#if USE_MARK_ALIVE
+    if (n_alive > 0) {
+        gc_list_merge(&maybe_garbage, young);
+    }
+#endif
 
     untrack_tuples(young);
     /* Move reachable objects to next generation. */
@@ -1336,6 +1544,15 @@ gc_collect_main(PyThreadState *tstate, int generation,
         else {
             _PyErr_WriteUnraisableMsg("in garbage collection", NULL);
         }
+    }
+
+    if (generation == NUM_GENERATIONS-1) {
+        _PyTime_t mark_time = t3 - t2;
+        _PyTime_t gc_time = _PyTime_GetPerfCounter() - t3;
+        fprintf(stderr, "gc mark alive time %ld cyclic time %ld total %ld\n",
+                    (long)_PyTime_AsMicroseconds(mark_time, _PyTime_ROUND_CEILING),
+                    (long)_PyTime_AsMicroseconds(gc_time, _PyTime_ROUND_CEILING),
+                    (long)_PyTime_AsMicroseconds(mark_time + gc_time, _PyTime_ROUND_CEILING));
     }
 
     /* Update stats */
