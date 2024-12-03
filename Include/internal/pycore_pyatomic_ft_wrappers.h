@@ -61,6 +61,8 @@ extern "C" {
     _Py_atomic_store_uint16_relaxed(&value, new_value)
 #define FT_ATOMIC_STORE_UINT32_RELAXED(value, new_value) \
     _Py_atomic_store_uint32_relaxed(&value, new_value)
+#define FT_ATOMIC_STORE_ULONG_RELAXED(value, new_value) \
+    _Py_atomic_store_ulong_relaxed(&value, new_value)
 
 #else
 #define FT_ATOMIC_LOAD_PTR(value) value
@@ -85,6 +87,7 @@ extern "C" {
 #define FT_ATOMIC_STORE_UINT8_RELAXED(value, new_value) value = new_value
 #define FT_ATOMIC_STORE_UINT16_RELAXED(value, new_value) value = new_value
 #define FT_ATOMIC_STORE_UINT32_RELAXED(value, new_value) value = new_value
+#define FT_ATOMIC_STORE_ULONG_RELAXED(value, new_value) value = new_value
 
 #endif
 
