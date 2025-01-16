@@ -4,6 +4,7 @@
 
 #include "Python.h"
 #include "pycore_ceval.h"         // _Py_set_eval_breaker_bit()
+#include "pycore_time.h"
 #include "pycore_context.h"
 #include "pycore_dict.h"          // _PyInlineValuesSize()
 #include "pycore_initconfig.h"
@@ -149,6 +150,10 @@ get_gc_state(void)
     return &interp->gc;
 }
 
+static unsigned int num_alive;
+static unsigned int num_checked;
+static unsigned int num_gc;
+
 
 void
 _PyGC_InitState(GCState *gcstate)
@@ -170,6 +175,20 @@ _PyGC_InitState(GCState *gcstate)
 #undef INIT_HEAD
 }
 
+#ifdef WITH_GC_TIMING_STATS
+FILE *gc_log;
+static void
+print_gc_times(GCState *gcstate)
+{
+    fprintf(gc_log, "gc times: runs %ld total %.3fs mark %.3fs max %ldus avg %ldus\n",
+            gcstate->timing_state.gc_runs,
+            PyTime_AsSecondsDouble(gcstate->timing_state.gc_total_time),
+            PyTime_AsSecondsDouble(gcstate->timing_state.gc_mark_time),
+            (long)_PyTime_AsMicroseconds(gcstate->timing_state.gc_max_pause, _PyTime_ROUND_HALF_EVEN),
+            (long)_PyTime_AsMicroseconds(gcstate->timing_state.gc_total_time / gcstate->timing_state.gc_runs, _PyTime_ROUND_HALF_EVEN)
+            );
+}
+#endif // WITH_GC_TIMING_STATS
 
 PyStatus
 _PyGC_Init(PyInterpreterState *interp)
@@ -186,6 +205,10 @@ _PyGC_Init(PyInterpreterState *interp)
         return _PyStatus_NO_MEMORY();
     }
     gcstate->heap_size = 0;
+
+#ifdef WITH_GC_TIMING_STATS
+    gc_log = fopen("/tmp/gc_timing.log", "a");
+#endif
 
     return _PyStatus_OK();
 }
@@ -1592,10 +1615,19 @@ gc_collect_increment(PyThreadState *tstate, struct gc_collection_stats *stats)
     gcstate->work_to_do += assess_work_to_do(gcstate);
     untrack_tuples(&gcstate->young.head);
     if (gcstate->phase == GC_PHASE_MARK) {
+#ifdef WITH_GC_TIMING_STATS
+        PyTime_t t1;
+        (void)PyTime_PerfCounterRaw(&t1);
+#endif
         Py_ssize_t objects_marked = mark_at_start(tstate);
         GC_STAT_ADD(1, objects_transitively_reachable, objects_marked);
         gcstate->work_to_do -= objects_marked;
         validate_spaces(gcstate);
+#ifdef WITH_GC_TIMING_STATS
+        PyTime_t t2;
+        (void)PyTime_PerfCounterRaw(&t2);
+        gcstate->timing_state.gc_mark_time += t2 - t1;
+#endif
         return;
     }
     PyGC_Head *not_visited = &gcstate->old[gcstate->visited_space^1].head;
@@ -2001,6 +2033,14 @@ _PyGC_Collect(PyThreadState *tstate, int generation, _PyGC_Reason reason)
         return 0;
     }
 
+#ifdef WITH_GC_TIMING_STATS
+    PyTime_t gc_timing_t1;
+    (void)PyTime_PerfCounterRaw(&gc_timing_t1);
+    num_gc = 0;
+    num_alive = 0;
+    num_checked = 0;
+#endif
+
     struct gc_collection_stats stats = { 0 };
     if (reason != _Py_GC_REASON_SHUTDOWN) {
         invoke_gc_callback(gcstate, "start", generation, &stats);
@@ -2041,6 +2081,22 @@ _PyGC_Collect(PyThreadState *tstate, int generation, _PyGC_Reason reason)
         _Py_stats->object_stats.object_visits = 0;
     }
 #endif
+#ifdef WITH_GC_TIMING_STATS
+    PyTime_t gc_timing_t2, dt;
+    (void)PyTime_PerfCounterRaw(&gc_timing_t2);
+    dt = gc_timing_t2 - gc_timing_t1;
+    if (reason == _Py_GC_REASON_HEAP) {
+        if (dt > gcstate->timing_state.gc_max_pause) {
+            gcstate->timing_state.gc_max_pause = dt;
+        }
+    }
+    fprintf(gc_log, "gc time %d %.3f\n", generation, (double)_PyTime_AsMicroseconds(dt,
+                                                        _PyTime_ROUND_HALF_EVEN));
+    gcstate->timing_state.gc_total_time += dt;
+    gcstate->timing_state.gc_runs++;
+    //fprintf(gc_log, "gc alive %d collected %ld checked %d gc %d\n", num_alive, m, num_checked, num_gc);
+    fflush(gc_log);
+#endif // WITH_GC_TIMING_STATS
     validate_spaces(gcstate);
     _Py_atomic_store_int(&gcstate->collecting, 0);
     return stats.uncollectable + stats.collected;
@@ -2140,6 +2196,11 @@ _PyGC_Fini(PyInterpreterState *interp)
     finalize_unlink_gc_head(&gcstate->old[0].head);
     finalize_unlink_gc_head(&gcstate->old[1].head);
     finalize_unlink_gc_head(&gcstate->permanent_generation.head);
+
+    #ifdef WITH_GC_TIMING_STATS
+    print_gc_times(gcstate);
+    fclose(gc_log);
+    #endif // WITH_GC_TIMING_STATS
 }
 
 /* for debugging */
