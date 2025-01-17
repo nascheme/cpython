@@ -1559,6 +1559,20 @@ mark_global_roots(PyInterpreterState *interp, PyGC_Head *visited, int visited_sp
         objects_marked += move_to_reachable(types->for_extensions.initialized[i].tp_dict, &reachable, visited_space);
         objects_marked += move_to_reachable(types->for_extensions.initialized[i].tp_subclasses, &reachable, visited_space);
     }
+    #if 0 // mark the asyncio tasks list
+    PyObject *mod = PyImport_GetModule(&_Py_ID(_asyncio));
+    if (mod != NULL) {
+        PyObject *tasks = PyObject_CallMethod(mod, "all_tasks_gc", NULL);
+        if (tasks != NULL) {
+            fprintf(stderr, "tasks %ld\n", PyList_GET_SIZE(tasks));
+            for (Py_ssize_t i = 0; i < PyList_GET_SIZE(tasks); i++) {
+                PyObject *task = PyList_GET_ITEM(tasks, i);
+                objects_marked += move_to_reachable(task, &reachable, visited_space);
+            }
+            Py_DECREF(tasks);
+        }
+    }
+    #endif
     objects_marked += mark_all_reachable(&reachable, visited, visited_space);
     assert(gc_list_is_empty(&reachable));
     return objects_marked;

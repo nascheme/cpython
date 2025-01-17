@@ -2088,4 +2088,21 @@ skip_optional_pos:
 exit:
     return return_value;
 }
-/*[clinic end generated code: output=408e156476ced07f input=a9049054013a1b77]*/
+
+PyDoc_STRVAR(_asyncio_all_tasks_gc__doc__,
+"all_tasks_gc($module, /)\n"
+"--\n"
+"\n");
+
+#define _ASYNCIO_ALL_TASKS_GC_METHODDEF    \
+    {"all_tasks_gc", (PyCFunction)_asyncio_all_tasks_gc, METH_NOARGS, _asyncio_all_tasks_gc__doc__},
+
+static PyObject *
+_asyncio_all_tasks_gc_impl(PyObject *module);
+
+static PyObject *
+_asyncio_all_tasks_gc(PyObject *module, PyObject *Py_UNUSED(ignored))
+{
+    return _asyncio_all_tasks_gc_impl(module);
+}
+/*[clinic end generated code: output=ba796d07275adf7c input=a9049054013a1b77]*/

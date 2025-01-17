@@ -28,6 +28,9 @@
 // include Python stacks as set of known roots
 #define GC_MARK_ALIVE_STACKS 1
 
+// include asyncio tasks list in known roots
+//#define GC_MARK_ALIVE_ASYNC_TASKS 1
+
 
 #ifdef Py_GIL_DISABLED
 
@@ -708,6 +711,30 @@ gc_visit_thread_stacks_mark_alive(PyInterpreterState *interp, _PyObjectStack *st
     return 0;
 }
 #endif // GC_MARK_ALIVE_STACKS
+
+static int
+gc_visit_async_tasks(PyInterpreterState *interp, _PyObjectStack *stack)
+{
+    PyObject *mod = PyImport_GetModule(&_Py_ID(_asyncio));
+    if (mod == NULL) {
+        return 0;
+    }
+    PyObject *tasks = PyObject_CallMethod(mod, "all_tasks_gc", NULL);
+    if (tasks == NULL) {
+        return -1;
+    }
+    fprintf(stderr, "tasks %ld\n", PyList_GET_SIZE(tasks));
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(tasks); i++) {
+        PyObject *task = PyList_GET_ITEM(tasks, i);
+        if (mark_alive_stack_push(task, stack) < 0) {
+            Py_DECREF(tasks);
+            return -1;
+        }
+    }
+    Py_DECREF(tasks);
+    return 0;
+}
+
 #endif // GC_ENABLE_MARK_ALIVE
 
 static void
@@ -1131,6 +1158,12 @@ mark_alive_from_roots(PyInterpreterState *interp,
 #endif
 #ifdef GC_MARK_ALIVE_STACKS
     if (gc_visit_thread_stacks_mark_alive(interp, &stack) < 0) {
+        gc_abort_mark_alive(interp, state, &stack);
+        return -1;
+    }
+#endif
+#if GC_MARK_ALIVE_ASYNC_TASKS
+    if (gc_visit_async_tasks(interp, &stack) < 0) {
         gc_abort_mark_alive(interp, state, &stack);
         return -1;
     }

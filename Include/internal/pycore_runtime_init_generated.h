@@ -739,6 +739,7 @@ extern "C" {
     INIT_ID(_anonymous_), \
     INIT_ID(_argtypes_), \
     INIT_ID(_as_parameter_), \
+    INIT_ID(_asyncio), \
     INIT_ID(_asyncio_future_blocking), \
     INIT_ID(_blksize), \
     INIT_ID(_bootstrap), \

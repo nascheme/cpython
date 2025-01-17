@@ -3833,6 +3833,60 @@ _asyncio_all_tasks_impl(PyObject *module, PyObject *loop)
     return res;
 }
 
+/*[clinic input]
+_asyncio.all_tasks_gc
+
+[clinic start generated code]*/
+
+static PyObject *
+_asyncio_all_tasks_gc_impl(PyObject *module)
+/*[clinic end generated code: output=34706141c41d89d6 input=c2d2f56433a7fc0f]*/
+{
+    asyncio_state *state = get_asyncio_state(module);
+    PyObject *tasks = PyList_New(0);
+    if (tasks == NULL) {
+        return NULL;
+    }
+    int err = 0;
+    ASYNCIO_STATE_LOCK(state);
+    struct llist_node *node;
+
+    llist_for_each_safe(node, &state->asyncio_tasks_head) {
+        TaskObj *task = llist_data(node, TaskObj, task_node);
+        // The linked list holds borrowed references to task
+        // as such it is possible that the task is concurrently
+        // deallocated while added to this list.
+        // To protect against concurrent deallocations,
+        // we first try to incref the task which would fail
+        // if it is concurrently getting deallocated in another thread,
+        // otherwise it gets added to the list.
+        if (_Py_TryIncref((PyObject *)task)) {
+            if (_PyList_AppendTakeRef((PyListObject *)tasks, (PyObject *)task) < 0) {
+                Py_DECREF(tasks);
+                err = 1;
+                break;
+            }
+        }
+    }
+    ASYNCIO_STATE_UNLOCK(state);
+    if (err) {
+        return NULL;
+    }
+    return tasks;
+}
+
+int
+_Py_asyncio_traverse_tasks(PyObject *mod, visitproc visit, void *arg)
+{
+    asyncio_state *state = get_asyncio_state(mod);
+    struct llist_node *node;
+    llist_for_each(node, &state->asyncio_tasks_head) {
+        TaskObj *task = llist_data(node, TaskObj, task_node);
+        Py_VISIT((PyObject *)task);
+    }
+    return 0;
+}
+
 static int
 module_traverse(PyObject *mod, visitproc visit, void *arg)
 {
@@ -4007,6 +4061,7 @@ static PyMethodDef asyncio_methods[] = {
     _ASYNCIO__LEAVE_TASK_METHODDEF
     _ASYNCIO__SWAP_CURRENT_TASK_METHODDEF
     _ASYNCIO_ALL_TASKS_METHODDEF
+    _ASYNCIO_ALL_TASKS_GC_METHODDEF
     {NULL, NULL}
 };
 
