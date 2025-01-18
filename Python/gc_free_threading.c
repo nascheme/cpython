@@ -18,7 +18,9 @@
 #include "pydtrace.h"
 #include "pycore_uniqueid.h"      // _PyObject_MergeThreadLocalRefcounts()
 
-#undef WITH_GC_TIMING_STATS
+//#undef WITH_GC_TIMING_STATS
+
+//#define WITH_PREFETCH_STATS
 
 // enable the "mark alive" pass of GC
 #define GC_ENABLE_MARK_ALIVE 1
@@ -671,7 +673,9 @@ push_mark_stack(struct mark_stack *ms, PyObject *op)
     }
     ms->stack[ms->size].op = op;
     ms->size++;
-    //stack_pushes++;
+    #ifdef WITH_PREFETCH_STATS
+    stack_pushes++;
+    #endif
 }
 // prefetch
 
@@ -684,7 +688,9 @@ mark_buffer_push(PyObject *op, struct gc_mark_args *args)
 #endif
         args->buffer[args->enqueued % BUFFER_SIZE] = op;
         args->enqueued++;
-        //buffer_pushes++;
+        #ifdef WITH_PREFETCH_STATS
+        buffer_pushes++;
+        #endif
         prefetch(op);
 }
 static int
@@ -2082,8 +2088,10 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
 
     #ifdef WITH_GC_TIMING_STATS
     fprintf(gc_log, "gc alive %d collected %ld checked %d stack %d gc %d\n", num_alive, m, num_checked, num_stack, num_gc);
+    #ifdef WITH_PREFETCH_STATS
     double ratio = (double)buffer_pushes / (1+stack_pushes);
     fprintf(gc_log, "gc prefetch buffer %ld stack %ld ratio %2.2lf\n", buffer_pushes, stack_pushes, ratio);
+    #endif
     fflush(gc_log);
     #endif
 
