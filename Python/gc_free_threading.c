@@ -23,10 +23,10 @@
 #define GC_ENABLE_MARK_ALIVE 1
 
 // include additional roots in "mark alive" pass
-#define GC_MARK_ALIVE_EXTRA_ROOTS 1
+//#define GC_MARK_ALIVE_EXTRA_ROOTS 1
 
 // include Python stacks as set of known roots
-#define GC_MARK_ALIVE_STACKS 1
+//#define GC_MARK_ALIVE_STACKS 1
 
 // include asyncio tasks list in known roots
 //#define GC_MARK_ALIVE_ASYNC_TASKS 1
@@ -52,6 +52,15 @@ typedef struct _gc_runtime_state GCState;
 #define prefetch(ptr) __builtin_prefetch(ptr, 1, 3)
 #else
 #define prefetch(ptr)
+#endif
+
+/* Manually preventing inlining */
+#if defined(__GNUC__)
+  #define Py_noinline __attribute__ ((noinline))
+#elif defined(_MSC_VER)
+  #define Py_noinline __declspec(noinline)
+#else
+  #define Py_noinline
 #endif
 
 #ifdef WITH_GC_TIMING_STATS
@@ -632,8 +641,7 @@ gc_maybe_untrack(PyObject *op)
 #define BUFFER_LIMIT 64
 
 struct mark_entry {
-    uintptr_t start;
-    uintptr_t end;
+    PyObject *op;
 };
 
 struct mark_stack {
@@ -654,7 +662,7 @@ static Py_ssize_t buffer_pushes;
 static Py_ssize_t stack_pushes;
 
 static void
-push_mark_stack(struct mark_stack *ms, uintptr_t start, uintptr_t end)
+push_mark_stack(struct mark_stack *ms, PyObject *op)
 {
     if (ms->size >= ms->capacity) {
         if (ms->capacity == 0) {
@@ -668,43 +676,37 @@ push_mark_stack(struct mark_stack *ms, uintptr_t start, uintptr_t end)
             abort();
         }
     }
-    ms->stack[ms->size].start = start;
-    ms->stack[ms->size].end = end;
+    ms->stack[ms->size].op = op;
     ms->size++;
-}
-
-#if 0
-static void
-push_mark_range(struct mark_stack *ms, PyObject **start, PyObject **end)
-{
-    push_mark_stack(ms, (uintptr_t)start, (uintptr_t)end);
-}
-#endif
-
-static void
-push_mark_object(struct mark_stack *ms, PyObject *op)
-{
-    push_mark_stack(ms, (uintptr_t)op, 0);
 }
 // prefetch
 
-static int
-mark_alive_enqueue(PyObject *op, struct gc_mark_args *arg)
+static inline void
+mark_buffer_push(PyObject *op, struct gc_mark_args *args)
 {
-    if (op == NULL) {
-        return 0;
-    }
-    else if (arg->enqueued - arg->dequeued < BUFFER_SIZE) {
-        //fprintf(gc_log, "prefetch %ld %p\n", arg->enqueued - arg->dequeued, op);
+#if Py_DEBUG
+        Py_ssize_t buf_used = args->enqueued - args->dequeued;
+        assert(buf_used < BUFFER_SIZE);
+#endif
+        args->buffer[args->enqueued % BUFFER_SIZE] = op;
+        args->enqueued++;
+        buffer_pushes++;
+        //fprintf(gc_log, "prefetch %ld %p\n", buf_used, op);
         prefetch(&(op->ob_gc_bits));
         prefetch(&(op->ob_type));
-        arg->buffer[arg->enqueued % BUFFER_SIZE] = op;
-        arg->enqueued++;
-        buffer_pushes++;
+}
+static int
+mark_alive_enqueue(PyObject *op, struct gc_mark_args *args)
+{
+    assert(op != NULL);
+    //fprintf(gc_log, "enqueue %ld %ld %p\n", args->enqueued - args->dequeued,
+    //        args->stack.size, op);
+    if (args->enqueued - args->dequeued < BUFFER_SIZE) {
+        mark_buffer_push(op, args);
         return 0;
     }
     else {
-        push_mark_object(&arg->stack, op);
+        push_mark_stack(&args->stack, op);
         stack_pushes++;
         return 0;
     }
@@ -1159,86 +1161,67 @@ print_gc_times(GCState *gcstate)
 
 #ifdef GC_ENABLE_MARK_ALIVE
 
-static int
+static void
+fill_mark_buffer(struct gc_mark_args *args)
+{
+    while (args->stack.size > 0) {
+        Py_ssize_t buf_used = args->enqueued - args->dequeued;
+        if (buf_used > BUFFER_LIMIT) {
+            return;
+        }
+        //fprintf(gc_log, "fill buffer %ld %ld\n", buf_used, args->stack.size);
+        struct mark_entry entry = args->stack.stack[--args->stack.size];
+        mark_buffer_push(entry.op, args);
+    }
+}
+
+Py_NO_INLINE static int
 propagate_alive_bits(struct gc_mark_args *args)
 {
-    int limit = BUFFER_LIMIT;
-    struct mark_entry entry;
     for (;;) {
-        if (args->enqueued - args->dequeued > limit) {
-            PyObject *op = args->buffer[args->dequeued % BUFFER_SIZE];
-            args->dequeued++;
-            //fprintf(gc_log, "access %p\n", op);
-            entry.start = (uintptr_t)op;
-            entry.end = 0;
+        fill_mark_buffer(args);
+        Py_ssize_t buf_used = args->enqueued - args->dequeued;
+        if (buf_used == 0) {
+            return 0;
         }
-        else if (args->stack.size > 0) {
-            entry = args->stack.stack[--args->stack.size];
+        PyObject *op = args->buffer[args->dequeued % BUFFER_SIZE];
+        args->dequeued++;
+
+        //fprintf(gc_log, "access %p\n", op);
+
+        //if (!gc_has_bit(op,  _PyGC_BITS_TRACKED)) {
+        if (!_PyObject_GC_IS_TRACKED(op)) {
+            continue;
         }
-        else {
-            break;
+        if (gc_is_alive(op)) {
+            continue; // already visited this object
+        }
+        if (gc_maybe_untrack(op)) {
+            assert(!_PyObject_GC_IS_TRACKED(op));
+            continue; // was untracked, don't visit it
         }
 
-        if (entry.end == 0) {
-            PyObject *op = (PyObject *)entry.start;
+        // Need to call tp_traverse on this object. Add to stack and mark it
+        // alive so we don't traverse it a second time.
+        gc_set_alive(op);
 
-            if (!gc_has_bit(op,  _PyGC_BITS_TRACKED)) {
+        traverseproc traverse = Py_TYPE(op)->tp_traverse;
+        #if 1
+        if (traverse == PyList_Type.tp_traverse) {
+            PyListObject *list = (PyListObject *)op;
+            if (list->ob_item == NULL) {
                 continue;
             }
-            if (gc_is_alive(op)) {
-                continue; // already visited this object
-            }
-            if (gc_maybe_untrack(op)) {
-                assert(!_PyObject_GC_IS_TRACKED(op));
-                continue; // was untracked, don't visit it
-            }
-
-            // Need to call tp_traverse on this object. Add to stack and mark it
-            // alive so we don't traverse it a second time.
-            gc_set_alive(op);
-
-            traverseproc traverse = Py_TYPE(op)->tp_traverse;
-            #if 1
-            if (traverse == PyList_Type.tp_traverse) {
-                PyListObject *list = (PyListObject *)op;
-                if (list->ob_item == NULL) {
-                    continue;
-                }
-                entry.start = (uintptr_t)list->ob_item;
-                entry.end = (uintptr_t)(list->ob_item + Py_SIZE(op));
-            }
-            else
-            #endif
-            if (traverse(op, (visitproc)&mark_alive_enqueue, args) < 0) {
-                return -1;
+            for (Py_ssize_t i = 0; i < Py_SIZE(op); i++) {
+                mark_alive_enqueue(list->ob_item[i], args);
             }
         }
-
-        while (entry.start < entry.end) {
-            PyObject *op = *(PyObject **)entry.start;
-            if (op == NULL) {
-                entry.start += sizeof(PyObject *);
-                continue;
-            }
-            if (args->enqueued - args->dequeued < BUFFER_SIZE) {
-                //fprintf(gc_log, "prefetch %ld %p\n", args->enqueued - args->dequeued, op);
-                prefetch(&(op->ob_gc_bits));
-                prefetch(&(op->ob_type));
-                args->buffer[args->enqueued % BUFFER_SIZE] = op;
-                args->enqueued++;
-                buffer_pushes++;
-            }
-            else {
-                // If the prefetch buffer is full, push the remaining parts
-                // of the mark entry back onto the stack and process the buffer.
-                push_mark_stack(&args->stack, entry.start, entry.end);
-                stack_pushes++;
-                break;
-            }
-            entry.start += sizeof(PyObject *);
+        else
+        #endif
+        if (traverse(op, (visitproc)&mark_alive_enqueue, args) < 0) {
+            return -1;
         }
     }
-    return 0;
 }
 
 // Using tp_traverse, mark everything reachable from known root objects
@@ -1273,9 +1256,11 @@ mark_alive_from_roots(PyInterpreterState *interp,
     struct gc_mark_args mark_args = { 0 };
 
     #define MARK_ENQUEUE(op) \
-        if (mark_alive_enqueue(op, &mark_args) < 0) { \
-            gc_abort_mark_alive(interp, state, &mark_args); \
-            return -1; \
+        if (op != NULL ) { \
+            if (mark_alive_enqueue(op, &mark_args) < 0) { \
+                gc_abort_mark_alive(interp, state, &mark_args); \
+                return -1; \
+            } \
         }
     MARK_ENQUEUE(interp->sysdict);
 #ifdef GC_MARK_ALIVE_EXTRA_ROOTS
@@ -1899,7 +1884,7 @@ gc_collect_internal(PyInterpreterState *interp, struct collection_state *state, 
     // doing this extra work.  Doing this pass also defeats one of the
     // purposes of using freeze: avoiding writes to objects that are frozen.
     // So, we just skip this if gc.freeze() was used.
-    if (!state->gcstate->freeze_active) {
+    if (!state->gcstate->freeze_active && 0) {
         // Mark objects reachable from known roots as "alive".  These will
         // be ignored for rest of the GC pass.
         int err = mark_alive_from_roots(interp, state);
