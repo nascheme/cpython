@@ -1205,7 +1205,9 @@ propagate_alive_bits(struct gc_mark_args *args)
         // alive so we don't traverse it a second time.
         gc_set_alive(op);
 
+        Py_ssize_t stack_size = args->stack.size;
         traverseproc traverse = Py_TYPE(op)->tp_traverse;
+        #define VISIT(op) ((op != NULL) ? mark_alive_enqueue(op, args) : 0)
         #if 1
         if (traverse == PyList_Type.tp_traverse) {
             PyListObject *list = (PyListObject *)op;
@@ -1216,11 +1218,47 @@ propagate_alive_bits(struct gc_mark_args *args)
                 mark_alive_enqueue(list->ob_item[i], args);
             }
         }
+        else if (traverse == PyDict_Type.tp_traverse) {
+            PyDictObject *mp = (PyDictObject *)op;
+            PyDictKeysObject *keys = mp->ma_keys;
+            Py_ssize_t i, n = keys->dk_nentries;
+
+            if (DK_IS_UNICODE(keys)) {
+                if (_PyDict_HasSplitTable(mp)) {
+                    if (!mp->ma_values->embedded) {
+                        for (i = 0; i < n; i++) {
+                            VISIT(mp->ma_values->values[i]);
+                        }
+                    }
+                }
+                else {
+                    PyDictUnicodeEntry *entries = DK_UNICODE_ENTRIES(keys);
+                    for (i = 0; i < n; i++) {
+                        VISIT(entries[i].me_value);
+                    }
+                }
+            }
+            else {
+                PyDictKeyEntry *entries = DK_ENTRIES(keys);
+                for (i = 0; i < n; i++) {
+                    if (entries[i].me_value != NULL) {
+                        VISIT(entries[i].me_value);
+                        VISIT(entries[i].me_key);
+                    }
+                }
+            }
+        }
         else
         #endif
         if (traverse(op, (visitproc)&mark_alive_enqueue, args) < 0) {
             return -1;
         }
+        Py_ssize_t n = args->stack.size - stack_size;
+        #if 0
+        if (n > 50) {
+            fprintf(gc_log, "%s %ld\n", Py_TYPE(op)->tp_name, n);
+        }
+        #endif
     }
 }
 
