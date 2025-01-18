@@ -731,7 +731,7 @@ gc_abort_mark_alive(PyInterpreterState *interp,
     // We failed to allocate memory for "stack" while doing the "mark
     // alive" phase.  In that case, free the object stack and make sure
     // that no objects have the alive bit set.
-    //_PyObjectStack_Clear(stack); FIXME: cleanup args
+    PyMem_Free(args->stack.stack);
     gc_visit_heaps(interp, &gc_clear_alive_bits, &state->base);
 }
 
@@ -1301,6 +1301,8 @@ mark_alive_from_roots(PyInterpreterState *interp,
         gc_abort_mark_alive(interp, state, &mark_args);
         return -1;
     }
+
+    PyMem_Free(mark_args.stack.stack);
 
 #ifdef WITH_GC_TIMING_STATS
     PyTime_t t2;
