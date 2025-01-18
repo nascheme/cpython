@@ -290,9 +290,6 @@ enum _GCPhase {
     GC_PHASE_COLLECT = 1
 };
 
-// if true, enable GC timing statistics
-#define WITH_GC_TIMING_STATS 1
-
 #ifdef WITH_GC_TIMING_STATS
 
 #define QUANTILE_COUNT 5

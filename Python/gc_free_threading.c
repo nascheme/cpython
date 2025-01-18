@@ -1,4 +1,23 @@
 // Cyclic garbage collector implementation for free-threaded build.
+
+//#define WITH_GC_TIMING_STATS
+
+//#define WITH_PREFETCH_STATS
+
+//#define WITH_PREFETCH_LOG
+
+// enable the "mark alive" pass of GC
+#define GC_ENABLE_MARK_ALIVE 1
+
+// include additional roots in "mark alive" pass
+#define GC_MARK_ALIVE_EXTRA_ROOTS 1
+
+// include Python stacks as set of known roots
+#define GC_MARK_ALIVE_STACKS 1
+
+// include asyncio tasks list in known roots
+//#define GC_MARK_ALIVE_ASYNC_TASKS 1
+
 #include "Python.h"
 #include "pycore_brc.h"           // struct _brc_thread_state
 #include "pycore_ceval.h"         // _Py_set_eval_breaker_bit()
@@ -17,22 +36,6 @@
 #include "pycore_weakref.h"       // _PyWeakref_ClearRef()
 #include "pydtrace.h"
 #include "pycore_uniqueid.h"      // _PyObject_MergeThreadLocalRefcounts()
-
-#undef WITH_GC_TIMING_STATS
-
-//#define WITH_PREFETCH_STATS
-
-// enable the "mark alive" pass of GC
-#define GC_ENABLE_MARK_ALIVE 1
-
-// include additional roots in "mark alive" pass
-#define GC_MARK_ALIVE_EXTRA_ROOTS 1
-
-// include Python stacks as set of known roots
-#define GC_MARK_ALIVE_STACKS 1
-
-// include asyncio tasks list in known roots
-//#define GC_MARK_ALIVE_ASYNC_TASKS 1
 
 
 #ifdef Py_GIL_DISABLED
@@ -652,9 +655,11 @@ struct gc_mark_args {
     struct mark_stack stack;
 };
 
+#ifdef WITH_PREFETCH_STATS
 // debugging stats
 static Py_ssize_t buffer_pushes;
 static Py_ssize_t stack_pushes;
+#endif
 
 static void
 push_mark_stack(struct mark_stack *ms, PyObject *op)
@@ -692,13 +697,18 @@ mark_buffer_push(PyObject *op, struct gc_mark_args *args)
         buffer_pushes++;
         #endif
         prefetch(op);
+        #ifdef WITH_PREFETCH_LOG
+        fprintf(gc_log, "prefetch %p\n", op);
+        #endif
 }
 static int
 mark_alive_enqueue(PyObject *op, struct gc_mark_args *args)
 {
     assert(op != NULL);
-    //fprintf(gc_log, "enqueue %ld %ld %p\n", args->enqueued - args->dequeued,
-    //        args->stack.size, op);
+    #ifdef WITH_PREFETCH_LOG
+    fprintf(gc_log, "enqueue %ld %ld %p\n", args->enqueued - args->dequeued,
+            args->stack.size, op);
+    #endif
     if (args->enqueued - args->dequeued < BUFFER_SIZE) {
         mark_buffer_push(op, args);
         return 0;
@@ -735,11 +745,13 @@ gc_abort_mark_alive(PyInterpreterState *interp,
     gc_visit_heaps(interp, &gc_clear_alive_bits, &state->base);
 }
 
+#ifdef WITH_GC_TIMING_STATS
 unsigned int num_alive;
 unsigned int num_immortal;
 unsigned int num_checked;
 unsigned int num_stack;
 unsigned int num_gc;
+#endif
 
 #ifdef GC_MARK_ALIVE_STACKS
 static int
@@ -750,7 +762,9 @@ gc_visit_stackref_mark_alive(struct gc_mark_args *args, _PyStackRef stackref)
     // being dead already.
     if (PyStackRef_IsDeferred(stackref) && !PyStackRef_IsNull(stackref)) {
         PyObject *op = PyStackRef_AsPyObjectBorrow(stackref);
+        #ifdef WITH_PREFETCH_LOG
         num_stack++;
+        #endif
         if (mark_alive_enqueue(op, args) < 0) {
             return -1;
         }
@@ -904,6 +918,7 @@ update_refs(const mi_heap_t *heap, const mi_heap_area_t *area,
     }
 
     bool is_alive = gc_is_alive(op);
+    #ifdef WITH_GC_TIMING_STATS
     num_gc++;
     if (is_alive) {
         num_alive++;
@@ -911,11 +926,14 @@ update_refs(const mi_heap_t *heap, const mi_heap_area_t *area,
     if (_Py_IsImmortal(op)) {
         num_immortal++;
     }
+    #endif
     if (is_alive) {
         return true;
     }
 
+    #ifdef WITH_GC_TIMING_STATS
     num_checked++;
+    #endif
 
     // Exclude immortal objects from garbage collection
     if (_Py_IsImmortal(op)) {
@@ -1166,7 +1184,9 @@ fill_mark_buffer(struct gc_mark_args *args)
         if (buf_used >= BUFFER_HI) {
             return;
         }
-        //fprintf(gc_log, "fill buffer %ld %ld\n", buf_used, args->stack.size);
+        #ifdef WITH_PREFETCH_LOG
+        fprintf(gc_log, "fill buffer %ld %ld\n", buf_used, args->stack.size);
+        #endif
         struct mark_entry entry = args->stack.stack[--args->stack.size];
         mark_buffer_push(entry.op, args);
     }
@@ -1187,7 +1207,9 @@ propagate_alive_bits(struct gc_mark_args *args)
         PyObject *op = args->buffer[args->dequeued % BUFFER_SIZE];
         args->dequeued++;
 
-        //fprintf(gc_log, "access %p\n", op);
+        #ifdef WITH_PREFETCH_LOG
+        fprintf(gc_log, "access %p\n", op);
+        #endif
 
         //if (!_PyObject_GC_IS_TRACKED(op)) {
         if (!gc_has_bit(op,  _PyGC_BITS_TRACKED)) {
@@ -1862,10 +1884,12 @@ gc_collect_internal(PyInterpreterState *interp, struct collection_state *state, 
         state->gcstate->old[generation].count += 1;
     }
 
+    #ifdef WITH_GC_TIMING_STATS
     num_alive = 0;
     num_gc = 0;
     num_checked = 0;
     num_stack = 0;
+    #endif
 
     state->gcstate->young.count = 0;
     for (int i = 1; i <= generation; ++i) {
