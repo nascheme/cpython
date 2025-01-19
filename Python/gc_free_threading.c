@@ -637,8 +637,8 @@ gc_maybe_untrack(PyObject *op)
 #ifdef GC_ENABLE_MARK_ALIVE
 
 // prefetch ///////////////////////////////////////////////////
-#define BUFFER_SIZE 512
-#define BUFFER_HI 32
+#define BUFFER_SIZE 256
+#define BUFFER_HI 16
 #define BUFFER_LO 8
 
 struct mark_entry {
@@ -1180,11 +1180,14 @@ print_gc_times(GCState *gcstate)
 #ifdef GC_ENABLE_MARK_ALIVE
 
 static void
-fill_mark_buffer(struct gc_mark_args *args)
+prime_mark_buffer(struct gc_mark_args *args)
 {
     while (args->stack.size > 0) {
         Py_ssize_t buf_used = args->enqueued - args->dequeued;
         if (buf_used >= BUFFER_HI) {
+            // When priming, don't fill the buffer since that would
+            // likely cause the stack to be used shortly after when it
+            // fills. We want to use the buffer as much as possible.
             return;
         }
         #ifdef WITH_PREFETCH_TRACE
@@ -1201,7 +1204,9 @@ propagate_alive_bits(struct gc_mark_args *args)
     for (;;) {
         Py_ssize_t buf_used = args->enqueued - args->dequeued;
         if (buf_used <= BUFFER_LO) {
-            fill_mark_buffer(args);
+            // the mark buffer is getting too empty, prime it using
+            // objects from the stack, if any are available
+            prime_mark_buffer(args);
             buf_used = args->enqueued - args->dequeued;
         }
         if (buf_used == 0) {
