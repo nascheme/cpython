@@ -1,10 +1,13 @@
 // Cyclic garbage collector implementation for free-threaded build.
 
+// log gc timing to /tmp/gc_timing.log
 //#define WITH_GC_TIMING_STATS
 
+// log prefetch buffer vs stack usage
 //#define WITH_PREFETCH_STATS
 
-//#define WITH_PREFETCH_LOG
+// verbose log of prefetch actions, results in large log file
+//#define WITH_PREFETCH_TRACE
 
 // enable the "mark alive" pass of GC
 #define GC_ENABLE_MARK_ALIVE 1
@@ -661,7 +664,7 @@ static Py_ssize_t buffer_pushes;
 static Py_ssize_t stack_pushes;
 #endif
 
-static void
+static int
 push_mark_stack(struct mark_stack *ms, PyObject *op)
 {
     if (ms->size >= ms->capacity) {
@@ -673,7 +676,7 @@ push_mark_stack(struct mark_stack *ms, PyObject *op)
         }
         ms->stack = (struct mark_entry *)PyMem_Realloc(ms->stack, ms->capacity * sizeof(struct mark_entry));
         if (ms->stack == NULL) {
-            abort();
+            return -1;
         }
     }
     ms->stack[ms->size].op = op;
@@ -681,6 +684,7 @@ push_mark_stack(struct mark_stack *ms, PyObject *op)
     #ifdef WITH_PREFETCH_STATS
     stack_pushes++;
     #endif
+    return 0;
 }
 // prefetch
 
@@ -697,7 +701,7 @@ mark_buffer_push(PyObject *op, struct gc_mark_args *args)
         buffer_pushes++;
         #endif
         prefetch(op);
-        #ifdef WITH_PREFETCH_LOG
+        #ifdef WITH_PREFETCH_TRACE
         fprintf(gc_log, "prefetch %p\n", op);
         #endif
 }
@@ -705,7 +709,7 @@ static int
 mark_alive_enqueue(PyObject *op, struct gc_mark_args *args)
 {
     assert(op != NULL);
-    #ifdef WITH_PREFETCH_LOG
+    #ifdef WITH_PREFETCH_TRACE
     fprintf(gc_log, "enqueue %ld %ld %p\n", args->enqueued - args->dequeued,
             args->stack.size, op);
     #endif
@@ -714,8 +718,7 @@ mark_alive_enqueue(PyObject *op, struct gc_mark_args *args)
         return 0;
     }
     else {
-        push_mark_stack(&args->stack, op);
-        return 0;
+        return push_mark_stack(&args->stack, op);
     }
 }
 
@@ -762,7 +765,7 @@ gc_visit_stackref_mark_alive(struct gc_mark_args *args, _PyStackRef stackref)
     // being dead already.
     if (PyStackRef_IsDeferred(stackref) && !PyStackRef_IsNull(stackref)) {
         PyObject *op = PyStackRef_AsPyObjectBorrow(stackref);
-        #ifdef WITH_PREFETCH_LOG
+        #ifdef WITH_PREFETCH_TRACE
         num_stack++;
         #endif
         if (mark_alive_enqueue(op, args) < 0) {
@@ -1184,7 +1187,7 @@ fill_mark_buffer(struct gc_mark_args *args)
         if (buf_used >= BUFFER_HI) {
             return;
         }
-        #ifdef WITH_PREFETCH_LOG
+        #ifdef WITH_PREFETCH_TRACE
         fprintf(gc_log, "fill buffer %ld %ld\n", buf_used, args->stack.size);
         #endif
         struct mark_entry entry = args->stack.stack[--args->stack.size];
@@ -1207,7 +1210,7 @@ propagate_alive_bits(struct gc_mark_args *args)
         PyObject *op = args->buffer[args->dequeued % BUFFER_SIZE];
         args->dequeued++;
 
-        #ifdef WITH_PREFETCH_LOG
+        #ifdef WITH_PREFETCH_TRACE
         fprintf(gc_log, "access %p\n", op);
         #endif
 
@@ -1235,7 +1238,9 @@ propagate_alive_bits(struct gc_mark_args *args)
                 continue;
             }
             for (Py_ssize_t i = 0; i < Py_SIZE(op); i++) {
-                mark_alive_enqueue(list->ob_item[i], args);
+                if (mark_alive_enqueue(list->ob_item[i], args) < 0) {
+                    return -1;
+                }
             }
         }
         else
