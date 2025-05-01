@@ -136,6 +136,55 @@ types_start_world(void)
     assert(!types_world_is_stopped());
 }
 
+// This is used to temporarily prevent the TYPE_LOCK from being suspended
+// when held by the topmost critical section.  It's used when updating
+// the type dict and then updating the type slots (for type_setattro and
+// __bases__ re-assignment).  We want to prevent other threads from writing
+// to the dict between those two steps.  If we don't do this, blocking on the
+// stop-the-world mutex would release the TYPE_LOCK mutex and potentially
+// allow that unwanted update to happen.
+static void
+type_lock_prevent_release(void)
+{
+    PyThreadState *tstate = _PyThreadState_GET();
+    uintptr_t *tagptr = &tstate->critical_section;
+    PyCriticalSection *c = (PyCriticalSection *)(*tagptr & ~_Py_CRITICAL_SECTION_MASK);
+    if (c->_cs_mutex == TYPE_LOCK) {
+        c->_cs_mutex = NULL;
+    }
+    else {
+        assert(*tagptr & _Py_CRITICAL_SECTION_TWO_MUTEXES);
+        PyCriticalSection2 *c2 = (PyCriticalSection2 *)c;
+        if (c2->_cs_mutex2 == TYPE_LOCK) {
+                c2->_cs_mutex2 = NULL;
+        }
+        else {
+            assert(0); // TYPE_LOCK must be one of the mutexes
+        }
+    }
+}
+
+static void
+type_lock_allow_release(void)
+{
+    PyThreadState *tstate = _PyThreadState_GET();
+    uintptr_t *tagptr = &tstate->critical_section;
+    PyCriticalSection *c = (PyCriticalSection *)(*tagptr & ~_Py_CRITICAL_SECTION_MASK);
+    if (c->_cs_mutex == NULL) {
+        c->_cs_mutex = TYPE_LOCK;
+    }
+    else {
+        assert(*tagptr & _Py_CRITICAL_SECTION_TWO_MUTEXES);
+        PyCriticalSection2 *c2 = (PyCriticalSection2 *)c;
+        if (c2->_cs_mutex2 == NULL) {
+                c2->_cs_mutex2 = TYPE_LOCK;
+        }
+        else {
+            assert(0);
+        }
+    }
+}
+
 #else
 
 #define BEGIN_TYPE_LOCK()
@@ -6298,9 +6347,11 @@ update_slot_after_setattr(PyTypeObject *type, PyObject *name)
         return -1;
     }
     if (queued_updates.head->n > 0) {
+        type_lock_prevent_release();
         types_stop_world();
         apply_slot_updates(&queued_updates);
         types_start_world();
+        type_lock_allow_release();
         ASSERT_TYPE_LOCK_HELD();
         // should never allocate another chunk
         assert(chunk.prev == NULL);
@@ -11616,9 +11667,11 @@ update_all_slots(PyTypeObject* type)
         }
     }
     if (queued_updates.head != NULL) {
+        type_lock_prevent_release();
         types_stop_world();
         apply_slot_updates(&queued_updates);
         types_start_world();
+        type_lock_allow_release();
         ASSERT_TYPE_LOCK_HELD();
         slot_update_free_chunks(&queued_updates);
     }
