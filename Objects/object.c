@@ -1805,6 +1805,18 @@ _PyObject_GenericGetAttrWithDict(PyObject *obj, PyObject *name,
 
     Py_INCREF(name);
 
+#ifdef Py_GIL_DISABLED
+    if (!PyUnicode_CHECK_INTERNED(name)) {
+        // Type lookup cache misses are relatively more expensive for the
+        // free-threaded build since the TYPE_LOCK mutex must be acquired.
+        // This case could happen for getattr() on an instance using a name
+        // that has been constructed.  By interning the name, we allow the
+        // lookup to be cached and can avoid acquiring the mutex.
+        PyInterpreterState *interp = _PyInterpreterState_GET();
+        _PyUnicode_InternMortal(interp, &name);
+    }
+#endif
+
     PyThreadState *tstate = _PyThreadState_GET();
     _PyCStackRef cref;
     _PyThreadState_PushCStackRef(tstate, &cref);
