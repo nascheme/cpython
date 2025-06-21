@@ -9,9 +9,10 @@ terms of the MIT license. A copy of the license can be found in the file
 
 #include "mimalloc.h"
 #include "mimalloc/internal.h"
-#include "mimalloc/atomic.h"
 #include "mimalloc/prim.h"
-#include <unistd.h>               // sbrk()
+
+#include <stdio.h>   // fputs
+#include <stdlib.h>  // getenv
 
 //---------------------------------------------
 // Initialize
@@ -21,7 +22,7 @@ void _mi_prim_mem_init( mi_os_mem_config_t* config ) {
   config->page_size = 64*MI_KiB; // WebAssembly has a fixed page size: 64KiB
   config->alloc_granularity = 16;
   config->has_overcommit = false;
-  config->must_free_whole = true;
+  config->has_partial_free = false;
   config->has_virtual_reserve = false;
 }
 
@@ -41,6 +42,8 @@ int _mi_prim_free(void* addr, size_t size ) {
 //---------------------------------------------
 
 #if defined(MI_USE_SBRK)
+  #include <unistd.h>  // for sbrk
+
   static void* mi_memory_grow( size_t size ) {
     void* p = sbrk(size);
     if (p == (void*)(-1)) return NULL;
@@ -116,8 +119,8 @@ static void* mi_prim_mem_grow(size_t size, size_t try_alignment) {
 }
 
 // Note: the `try_alignment` is just a hint and the returned pointer is not guaranteed to be aligned.
-int _mi_prim_alloc(size_t size, size_t try_alignment, bool commit, bool allow_large, bool* is_large, bool* is_zero, void** addr) {
-  MI_UNUSED(allow_large); MI_UNUSED(commit);
+int _mi_prim_alloc(void* hint_addr, size_t size, size_t try_alignment, bool commit, bool allow_large, bool* is_large, bool* is_zero, void** addr) {
+  MI_UNUSED(allow_large); MI_UNUSED(commit); MI_UNUSED(hint_addr);
   *is_large = false;
   *is_zero = false;
   *addr = mi_prim_mem_grow(size, try_alignment);
@@ -142,6 +145,11 @@ int _mi_prim_decommit(void* addr, size_t size, bool* needs_recommit) {
 }
 
 int _mi_prim_reset(void* addr, size_t size) {
+  MI_UNUSED(addr); MI_UNUSED(size);
+  return 0;
+}
+
+int _mi_prim_reuse(void* addr, size_t size) {
   MI_UNUSED(addr); MI_UNUSED(size);
   return 0;
 }
@@ -273,4 +281,8 @@ void _mi_prim_thread_done_auto_done(void) {
 
 void _mi_prim_thread_associate_default_heap(mi_heap_t* heap) {
   MI_UNUSED(heap);
+}
+
+bool _mi_prim_thread_is_in_threadpool(void) {
+  return false;
 }
