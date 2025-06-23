@@ -291,7 +291,8 @@ static void* mi_os_prim_alloc_aligned(size_t size, size_t alignment, bool commit
     // if not aligned, free it, overallocate, and unmap around it
     #if !MI_TRACK_ASAN
     if (try_direct_alloc) {
-      _mi_warning_message("unable to allocate aligned OS memory directly, fall back to over-allocation (size: 0x%zx bytes, address: %p, alignment: 0x%zx, commit: %d)\n", size, p, alignment, commit);
+      // NOTE(sgross): this warning causes issues in Python tests
+      // _mi_warning_message("unable to allocate aligned OS memory directly, fall back to over-allocation (size: 0x%zx bytes, address: %p, alignment: 0x%zx, commit: %d)\n", size, p, alignment, commit);
     }
     #endif
     if (p != NULL) { mi_os_prim_free(p, size, (commit ? size : 0), NULL); }
