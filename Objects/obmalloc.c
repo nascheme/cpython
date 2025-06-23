@@ -14,11 +14,11 @@
 #include <stdbool.h>
 #ifdef WITH_MIMALLOC
 // Forward declarations of functions used in our mimalloc modifications
-static void _PyMem_mi_page_clear_qsbr(mi_page_t *page);
-static bool _PyMem_mi_page_is_safe_to_free(mi_page_t *page);
-static bool _PyMem_mi_page_maybe_free(mi_page_t *page, mi_page_queue_t *pq, bool force);
-static void _PyMem_mi_page_reclaimed(mi_page_t *page);
-static void _PyMem_mi_heap_collect_qsbr(mi_heap_t *heap);
+//static void _PyMem_mi_page_clear_qsbr(mi_page_t *page);
+//static bool _PyMem_mi_page_is_safe_to_free(mi_page_t *page);
+//static bool _PyMem_mi_page_maybe_free(mi_page_t *page, mi_page_queue_t *pq, bool force);
+//static void _PyMem_mi_page_reclaimed(mi_page_t *page);
+//static void _PyMem_mi_heap_collect_qsbr(mi_heap_t *heap);
 #  include "pycore_mimalloc.h"
 #  include "mimalloc/static.c"
 #  include "mimalloc/internal.h"  // for stats
@@ -93,6 +93,7 @@ _PyMem_RawFree(void *Py_UNUSED(ctx), void *ptr)
 
 #ifdef WITH_MIMALLOC
 
+#if 0
 static void
 _PyMem_mi_page_clear_qsbr(mi_page_t *page)
 {
@@ -199,6 +200,7 @@ _PyMem_mi_heap_collect_qsbr(mi_heap_t *heap)
     }
 #endif
 }
+#endif
 
 void *
 _PyMem_MiMalloc(void *ctx, size_t size)
@@ -3353,11 +3355,11 @@ static void
 py_mimalloc_print_stats(FILE *out)
 {
     fprintf(out, "Small block threshold = %zu, in %u size classes.\n",
-        (size_t)MI_SMALL_OBJ_SIZE_MAX, MI_BIN_HUGE);
+        (size_t)MI_SMALL_MAX_OBJ_SIZE, MI_BIN_HUGE);
     fprintf(out, "Medium block threshold = %zu\n",
-            (size_t)MI_MEDIUM_OBJ_SIZE_MAX);
+            (size_t)MI_MEDIUM_MAX_OBJ_SIZE);
     fprintf(out, "Large object max size = %zu\n",
-            (size_t)MI_LARGE_OBJ_SIZE_MAX);
+            (size_t)MI_LARGE_MAX_OBJ_SIZE);
 
     mi_heap_t *heap = mi_heap_get_default();
     struct _alloc_stats stats;
