@@ -1486,7 +1486,7 @@ completed_scavenge(GCState *gcstate)
         gc_list_set_space(&gcstate->old[not_visited].head, not_visited);
     }
     assert(gc_list_is_empty(&gcstate->old[visited].head));
-    gcstate->work_to_do = 0;
+    gcstate->young_pending = 0;
     gcstate->phase = GC_PHASE_MARK;
 }
 
@@ -1618,7 +1618,6 @@ mark_at_start(PyThreadState *tstate)
     PyGC_Head *visited = &gcstate->old[gcstate->visited_space].head;
     Py_ssize_t objects_marked = mark_global_roots(tstate->interp, visited, gcstate->visited_space);
     objects_marked += mark_stacks(tstate->interp, visited, gcstate->visited_space, true);
-    gcstate->work_to_do -= objects_marked;
     gcstate->phase = GC_PHASE_COLLECT;
     validate_spaces(gcstate);
     return objects_marked;
@@ -1627,30 +1626,27 @@ mark_at_start(PyThreadState *tstate)
 static intptr_t
 assess_work_to_do(GCState *gcstate)
 {
-    /* The amount of work we want to do depends on three things.
-     * 1. The number of new objects created
-     * 2. The growth in heap size since the last collection
-     * 3. The heap size (up to the number of new objects, to avoid quadratic effects)
-     *
-     * For a steady state heap, the amount of work to do is three times the number
-     * of new objects added to the heap. This ensures that we stay ahead in the
-     * worst case of all new objects being garbage.
-     *
-     * This could be improved by tracking survival rates, but it is still a
-     * large improvement on the non-marking approach.
-     */
-    intptr_t scale_factor = gcstate->old[0].threshold;
-    if (scale_factor < 2) {
-        scale_factor = 2;
-    }
     intptr_t new_objects = gcstate->young.count;
-    intptr_t max_heap_fraction = new_objects*2;
-    intptr_t heap_fraction = gcstate->heap_size / SCAN_RATE_DIVISOR / scale_factor;
-    if (heap_fraction > max_heap_fraction) {
-        heap_fraction = max_heap_fraction;
-    }
+    intptr_t pending_count = 2000;
+    gcstate->young_pending += new_objects;
     gcstate->young.count = 0;
-    return new_objects + heap_fraction;
+    return new_objects + pending_count;
+}
+
+static bool
+ready_to_mark(GCState *gcstate)
+{
+    PyGC_Head *pending = &gcstate->old[gcstate->visited_space^1].head;
+    if (!gc_list_is_empty(pending)) {
+        return false;
+    }
+    if (gcstate->young_pending < gcstate->young.threshold) {
+        return false;
+    }
+    if (gcstate->young_pending < gcstate->heap_size / 4) {
+        return false;
+    }
+    return true;
 }
 
 static void
@@ -1658,15 +1654,10 @@ gc_collect_increment(PyThreadState *tstate, struct gc_collection_stats *stats)
 {
     GC_STAT_ADD(1, collections, 1);
     GCState *gcstate = &tstate->interp->gc;
-    gcstate->work_to_do += assess_work_to_do(gcstate);
-    if (gcstate->work_to_do < 0) {
-        return;
-    }
     untrack_tuples(&gcstate->young.head);
     if (gcstate->phase == GC_PHASE_MARK) {
         Py_ssize_t objects_marked = mark_at_start(tstate);
         GC_STAT_ADD(1, objects_transitively_reachable, objects_marked);
-        gcstate->work_to_do -= objects_marked;
         stats->candidates += objects_marked;
         validate_spaces(gcstate);
         return;
@@ -1675,18 +1666,14 @@ gc_collect_increment(PyThreadState *tstate, struct gc_collection_stats *stats)
     PyGC_Head *visited = &gcstate->old[gcstate->visited_space].head;
     PyGC_Head increment;
     gc_list_init(&increment);
-    int scale_factor = gcstate->old[0].threshold;
-    if (scale_factor < 2) {
-        scale_factor = 2;
-    }
     intptr_t objects_marked = mark_stacks(tstate->interp, visited, gcstate->visited_space, false);
     GC_STAT_ADD(1, objects_transitively_reachable, objects_marked);
-    gcstate->work_to_do -= objects_marked;
+    int work_to_do = assess_work_to_do(gcstate);
     gc_list_set_space(&gcstate->young.head, gcstate->visited_space);
     gc_list_merge(&gcstate->young.head, &increment);
     gc_list_validate_space(&increment, gcstate->visited_space);
     Py_ssize_t increment_size = gc_list_size(&increment);
-    while (increment_size < gcstate->work_to_do) {
+    while (increment_size < work_to_do) {
         if (gc_list_is_empty(not_visited)) {
             break;
         }
@@ -1705,9 +1692,8 @@ gc_collect_increment(PyThreadState *tstate, struct gc_collection_stats *stats)
     gc_collect_region(tstate, &increment, &survivors, stats);
     gc_list_merge(&survivors, visited);
     assert(gc_list_is_empty(&increment));
-    gcstate->work_to_do -= increment_size;
 
-    if (gc_list_is_empty(not_visited)) {
+    if (ready_to_mark(gcstate)) {
         completed_scavenge(gcstate);
     }
     validate_spaces(gcstate);

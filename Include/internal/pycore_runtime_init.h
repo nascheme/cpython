@@ -139,7 +139,7 @@ extern PyTypeObject _PyExc_MemoryError;
                 { .threshold = 10, }, \
                 { .threshold = 0, }, \
             }, \
-            .work_to_do = -5000, \
+            .young_pending = 0, \
             .phase = GC_PHASE_MARK, \
         }, \
         .qsbr = { \
