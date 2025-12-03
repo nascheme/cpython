@@ -228,7 +228,10 @@ struct _gc_runtime_state {
     PyObject *callbacks;
 
     Py_ssize_t heap_size;
-    Py_ssize_t work_to_do;
+    /* Number of objects marked alive (reachable from root) */
+    Py_ssize_t marked_alive;
+    /* Total number of young objects since the last complete collection */
+    Py_ssize_t young_pending;
     /* Which of the old spaces is the visited space */
     int visited_space;
     int phase;
