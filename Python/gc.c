@@ -1628,7 +1628,6 @@ assess_work_to_do(GCState *gcstate)
 {
     intptr_t new_objects = gcstate->young.count;
     intptr_t pending_count = 2000;
-    gcstate->young_pending += new_objects;
     gcstate->young.count = 0;
     return new_objects + pending_count;
 }
@@ -1690,6 +1689,7 @@ gc_collect_increment(PyThreadState *tstate, struct gc_collection_stats *stats)
     PyGC_Head survivors;
     gc_list_init(&survivors);
     gc_collect_region(tstate, &increment, &survivors, stats);
+    gcstate->young_pending += stats->candidates - stats->collected;
     gc_list_merge(&survivors, visited);
     assert(gc_list_is_empty(&increment));
 
