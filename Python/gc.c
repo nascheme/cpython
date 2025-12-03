@@ -1627,7 +1627,13 @@ static intptr_t
 assess_work_to_do(GCState *gcstate)
 {
     intptr_t new_objects = gcstate->young.count;
-    intptr_t pending_count = 2000;
+    // This needs to be large enough such that, in general, the pending set is
+    // empty when the other conditions in ready_to_mark() are true.  It is okay
+    // to be conservative here as long as GC pause times are not too long.
+    intptr_t pending_count = gcstate->young.threshold;
+    if (pending_count < new_objects) {
+        pending_count = new_objects;
+    }
     gcstate->young.count = 0;
     return new_objects + pending_count;
 }
