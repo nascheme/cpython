@@ -1627,13 +1627,23 @@ static intptr_t
 assess_work_to_do(GCState *gcstate)
 {
     intptr_t new_objects = gcstate->young.count;
-    // This needs to be large enough such that, in general, the pending set is
-    // empty when the other conditions in ready_to_mark() are true.  It is okay
-    // to be conservative here as long as GC pause times are not too long.
+    // This is the minimum number of objects we will take from the pending
+    // (not_visited) set when building the increment set.  It needs to be
+    // large enough such that, in general, the pending set is empty when
+    // the other conditions in ready_to_mark() are true.  It is okay to be
+    // conservative here (too large) as long as we avoid long pauses in
+    // the GC increments.
     intptr_t pending_count = gcstate->young.threshold;
     if (pending_count < new_objects) {
         pending_count = new_objects;
     }
+    // For the non-incremental GC (in Python <= 3.13) we counted the young
+    // objects that survive a gen0 collection.  That's not easy to do here
+    // since the increment includes not only the young objects but also some
+    // from the old generation.  Doing the simpler thing and just counting
+    // all young objects means we might finish a full collector more quickly
+    // compared to if we only counted survivors.
+    gcstate->young_pending += new_objects;
     gcstate->young.count = 0;
     return new_objects + pending_count;
 }
@@ -1695,7 +1705,6 @@ gc_collect_increment(PyThreadState *tstate, struct gc_collection_stats *stats)
     PyGC_Head survivors;
     gc_list_init(&survivors);
     gc_collect_region(tstate, &increment, &survivors, stats);
-    gcstate->young_pending += stats->candidates - stats->collected;
     gc_list_merge(&survivors, visited);
     assert(gc_list_is_empty(&increment));
 
