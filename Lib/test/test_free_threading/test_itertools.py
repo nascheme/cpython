@@ -1,11 +1,38 @@
 import unittest
 from itertools import (
+    combinations_with_replacement,
+    permutations,
     tee,
 )
 from test.support import threading_helper
 
 
 threading_helper.requires_working_threading(module=True)
+
+
+def work_iterator(it):
+    while True:
+        try:
+            next(it)
+        except StopIteration:
+            break
+
+
+class ItertoolsThreading(unittest.TestCase):
+
+    @threading_helper.reap_threads
+    def test_combinations_with_replacement(self):
+        number_of_iterations = 6
+        for _ in range(number_of_iterations):
+            it = combinations_with_replacement(tuple(range(2)), 2)
+            threading_helper.run_concurrently(work_iterator, nthreads=6, args=[it])
+
+    @threading_helper.reap_threads
+    def test_permutations(self):
+        number_of_iterations = 6
+        for _ in range(number_of_iterations):
+            it = permutations(tuple(range(2)), 2)
+            threading_helper.run_concurrently(work_iterator, nthreads=6, args=[it])
 
 
 class TestTeeConcurrent(unittest.TestCase):
