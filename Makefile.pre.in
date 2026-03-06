@@ -2566,6 +2566,14 @@ LIBSUBDIRS=	asyncio \
 		logging \
 		multiprocessing multiprocessing/dummy \
 		pathlib \
+		profiling profiling/sampling profiling/tracing \
+		profiling/sampling/_assets \
+		profiling/sampling/_heatmap_assets \
+		profiling/sampling/_flamegraph_assets \
+		profiling/sampling/_shared_assets \
+		profiling/sampling/live_collector \
+		profiling/sampling/_vendor/d3/7.8.5 \
+		profiling/sampling/_vendor/d3-flame-graph/4.1.3 \
 		pydoc_data \
 		re \
 		site-packages \
@@ -2678,6 +2686,8 @@ TESTSUBDIRS=	idlelib/idle_test \
 		test/test_pathlib \
 		test/test_pathlib/support \
 		test/test_peg_generator \
+		test/test_profiling \
+		test/test_profiling/test_sampling_profiler \
 		test/test_pydoc \
 		test/test_pyrepl \
 		test/test_string \
@@ -3406,6 +3416,7 @@ MODULE__TESTLIMITEDCAPI_DEPS=$(srcdir)/Modules/_testlimitedcapi/testcapi_long.h 
 MODULE__TESTINTERNALCAPI_DEPS=$(srcdir)/Modules/_testinternalcapi/parts.h
 MODULE__SQLITE3_DEPS=$(srcdir)/Modules/_sqlite/connection.h $(srcdir)/Modules/_sqlite/cursor.h $(srcdir)/Modules/_sqlite/microprotocols.h $(srcdir)/Modules/_sqlite/module.h $(srcdir)/Modules/_sqlite/prepare_protocol.h $(srcdir)/Modules/_sqlite/row.h $(srcdir)/Modules/_sqlite/util.h
 MODULE__ZSTD_DEPS=$(srcdir)/Modules/_zstd/_zstdmodule.h $(srcdir)/Modules/_zstd/buffer.h $(srcdir)/Modules/_zstd/zstddict.h
+MODULE__REMOTE_DEBUGGING_DEPS=$(srcdir)/Modules/_remote_debugging/_remote_debugging.h $(srcdir)/Modules/_remote_debugging/binary_io.h
 
 CODECS_COMMON_HEADERS=$(srcdir)/Modules/cjkcodecs/multibytecodec.h $(srcdir)/Modules/cjkcodecs/cjkcodecs.h
 MODULE__CODECS_CN_DEPS=$(srcdir)/Modules/cjkcodecs/mappings_cn.h $(CODECS_COMMON_HEADERS)

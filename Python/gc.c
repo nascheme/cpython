@@ -1333,6 +1333,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
         // Don't start a garbage collection if one is already in progress.
         return 0;
     }
+    gcstate->frame = tstate->current_frame;
 
     if (generation == GENERATION_AUTO) {
         // Select the oldest generation that needs collecting. We will collect
@@ -1528,6 +1529,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     }
 
     assert(!_PyErr_Occurred(tstate));
+    gcstate->frame = NULL;
     _Py_atomic_store_int(&gcstate->collecting, 0);
     return n + m;
 }

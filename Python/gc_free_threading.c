@@ -2330,6 +2330,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
         _Py_atomic_store_int(&gcstate->collecting, 0);
         return 0;
     }
+    gcstate->frame = tstate->current_frame;
 
     assert(generation >= 0 && generation < NUM_GENERATIONS);
 
@@ -2414,6 +2415,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     }
 
     assert(!_PyErr_Occurred(tstate));
+    gcstate->frame = NULL;
     _Py_atomic_store_int(&gcstate->collecting, 0);
     return n + m;
 }

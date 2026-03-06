@@ -10,6 +10,7 @@ extern "C" {
 
 #include "pycore_brc.h"             // struct _brc_thread_state
 #include "pycore_freelist_state.h"  // struct _Py_freelists
+#include "pycore_interpframe_structs.h"  // _PyInterpreterFrame
 #include "pycore_mimalloc.h"        // struct _mimalloc_thread_state
 #include "pycore_qsbr.h"            // struct qsbr
 
@@ -79,6 +80,10 @@ typedef struct _PyThreadStateImpl {
     // PyUnstable_ThreadState_ResetStackProtection() values
     uintptr_t c_stack_init_base;
     uintptr_t c_stack_init_top;
+
+    // Embedded base frame - sentinel at the bottom of the frame stack.
+    // Used by profiling/sampling to detect incomplete stack traces.
+    _PyInterpreterFrame base_frame;
 
 #ifdef Py_GIL_DISABLED
     // gh-144438: Add padding to ensure that the fields above don't share a

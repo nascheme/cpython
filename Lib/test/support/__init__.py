@@ -39,6 +39,7 @@ __all__ = [
     "requires_IEEE_754", "requires_zlib",
     "has_fork_support", "requires_fork",
     "has_subprocess_support", "requires_subprocess",
+    "has_remote_subprocess_debugging", "requires_remote_subprocess_debugging",
     "has_socket_support", "requires_working_socket",
     "anticipate_failure", "load_package_tests", "detect_api_mismatch",
     "check__all__", "skip_if_buggy_ucrt_strfptime",
@@ -636,6 +637,74 @@ has_subprocess_support = not (
 def requires_subprocess():
     """Used for subprocess, os.spawn calls, fd inheritance"""
     return unittest.skipUnless(has_subprocess_support, "requires subprocess support")
+
+
+def has_remote_subprocess_debugging():
+    """Check if we have permissions to debug subprocesses remotely.
+
+    Returns True if we have permissions, False if we don't.
+    Result is cached.
+    """
+    if sys.platform not in ("linux", "darwin", "win32"):
+        return False
+
+    try:
+        import _remote_debugging
+    except ImportError:
+        return False
+
+    if sys.platform == "linux":
+        if not getattr(_remote_debugging, "PROCESS_VM_READV_SUPPORTED", False):
+            return False
+
+    if not _remote_debugging.is_python_process(os.getpid()):
+        return False
+
+    import socket
+    import subprocess
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+
+    child_code = f"""
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(("127.0.0.1", {port}))
+s.recv(1)  # Wait for parent to signal done
+"""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", child_code],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        server.settimeout(5.0)
+        conn, _ = server.accept()
+        result = _remote_debugging.is_python_process(proc.pid)
+        if proc.poll() is not None:
+            return False
+        conn.close()
+        return result
+    except (socket.timeout, OSError):
+        return False
+    finally:
+        server.close()
+        proc.kill()
+        proc.wait()
+
+
+def requires_remote_subprocess_debugging():
+    """Skip tests that require remote subprocess debugging permissions."""
+    if not has_subprocess_support:
+        return unittest.skip("requires subprocess support")
+    return unittest.skipUnless(
+        has_remote_subprocess_debugging(),
+        "requires remote subprocess debugging permissions"
+    )
+
 
 # Emscripten's socket emulation and WASI sockets have limitations.
 has_socket_support = not (

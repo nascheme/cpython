@@ -552,11 +552,13 @@ extern "C" {
     INIT_STR(defaults, ".defaults"), \
     INIT_STR(dot_locals, ".<locals>"), \
     INIT_STR(empty, ""), \
+    INIT_STR(gc, "<GC>"), \
     INIT_STR(format, ".format"), \
     INIT_STR(generic_base, ".generic_base"), \
     INIT_STR(json_decoder, "json.decoder"), \
     INIT_STR(kwdefaults, ".kwdefaults"), \
     INIT_STR(list_err, "list index out of range"), \
+    INIT_STR(native, "<native>"), \
     INIT_STR(str_replace_inf, "1e309"), \
     INIT_STR(type_params, ".type_params"), \
     INIT_STR(utf_8, "utf-8"), \
