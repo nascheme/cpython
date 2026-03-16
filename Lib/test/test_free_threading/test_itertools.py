@@ -1,11 +1,30 @@
 import unittest
 from itertools import (
+    accumulate,
     tee,
 )
 from test.support import threading_helper
 
 
 threading_helper.requires_working_threading(module=True)
+
+
+def work_iterator(it):
+    while True:
+        try:
+            next(it)
+        except StopIteration:
+            break
+
+
+class ItertoolsThreading(unittest.TestCase):
+
+    @threading_helper.reap_threads
+    def test_accumulate(self):
+        number_of_iterations = 10
+        for _ in range(number_of_iterations):
+            it = accumulate(tuple(range(40)))
+            threading_helper.run_concurrently(work_iterator, nthreads=10, args=[it])
 
 
 class TestTeeConcurrent(unittest.TestCase):
