@@ -3895,7 +3895,7 @@ zip_longest_traverse(PyObject *op, visitproc visit, void *arg)
 }
 
 static PyObject *
-zip_longest_next(PyObject *op)
+zip_longest_next_lock_held(PyObject *op)
 {
     ziplongestobject *lz = ziplongestobject_CAST(op);
     Py_ssize_t i;
@@ -3963,6 +3963,16 @@ zip_longest_next(PyObject *op)
             PyTuple_SET_ITEM(result, i, item);
         }
     }
+    return result;
+}
+
+static PyObject *
+zip_longest_next(PyObject *op)
+{
+    PyObject *result;
+    Py_BEGIN_CRITICAL_SECTION(op);
+    result = zip_longest_next_lock_held(op);
+    Py_END_CRITICAL_SECTION()
     return result;
 }
 
