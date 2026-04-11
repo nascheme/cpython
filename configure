@@ -1096,6 +1096,7 @@ enable_gil
 with_pydebug
 with_trace_refs
 enable_pystats
+enable_incremental_gc
 with_assertions
 enable_optimizations
 with_lto
@@ -1830,6 +1831,7 @@ Optional Features:
   --disable-gil           enable support for running without the GIL (default
                           is no)
   --enable-pystats        enable internal statistics gathering (default is no)
+  --enable-incremental-gc enable incremental cyclic GC (default is no)
   --enable-optimizations  enable expensive, stable optimizations (PGO, etc.)
                           (default is no)
   --enable-bolt           enable usage of the llvm-bolt post-link optimizer
@@ -8360,6 +8362,31 @@ then :
 
 
 printf "%s\n" "#define Py_STATS 1" >>confdefs.h
+
+
+fi
+
+# Check for --enable-incremental-gc
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for --enable-incremental-gc" >&5
+printf %s "checking for --enable-incremental-gc... " >&6; }
+# Check whether --enable-incremental-gc was given.
+if test ${enable_incremental_gc+y}
+then :
+  enableval=$enable_incremental_gc;
+else case e in #(
+  e) enable_incremental_gc=no
+ ;;
+esac
+fi
+
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $enable_incremental_gc" >&5
+printf "%s\n" "$enable_incremental_gc" >&6; }
+
+if test "x$enable_incremental_gc" = xyes
+then :
+
+
+printf "%s\n" "#define Py_GC_INCREMENTAL 1" >>confdefs.h
 
 
 fi

@@ -1730,6 +1730,9 @@
 /* Defined if Python is built as a shared library. */
 #undef Py_ENABLE_SHARED
 
+/* Define if you want to enable incremental cyclic GC. */
+#undef Py_GC_INCREMENTAL
+
 /* Define if you want to disable the GIL */
 #undef Py_GIL_DISABLED
 

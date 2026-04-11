@@ -215,8 +215,13 @@ struct _gc_runtime_state {
     int enabled;
     int debug;
     /* linked lists of container objects */
+#ifndef Py_GC_INCREMENTAL
+    struct gc_generation generations[NUM_GENERATIONS];
+    PyGC_Head *generation0;
+#else
     struct gc_generation young;
     struct gc_generation old[2];
+#endif
     /* a permanent generation which won't be collected */
     struct gc_generation permanent_generation;
     struct gc_generation_stats generation_stats[NUM_GENERATIONS];
@@ -227,11 +232,16 @@ struct _gc_runtime_state {
     /* a list of callbacks to be invoked when collection is performed */
     PyObject *callbacks;
 
+#ifndef Py_GC_INCREMENTAL
+    Py_ssize_t long_lived_total;
+    Py_ssize_t long_lived_pending;
+#else
     Py_ssize_t heap_size;
     Py_ssize_t work_to_do;
     /* Which of the old spaces is the visited space */
     int visited_space;
     int phase;
+#endif
 
 #ifdef Py_GIL_DISABLED
     /* This is the number of objects that survived the last full
@@ -260,6 +270,24 @@ struct _gc_runtime_state {
     PyMutex mutex;
 #endif
 };
+
+#ifndef Py_GC_INCREMENTAL
+#define GC_GENERATION_INIT \
+    .generations = { \
+        { .threshold = 700, }, \
+        { .threshold = 10, }, \
+        { .threshold = 10, }, \
+    },
+#else
+#define GC_GENERATION_INIT \
+    .young = { .threshold = 2000, }, \
+    .old = { \
+        { .threshold = 10, }, \
+        { .threshold = 0, }, \
+    }, \
+    .work_to_do = -5000, \
+    .phase = GC_PHASE_MARK,
+#endif
 
 #include "pycore_gil.h"           // struct _gil_runtime_state
 

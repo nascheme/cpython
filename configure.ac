@@ -1790,6 +1790,21 @@ AS_VAR_IF([enable_pystats], [yes], [
   AC_DEFINE([Py_STATS], [1], [Define if you want to enable internal statistics gathering.])
 ])
 
+# Check for --enable-incremental-gc
+AC_MSG_CHECKING([for --enable-incremental-gc])
+AC_ARG_ENABLE([incremental-gc],
+  [AS_HELP_STRING(
+    [--enable-incremental-gc],
+    [enable incremental cyclic GC (default is no)]
+  )],
+  [], [enable_incremental_gc=no]
+)
+AC_MSG_RESULT([$enable_incremental_gc])
+
+AS_VAR_IF([enable_incremental_gc], [yes], [
+  AC_DEFINE([Py_GC_INCREMENTAL], [1], [Define if you want to enable incremental cyclic GC.])
+])
+
 # Check for --with-assertions.
 # This allows enabling assertions without Py_DEBUG.
 assertions='false'

@@ -131,7 +131,9 @@ static inline void _PyObject_GC_SET_SHARED(PyObject *op) {
  * When object are moved from the pending space, old[gcstate->visited_space^1]
  * into the increment, the old space bit is flipped.
 */
+#ifdef Py_GC_INCREMENTAL
 #define _PyGC_NEXT_MASK_OLD_SPACE_1    1
+#endif
 
 #define _PyGC_PREV_SHIFT           2
 #define _PyGC_PREV_MASK            (((uintptr_t) -1) << _PyGC_PREV_SHIFT)
@@ -159,13 +161,21 @@ typedef enum {
 // Lowest bit of _gc_next is used for flags only in GC.
 // But it is always 0 for normal code.
 static inline PyGC_Head* _PyGCHead_NEXT(PyGC_Head *gc) {
+#ifndef Py_GC_INCREMENTAL
+    uintptr_t next = gc->_gc_next;
+#else
     uintptr_t next = gc->_gc_next & _PyGC_PREV_MASK;
+#endif
     return (PyGC_Head*)next;
 }
 static inline void _PyGCHead_SET_NEXT(PyGC_Head *gc, PyGC_Head *next) {
+#ifndef Py_GC_INCREMENTAL
+    gc->_gc_next = (uintptr_t)next;
+#else
     uintptr_t unext = (uintptr_t)next;
     assert((unext & ~_PyGC_PREV_MASK) == 0);
     gc->_gc_next = (gc->_gc_next & ~_PyGC_PREV_MASK) | unext;
+#endif
 }
 
 // Lowest two bits of _gc_prev is used for _PyGC_PREV_MASK_* flags.
@@ -207,7 +217,7 @@ static inline void _PyGC_CLEAR_FINALIZED(PyObject *op) {
 
 extern void _Py_ScheduleGC(PyThreadState *tstate);
 
-#ifndef Py_GIL_DISABLED
+#if !defined(Py_GIL_DISABLED) && defined(Py_GC_INCREMENTAL)
 extern void _Py_TriggerGC(struct _gc_runtime_state *gcstate);
 #endif
 
@@ -237,6 +247,19 @@ static inline void _PyObject_GC_TRACK(
                           filename, lineno, __func__);
 #ifdef Py_GIL_DISABLED
     _PyObject_SET_GC_BITS(op, _PyGC_BITS_TRACKED);
+#elif !defined(Py_GC_INCREMENTAL)
+    PyGC_Head *gc = _Py_AS_GC(op);
+    _PyObject_ASSERT_FROM(op,
+                          (gc->_gc_prev & _PyGC_PREV_MASK_COLLECTING) == 0,
+                          "object is in generation which is garbage collected",
+                          filename, lineno, __func__);
+
+    PyGC_Head *generation0 = _PyInterpreterState_GET()->gc.generation0;
+    PyGC_Head *last = (PyGC_Head*)(generation0->_gc_prev);
+    _PyGCHead_SET_NEXT(last, gc);
+    _PyGCHead_SET_PREV(gc, last);
+    _PyGCHead_SET_NEXT(gc, generation0);
+    generation0->_gc_prev = (uintptr_t)gc;
 #else
     PyGC_Head *gc = _Py_AS_GC(op);
     _PyObject_ASSERT_FROM(op,
@@ -283,6 +306,14 @@ static inline void _PyObject_GC_UNTRACK(
 
 #ifdef Py_GIL_DISABLED
     _PyObject_CLEAR_GC_BITS(op, _PyGC_BITS_TRACKED);
+#elif !defined(Py_GC_INCREMENTAL)
+    PyGC_Head *gc = _Py_AS_GC(op);
+    PyGC_Head *prev = _PyGCHead_PREV(gc);
+    PyGC_Head *next = _PyGCHead_NEXT(gc);
+    _PyGCHead_SET_NEXT(prev, next);
+    _PyGCHead_SET_PREV(next, prev);
+    gc->_gc_next = 0;
+    gc->_gc_prev &= _PyGC_PREV_MASK_FINALIZED;
 #else
     PyGC_Head *gc = _Py_AS_GC(op);
     PyGC_Head *prev = _PyGCHead_PREV(gc);

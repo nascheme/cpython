@@ -2236,7 +2236,7 @@ Include/pydtrace_probes.h: $(srcdir)/Include/pydtrace.d
 	mv $@.tmp $@
 
 Python/ceval.o: $(srcdir)/Include/pydtrace.h
-Python/gc.o: $(srcdir)/Include/pydtrace.h
+Python/gc.o: $(srcdir)/Include/pydtrace.h $(srcdir)/Python/gc_gen.h $(srcdir)/Python/gc_inc.h
 Python/import.o: $(srcdir)/Include/pydtrace.h
 
 Python/pydtrace.o: $(srcdir)/Include/pydtrace.d $(DTRACE_DEPS)
