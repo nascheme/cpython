@@ -1295,6 +1295,11 @@ gc_list_set_space(PyGC_Head *list, int space)
     return size;
 }
 
+// This controls how quickly we scan the "pending" set of objects.
+// Divide by 10, so that the default incremental threshold of 10
+// scans objects at 1% of the heap size.
+#define SCAN_RATE_DIVISOR 10
+
 static void
 add_stats(GCState *gcstate, int gen, struct gc_collection_stats *stats)
 {
@@ -1565,28 +1570,44 @@ mark_at_start(PyThreadState *tstate)
 static intptr_t
 assess_work_to_do(GCState *gcstate)
 {
-    // This is the minimum number of objects we will take from the pending
-    // (not_visited) set when building the increment set.  This is sized so
-    // that when heap_size is small, it takes 100 increments to finish all
-    // of the pending objects.
-    intptr_t pending_count = (gcstate->heap_size - gcstate->marked_alive) / 100;
-    if (pending_count < 0) {
+    // Number of new objects since last collection.
+    intptr_t new_objects = gcstate->young.count;
+    // Compute the minimum number of objects we will take from the
+    // pending (not_visited) set when building the increment set.  The
+    // old[0].threshold value controls how quickly we scan the pending set
+    // (default value of 10 means we scan 1% of them every increment, i.e. 100
+    // increments to scan all of the pending objects).
+    intptr_t scale_factor = gcstate->old[0].threshold * SCAN_RATE_DIVISOR;
+    // The objects marked alive are excluded from the pending set.  So we
+    // compute how many objects from the pending set to scan after excluding
+    // those.
+    intptr_t pending_count = (gcstate->heap_size - gcstate->marked_alive) / scale_factor;
+    // If we are creating objects quickly, we might also be adding objects quickly to
+    // the pending set.  Add the young_count here to ensure we scan the pending
+    // set quickly enough.
+    pending_count += new_objects;
+    // We put a cap on the maximum number of objects we look at from the pending
+    // set.  This is to avoid quadratic growth of the time spent in the GC as
+    // the heap grows.
+    intptr_t max_count = gcstate->young.threshold * 4;
+    if (pending_count > max_count) {
+        pending_count = max_count;
+    }
+    if (pending_count < 1) {
         pending_count = 1;
     }
-    if (pending_count > 4000) {
-        // When the heap gets larger, we need to avoid quadratic growth in
-        // runtime and so we limit the count of objects.
-        pending_count = 4000;
-    }
-    // For the non-incremental GC (in Python <= 3.13) we counted the young
-    // objects that survive a gen0 collection.  That's not easy to do here
-    // since the increment includes not only the young objects but also some
-    // from the old generation.  Doing the simpler thing and just counting
-    // all young objects means we might finish a full collector more quickly
-    // compared to if we only counted survivors.
-    intptr_t new_objects = gcstate->young.count;
+    // Update the 'young_pending' count.  This is the number of "new" objects
+    // since the last marking pass (similar to a full collection in the
+    // generational GC design).  For the generational GC (in Python <= 3.13)
+    // we counted only the young objects that survive a gen0 collection.  That's
+    // not easy to do here since the increment includes not only the young
+    // objects but also some from the old generation.  Doing the simpler thing
+    // and just counting all young objects means we might finish a full
+    // collector more quickly compared to if we only counted survivors.
     gcstate->young_pending += new_objects;
     gcstate->young.count = 0;
+    // In addition to scanning a fraction of the pending set, we scan all
+    // of the young objects.
     return new_objects + pending_count;
 }
 
@@ -1594,12 +1615,17 @@ static bool
 ready_to_mark(GCState *gcstate)
 {
     PyGC_Head *pending = &gcstate->old[gcstate->visited_space^1].head;
+    // need to finish scanning the pending set first
     if (!gc_list_is_empty(pending)) {
         return false;
     }
-    if (gcstate->young_pending < gcstate->young.threshold) {
+    // don't mark too often, this gives approximately 50 incremental collections before
+    // doing a marking pass, with default thresholds
+    if (gcstate->young_pending < (gcstate->young.threshold * gcstate->old[0].threshold * 2)) {
         return false;
     }
+    // don't mark too often, as heap grows, we need to do marking pass less
+    // often since the marking time is proportional to heap size
     if (gcstate->young_pending < gcstate->heap_size / 4) {
         return false;
     }
