@@ -1578,6 +1578,9 @@ assess_work_to_do(GCState *gcstate)
     // (default value of 10 means we scan 1% of them every increment, i.e. 100
     // increments to scan all of the pending objects).
     intptr_t scale_factor = gcstate->old[0].threshold * SCAN_RATE_DIVISOR;
+    if (scale_factor < 1) {
+        scale_factor = 1;
+    }
     // The objects marked alive are excluded from the pending set.  So we
     // compute how many objects from the pending set to scan after excluding
     // those.
