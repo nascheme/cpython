@@ -28,6 +28,9 @@ typedef struct _gc_runtime_state GCState;
 #define GC_NEXT _PyGCHead_NEXT
 #define GC_PREV _PyGCHead_PREV
 
+#define GC_ENABLE_SCC_TAILS 1
+#define GC_DEBUG_SCC_TAILS 0
+
 // update_refs() set this bit for all objects in current generation.
 // subtract_refs() and move_unreachable() uses this to distinguish
 // visited object is in GCing or not.
@@ -1075,6 +1078,455 @@ finalize_garbage(PyThreadState *tstate, PyGC_Head *collectable)
     gc_list_merge(&seen, collectable);
 }
 
+
+#if GC_ENABLE_SCC_TAILS
+/* Remove "tails" from the unreachable set before finalize_garbage() runs.
+ * A tail is an object that cannot reach any cyclic SCC in the unreachable-only
+ * traverse graph; the "core" is everything else.  Tails are broken naturally by
+ * the refcount cascade once delete_garbage() clears the core cycles, so the GC
+ * does not need to finalize or clear them itself.  The implementation builds the
+ * unreachable-only graph, finds SCCs with iterative Tarjan, marks which SCCs can
+ * reach a cycle, and moves the non-core objects out of the unreachable set.
+ */
+#define SCC_SPLIT_OK 0
+#define SCC_SPLIT_FALLBACK 1
+#define SCC_SPLIT_OOM (-1)
+
+typedef struct {
+    PyGC_Head *gc;
+    Py_ssize_t index;
+    Py_ssize_t lowlink;
+    Py_ssize_t edge_start;
+    Py_ssize_t edge_count;
+    Py_ssize_t scc_id;
+    unsigned char on_stack;
+    unsigned char self_loop;
+} GCSccNode;
+
+typedef struct {
+    PyGC_Head *key;
+    Py_ssize_t value;
+} GCSccMapEntry;
+
+typedef struct {
+    Py_ssize_t node;
+    Py_ssize_t next_edge;
+    unsigned char entered;
+} GCSccFrame;
+
+typedef struct {
+    Py_ssize_t size;
+    unsigned char cyclic;
+    unsigned char reaches_cycle;
+} GCSccInfo;
+
+typedef struct {
+    GCSccNode *nodes;
+    GCSccMapEntry *map;
+    size_t map_mask;
+    Py_ssize_t source;
+    Py_ssize_t *edges;
+    Py_ssize_t edge_count;
+    Py_ssize_t edge_capacity;
+    int oom;
+} GCSccBuildCtx;
+
+static size_t
+scc_hash_gc(PyGC_Head *gc)
+{
+    uintptr_t x = (uintptr_t)gc;
+    x >>= 4;
+    x *= (uintptr_t)11400714819323198485ull;
+    return (size_t)x;
+}
+
+static Py_ssize_t
+scc_map_lookup(GCSccMapEntry *map, size_t mask, PyGC_Head *key)
+{
+    size_t i = scc_hash_gc(key) & mask;
+    while (map[i].key != NULL) {
+        if (map[i].key == key) {
+            return map[i].value;
+        }
+        i = (i + 1) & mask;
+    }
+    return -1;
+}
+
+static void
+scc_map_insert(GCSccMapEntry *map, size_t mask, PyGC_Head *key,
+               Py_ssize_t value)
+{
+    size_t i = scc_hash_gc(key) & mask;
+    while (map[i].key != NULL) {
+        assert(map[i].key != key);
+        i = (i + 1) & mask;
+    }
+    map[i].key = key;
+    map[i].value = value;
+}
+
+static int
+scc_map_size(Py_ssize_t node_count, size_t *size)
+{
+    size_t n = (size_t)node_count;
+    if (node_count < 0 || n > (SIZE_MAX / 2)) {
+        return -1;
+    }
+    n *= 2;
+    if (n < 8) {
+        n = 8;
+    }
+    if (n > ((SIZE_MAX / 2) + 1)) {
+        return -1;
+    }
+    size_t pow2 = 8;
+    while (pow2 < n) {
+        if (pow2 > (SIZE_MAX / 2)) {
+            return -1;
+        }
+        pow2 *= 2;
+    }
+    *size = pow2;
+    return 0;
+}
+
+static int
+scc_append_edge(GCSccBuildCtx *ctx, Py_ssize_t target)
+{
+    if (ctx->edge_count == ctx->edge_capacity) {
+        Py_ssize_t new_capacity;
+        if (ctx->edge_capacity == 0) {
+            new_capacity = 64;
+        }
+        else {
+            if (ctx->edge_capacity > PY_SSIZE_T_MAX / 2) {
+                ctx->oom = 1;
+                return -1;
+            }
+            new_capacity = ctx->edge_capacity * 2;
+        }
+        if (new_capacity > PY_SSIZE_T_MAX / (Py_ssize_t)sizeof(Py_ssize_t)) {
+            ctx->oom = 1;
+            return -1;
+        }
+        Py_ssize_t *new_edges = PyMem_RawRealloc(
+            ctx->edges, (size_t)new_capacity * sizeof(Py_ssize_t));
+        if (new_edges == NULL) {
+            ctx->oom = 1;
+            return -1;
+        }
+        ctx->edges = new_edges;
+        ctx->edge_capacity = new_capacity;
+    }
+    ctx->edges[ctx->edge_count++] = target;
+    return 0;
+}
+
+static int
+scc_visit_edge(PyObject *op, void *arg)
+{
+    GCSccBuildCtx *ctx = (GCSccBuildCtx *)arg;
+    if (!_PyObject_IS_GC(op)) {
+        return 0;
+    }
+
+    PyGC_Head *target_gc = AS_GC(op);
+    Py_ssize_t target = scc_map_lookup(ctx->map, ctx->map_mask, target_gc);
+    if (target < 0 || !gc_is_collecting(target_gc)) {
+        return 0;
+    }
+
+    if (target == ctx->source) {
+        ctx->nodes[ctx->source].self_loop = 1;
+    }
+    return scc_append_edge(ctx, target);
+}
+
+static int
+scc_run_tarjan(GCSccNode *nodes, Py_ssize_t node_count,
+               Py_ssize_t *edges, GCSccInfo *sccs,
+               Py_ssize_t *pop_order, Py_ssize_t *scc_count)
+{
+    Py_ssize_t *tarjan_stack = NULL;
+    Py_ssize_t *parent = NULL;
+    GCSccFrame *frames = NULL;
+    Py_ssize_t tarjan_top = 0;
+    Py_ssize_t frame_top = 0;
+    Py_ssize_t next_index = 0;
+    Py_ssize_t next_scc = 0;
+    Py_ssize_t pop_count = 0;
+
+    tarjan_stack = PyMem_RawMalloc((size_t)node_count * sizeof(Py_ssize_t));
+    parent = PyMem_RawMalloc((size_t)node_count * sizeof(Py_ssize_t));
+    frames = PyMem_RawMalloc((size_t)node_count * sizeof(GCSccFrame));
+    if (tarjan_stack == NULL || parent == NULL || frames == NULL) {
+        PyMem_RawFree(tarjan_stack);
+        PyMem_RawFree(parent);
+        PyMem_RawFree(frames);
+        return SCC_SPLIT_OOM;
+    }
+
+    for (Py_ssize_t i = 0; i < node_count; i++) {
+        nodes[i].index = -1;
+        nodes[i].lowlink = -1;
+        nodes[i].scc_id = -1;
+        nodes[i].on_stack = 0;
+        parent[i] = -1;
+    }
+
+    for (Py_ssize_t root = 0; root < node_count; root++) {
+        if (nodes[root].index != -1) {
+            continue;
+        }
+
+        parent[root] = -1;
+        frames[frame_top++] = (GCSccFrame){root, 0, 0};
+        while (frame_top != 0) {
+            GCSccFrame *frame = &frames[frame_top - 1];
+            Py_ssize_t v = frame->node;
+
+            if (!frame->entered) {
+                frame->entered = 1;
+                nodes[v].index = next_index;
+                nodes[v].lowlink = next_index;
+                next_index++;
+                tarjan_stack[tarjan_top++] = v;
+                nodes[v].on_stack = 1;
+            }
+
+            if (frame->next_edge < nodes[v].edge_count) {
+                Py_ssize_t w = edges[nodes[v].edge_start + frame->next_edge];
+                frame->next_edge++;
+                if (nodes[w].index == -1) {
+                    parent[w] = v;
+                    frames[frame_top++] = (GCSccFrame){w, 0, 0};
+                }
+                else if (nodes[w].on_stack) {
+                    if (nodes[w].index < nodes[v].lowlink) {
+                        nodes[v].lowlink = nodes[w].index;
+                    }
+                }
+                continue;
+            }
+
+            frame_top--;
+            Py_ssize_t p = parent[v];
+            if (p != -1 && nodes[v].lowlink < nodes[p].lowlink) {
+                nodes[p].lowlink = nodes[v].lowlink;
+            }
+
+            if (nodes[v].lowlink == nodes[v].index) {
+                Py_ssize_t size = 0;
+                int self_loop = 0;
+                Py_ssize_t w;
+                do {
+                    assert(tarjan_top > 0);
+                    w = tarjan_stack[--tarjan_top];
+                    nodes[w].on_stack = 0;
+                    nodes[w].scc_id = next_scc;
+                    /* Record pop order: members of one SCC land contiguously,
+                     * and SCCs are completed in ascending scc_id.  A cross-SCC
+                     * edge always points to a lower scc_id, so processing nodes
+                     * in this order visits every successor's SCC first. */
+                    pop_order[pop_count++] = w;
+                    size++;
+                    if (nodes[w].self_loop) {
+                        self_loop = 1;
+                    }
+                } while (w != v);
+                sccs[next_scc].size = size;
+                sccs[next_scc].cyclic = (size > 1 || self_loop) ? 1 : 0;
+                sccs[next_scc].reaches_cycle = 0;
+                next_scc++;
+            }
+        }
+    }
+
+    PyMem_RawFree(tarjan_stack);
+    PyMem_RawFree(parent);
+    PyMem_RawFree(frames);
+    assert(pop_count == node_count);
+    *scc_count = next_scc;
+    return SCC_SPLIT_OK;
+}
+
+/* Mark which SCCs can reach a cyclic SCC.  Process nodes in Tarjan pop order:
+ * SCC members are grouped contiguously in ascending scc_id, and a cross-SCC
+ * edge always points to a lower scc_id, so every successor's SCC is already
+ * finalized by the time we reach a node.  A cyclic SCC reaches a cycle by
+ * definition; a single-node acyclic SCC reaches a cycle iff some successor's
+ * SCC does.  If there are nodes but no cyclic SCC exists, the unreachable set
+ * has no cycle at all (which implies a broken tp_traverse, since every
+ * unreachable object has internal in-degree >= 1): report a fallback.
+ */
+static int
+scc_mark_core(GCSccNode *nodes, Py_ssize_t node_count,
+              Py_ssize_t *edges, GCSccInfo *sccs, Py_ssize_t *pop_order)
+{
+    int have_cyclic = 0;
+    for (Py_ssize_t k = 0; k < node_count; k++) {
+        Py_ssize_t u = pop_order[k];
+        Py_ssize_t s = nodes[u].scc_id;
+        if (sccs[s].cyclic) {
+            sccs[s].reaches_cycle = 1;
+            have_cyclic = 1;
+            continue;
+        }
+        /* Single-node acyclic SCC: all its edges leave to lower-numbered
+         * SCCs, already marked. */
+        Py_ssize_t start = nodes[u].edge_start;
+        Py_ssize_t end = start + nodes[u].edge_count;
+        for (Py_ssize_t e = start; e < end; e++) {
+            if (sccs[nodes[edges[e]].scc_id].reaches_cycle) {
+                sccs[s].reaches_cycle = 1;
+                break;
+            }
+        }
+    }
+    if (node_count > 0 && !have_cyclic) {
+        return SCC_SPLIT_FALLBACK;
+    }
+    return SCC_SPLIT_OK;
+}
+
+/* Move all "tail" objects (those whose SCC cannot reach a cycle) out of the
+ * unreachable set and into `tails`.  On SCC_SPLIT_OK, `*num_tails` is set and
+ * the lists are mutated.  On SCC_SPLIT_FALLBACK or SCC_SPLIT_OOM the lists are
+ * left untouched and the caller keeps the pre-existing behavior.
+ */
+static int
+move_scc_tails(PyGC_Head *unreachable, PyGC_Head *tails, Py_ssize_t *num_tails)
+{
+    Py_ssize_t node_count = gc_list_size(unreachable);
+    GCSccNode *nodes = NULL;
+    GCSccMapEntry *map = NULL;
+    GCSccInfo *sccs = NULL;
+    Py_ssize_t *edges = NULL;
+    Py_ssize_t *pop_order = NULL;
+    size_t map_entries = 0;
+    Py_ssize_t scc_count = 0;
+    int result = SCC_SPLIT_OOM;
+
+    *num_tails = 0;
+    gc_list_init(tails);
+    if (node_count == 0) {
+        return SCC_SPLIT_OK;
+    }
+
+    if (scc_map_size(node_count, &map_entries) < 0 ||
+        node_count > PY_SSIZE_T_MAX / (Py_ssize_t)sizeof(GCSccNode) ||
+        node_count > PY_SSIZE_T_MAX / (Py_ssize_t)sizeof(GCSccInfo) ||
+        node_count > PY_SSIZE_T_MAX / (Py_ssize_t)sizeof(Py_ssize_t) ||
+        map_entries > SIZE_MAX / sizeof(GCSccMapEntry))
+    {
+        return SCC_SPLIT_OOM;
+    }
+
+    nodes = PyMem_RawCalloc((size_t)node_count, sizeof(GCSccNode));
+    map = PyMem_RawCalloc(map_entries, sizeof(GCSccMapEntry));
+    sccs = PyMem_RawCalloc((size_t)node_count, sizeof(GCSccInfo));
+    pop_order = PyMem_RawMalloc((size_t)node_count * sizeof(Py_ssize_t));
+    if (nodes == NULL || map == NULL || sccs == NULL || pop_order == NULL) {
+        goto done;
+    }
+
+    Py_ssize_t i = 0;
+    for (PyGC_Head *gc = GC_NEXT(unreachable); gc != unreachable;
+         gc = GC_NEXT(gc))
+    {
+        nodes[i].gc = gc;
+        nodes[i].index = -1;
+        nodes[i].scc_id = -1;
+        scc_map_insert(map, map_entries - 1, gc, i);
+        i++;
+    }
+    assert(i == node_count);
+
+    GCSccBuildCtx ctx = {
+        .nodes = nodes,
+        .map = map,
+        .map_mask = map_entries - 1,
+        .source = -1,
+        .edges = NULL,
+        .edge_count = 0,
+        .edge_capacity = 0,
+        .oom = 0,
+    };
+
+    for (i = 0; i < node_count; i++) {
+        PyObject *op = FROM_GC(nodes[i].gc);
+        traverseproc traverse = Py_TYPE(op)->tp_traverse;
+        nodes[i].edge_start = ctx.edge_count;
+        ctx.source = i;
+        if (traverse != NULL && traverse(op, scc_visit_edge, &ctx) < 0) {
+            result = ctx.oom ? SCC_SPLIT_OOM : SCC_SPLIT_FALLBACK;
+            edges = ctx.edges;
+            goto done;
+        }
+        nodes[i].edge_count = ctx.edge_count - nodes[i].edge_start;
+    }
+    edges = ctx.edges;
+
+    result = scc_run_tarjan(nodes, node_count, edges, sccs, pop_order,
+                            &scc_count);
+    if (result != SCC_SPLIT_OK) {
+        goto done;
+    }
+    result = scc_mark_core(nodes, node_count, edges, sccs, pop_order);
+    if (result != SCC_SPLIT_OK) {
+        goto done;
+    }
+
+    Py_ssize_t tail_count = 0;
+    PyGC_Head *next;
+    for (PyGC_Head *gc = GC_NEXT(unreachable); gc != unreachable; gc = next) {
+        next = GC_NEXT(gc);
+        Py_ssize_t idx = scc_map_lookup(map, map_entries - 1, gc);
+        assert(idx >= 0);
+        if (!sccs[nodes[idx].scc_id].reaches_cycle) {
+            gc_list_move(gc, tails);
+            tail_count++;
+        }
+    }
+    *num_tails = tail_count;
+#if GC_DEBUG_SCC_TAILS
+    PySys_WriteStderr(
+        "gc-scc: unreachable=%zd core=%zd tails=%zd sccs=%zd\n",
+        node_count, node_count - tail_count, tail_count, scc_count);
+#endif
+    result = SCC_SPLIT_OK;
+
+done:
+    PyMem_RawFree(nodes);
+    PyMem_RawFree(map);
+    PyMem_RawFree(sccs);
+    PyMem_RawFree(edges);
+    PyMem_RawFree(pop_order);
+    return result;
+}
+
+/* A weakref that is itself trash must be cleared so it cannot invoke its
+ * callback later (see the comments above handle_weakref_callbacks()).
+ * clear_weakrefs() normally does this for the whole unreachable set, but tails
+ * are removed before that runs, so clear the weakref tails here.  The referent
+ * may not be in the unreachable set (e.g. it is hidden behind a container with
+ * no tp_traverse, as in bpo-38006), so it can die during the core cascade; if
+ * the weakref were left intact its callback would fire on the dying referent.
+ * Match clear_weakrefs(): clear silently, without running callbacks.
+ */
+static void
+clear_weakref_tails(PyGC_Head *tails)
+{
+    for (PyGC_Head *gc = GC_NEXT(tails); gc != tails; gc = GC_NEXT(gc)) {
+        PyObject *op = FROM_GC(gc);
+        if (PyWeakref_Check(op)) {
+            _PyWeakref_ClearRef((PyWeakReference *)op);
+        }
+    }
+}
+#endif  /* GC_ENABLE_SCC_TAILS */
+
 /* Break reference cycles by clearing the containers involved.  This is
  * tricky business as the lists can be changing and we don't know which
  * objects may be freed.  It is possible I screwed something up here.
@@ -1555,6 +2007,32 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     stats.collected += handle_weakref_callbacks(&unreachable, old);
     validate_list(old, collecting_clear_unreachable_clear);
     validate_list(&unreachable, collecting_set_unreachable_clear);
+
+#if GC_ENABLE_SCC_TAILS
+    /* Remove "tails" (objects that cannot reach a strongly connected cycle)
+     * from the unreachable set before finalizing.  Tails die naturally via
+     * the refcount cascade once delete_garbage() breaks the core cycles: their
+     * tp_dealloc runs PyObject_CallFinalizerFromDealloc, so their finalizers
+     * run in referrer-first order with the graph still intact.  This preserves
+     * PEP 442 ordering for chains hanging off a cycle (e.g. a buffered writer
+     * flushing before its fd closes).
+     */
+    if ((gcstate->debug & _PyGC_DEBUG_SAVEALL) == 0) {
+        PyGC_Head tails;
+        Py_ssize_t n_tails = 0;
+        if (move_scc_tails(&unreachable, &tails, &n_tails) == SCC_SPLIT_OK) {
+            /* Stop considering the tails: count them as collected (the whole
+             * unreachable set is garbage), clear any trash weakrefs among them,
+             * clear the collecting flag and move them to the old generation,
+             * like resurrected objects. */
+            stats.collected += n_tails;
+            clear_weakref_tails(&tails);
+            gc_list_clear_collecting(&tails);
+            gc_list_merge(&tails, old);
+        }
+        /* On FALLBACK/OOM, unreachable is unchanged: old behavior. */
+    }
+#endif
 
     /* Call tp_finalize on objects which have one. */
     finalize_garbage(tstate, &unreachable);

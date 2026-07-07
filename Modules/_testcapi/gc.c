@@ -313,12 +313,136 @@ static PyType_Spec ObjExtraData_TypeSpec = {
     .slots = ObjExtraData_Slots,
 };
 
+typedef struct {
+    PyObject_HEAD
+    PyObject *next;
+    PyObject *tail;
+} SccGcNodeObject;
+
+static Py_ssize_t scc_gc_node_clear_count = 0;
+
+static int
+scc_gc_node_traverse(PyObject *op, visitproc visit, void *arg)
+{
+    SccGcNodeObject *self = (SccGcNodeObject *)op;
+    Py_VISIT(self->next);
+    Py_VISIT(self->tail);
+    return 0;
+}
+
+static void
+scc_gc_node_clear_refs(SccGcNodeObject *self)
+{
+    Py_CLEAR(self->next);
+    Py_CLEAR(self->tail);
+}
+
+static int
+scc_gc_node_clear(PyObject *op)
+{
+    SccGcNodeObject *self = (SccGcNodeObject *)op;
+    scc_gc_node_clear_count++;
+    scc_gc_node_clear_refs(self);
+    return 0;
+}
+
+static void
+scc_gc_node_dealloc(PyObject *op)
+{
+    PyTypeObject *tp = Py_TYPE(op);
+    SccGcNodeObject *self = (SccGcNodeObject *)op;
+    PyObject_GC_UnTrack(op);
+    scc_gc_node_clear_refs(self);
+    tp->tp_free(op);
+    Py_DECREF(tp);
+}
+
+static PyObject *
+scc_gc_node_get_next(PyObject *op, void *Py_UNUSED(closure))
+{
+    SccGcNodeObject *self = (SccGcNodeObject *)op;
+    if (self->next == NULL) {
+        Py_RETURN_NONE;
+    }
+    return Py_NewRef(self->next);
+}
+
+static int
+scc_gc_node_set_next(PyObject *op, PyObject *value, void *Py_UNUSED(closure))
+{
+    SccGcNodeObject *self = (SccGcNodeObject *)op;
+    Py_XINCREF(value);
+    Py_XSETREF(self->next, value);
+    return 0;
+}
+
+static PyObject *
+scc_gc_node_get_tail(PyObject *op, void *Py_UNUSED(closure))
+{
+    SccGcNodeObject *self = (SccGcNodeObject *)op;
+    if (self->tail == NULL) {
+        Py_RETURN_NONE;
+    }
+    return Py_NewRef(self->tail);
+}
+
+static int
+scc_gc_node_set_tail(PyObject *op, PyObject *value, void *Py_UNUSED(closure))
+{
+    SccGcNodeObject *self = (SccGcNodeObject *)op;
+    Py_XINCREF(value);
+    Py_XSETREF(self->tail, value);
+    return 0;
+}
+
+static PyGetSetDef scc_gc_node_getset[] = {
+    {"next", scc_gc_node_get_next, scc_gc_node_set_next, NULL},
+    {"tail", scc_gc_node_get_tail, scc_gc_node_set_tail, NULL},
+    {NULL}
+};
+
+static PyType_Slot SccGcNode_TypeSlots[] = {
+    {Py_tp_dealloc, scc_gc_node_dealloc},
+    {Py_tp_traverse, scc_gc_node_traverse},
+    {Py_tp_clear, scc_gc_node_clear},
+    {Py_tp_getset, scc_gc_node_getset},
+    {Py_tp_new, PyType_GenericNew},
+    {Py_tp_free, PyObject_GC_Del},
+    {0, NULL},
+};
+
+static PyType_Spec SccGcNode_TypeSpec = {
+    .name = "_testcapi.SccGcNode",
+    .basicsize = sizeof(SccGcNodeObject),
+    .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC,
+    .slots = SccGcNode_TypeSlots,
+};
+
+static PyObject *
+scc_gc_node_reset_clear_count(PyObject *Py_UNUSED(self),
+                              PyObject *Py_UNUSED(ignored))
+{
+    scc_gc_node_clear_count = 0;
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+scc_gc_node_get_clear_count(PyObject *Py_UNUSED(self),
+                            PyObject *Py_UNUSED(ignored))
+{
+    return PyLong_FromSsize_t(scc_gc_node_clear_count);
+}
+
 static PyMethodDef test_methods[] = {
     {"test_gc_control", test_gc_control, METH_NOARGS},
     {"test_gc_visit_objects_basic", test_gc_visit_objects_basic, METH_NOARGS, NULL},
     {"test_gc_visit_objects_exit_early", test_gc_visit_objects_exit_early, METH_NOARGS, NULL},
     {"without_gc", without_gc, METH_O, NULL},
     {"with_tp_del", with_tp_del, METH_VARARGS, NULL},
+    {"reset_scc_gc_node_clear_count", scc_gc_node_reset_clear_count,
+     METH_NOARGS, NULL},
+    {"get_scc_gc_node_clear_count", scc_gc_node_get_clear_count,
+     METH_NOARGS, NULL},
     {NULL}
 };
 
@@ -338,6 +462,17 @@ int _PyTestCapi_Init_GC(PyObject *mod)
     }
     int ret = PyModule_AddType(mod, (PyTypeObject*)ObjExtraData_Type);
     Py_DECREF(ObjExtraData_Type);
+    if (ret < 0) {
+        return ret;
+    }
+
+    PyObject *SccGcNode_Type = PyType_FromModuleAndSpec(
+        mod, &SccGcNode_TypeSpec, NULL);
+    if (SccGcNode_Type == NULL) {
+        return -1;
+    }
+    ret = PyModule_AddType(mod, (PyTypeObject *)SccGcNode_Type);
+    Py_DECREF(SccGcNode_Type);
     if (ret < 0) {
         return ret;
     }

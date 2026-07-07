@@ -115,6 +115,214 @@ class GCTests(unittest.TestCase):
         del l
         self.assertEqual(gc.collect(), 2)
 
+    @requires_gil_enabled('SCC-guided clearing is implemented for the GIL GC')
+    @unittest.skipIf(_testcapi is None or not hasattr(_testcapi, 'SccGcNode'),
+                     'requires _testcapi.SccGcNode')
+    def test_scc_clear_self_cycle(self):
+        Node = _testcapi.SccGcNode
+        gc.collect()
+        _testcapi.reset_scc_gc_node_clear_count()
+
+        node = Node()
+        node.next = node
+        del node
+
+        self.assertEqual(gc.collect(), 1)
+        self.assertEqual(_testcapi.get_scc_gc_node_clear_count(), 1)
+
+    @requires_gil_enabled('SCC-guided clearing is implemented for the GIL GC')
+    @unittest.skipIf(_testcapi is None or not hasattr(_testcapi, 'SccGcNode'),
+                     'requires _testcapi.SccGcNode')
+    def test_scc_clear_skips_acyclic_tail(self):
+        Node = _testcapi.SccGcNode
+
+        def make_garbage(tail_len):
+            a = Node()
+            b = Node()
+            a.next = b
+            b.next = a
+            current = b
+            for _ in range(tail_len):
+                node = Node()
+                if current is b:
+                    current.tail = node
+                else:
+                    current.next = node
+                current = node
+
+        tail_len = 25
+        gc.collect()
+        _testcapi.reset_scc_gc_node_clear_count()
+        make_garbage(tail_len)
+
+        total = tail_len + 2
+        self.assertEqual(gc.collect(), total)
+        # Only the cycle is core.  delete_garbage() clears one of its two
+        # members; the other and the whole tail chain die via the refcount
+        # cascade (tp_dealloc, not tp_clear).  So exactly one clear happens and
+        # no tail is ever cleared.
+        clear_count = _testcapi.get_scc_gc_node_clear_count()
+        self.assertEqual(clear_count, 1)
+
+    @requires_gil_enabled('tail removal is implemented for the GIL GC')
+    def test_scc_finalize_order_tail_chain(self):
+        # A chain of finalizable objects hangs off a cycle.  The GC removes the
+        # chain (it cannot reach the cycle) and lets the refcount cascade run
+        # its finalizers referrer-first once the cycle is cleared.
+        order = []
+
+        class Named:
+            def __init__(self, name, child=None):
+                self.name = name
+                self.child = child
+            def __del__(self):
+                order.append(self.name)
+
+        class Cycle:
+            pass
+
+        a = Cycle()
+        b = Cycle()
+        a.p = b
+        b.p = a
+        b.tail = Named('outer', Named('mid', Named('inner')))
+
+        gc.collect()
+        del a, b
+        gc.collect()
+
+        self.assertEqual(order, ['outer', 'mid', 'inner'])
+
+    @requires_gil_enabled('tail removal is implemented for the GIL GC')
+    def test_scc_bridge_between_cycles_finalized(self):
+        # cycle1 -> B -> cycle2.  B is not itself in a cycle but can reach one,
+        # so it is "core": it must be finalized while the graph is intact, so
+        # its finalizer can still observe cycle2.
+        seen = []
+
+        class Plain:
+            pass
+
+        class Bridge:
+            def __del__(self):
+                try:
+                    seen.append(self.ref.marker)
+                except Exception as exc:
+                    seen.append(('error', repr(exc)))
+
+        c2a = Plain()
+        c2b = Plain()
+        c2a.p = c2b
+        c2b.p = c2a
+        c2a.marker = 'intact'
+
+        B = Bridge()
+        B.ref = c2a
+
+        c1a = Plain()
+        c1b = Plain()
+        c1a.p = c1b
+        c1b.p = c1a
+        c1a.bridge = B
+
+        gc.collect()
+        del c2a, c2b, B, c1a, c1b
+        gc.collect()
+
+        self.assertEqual(seen, ['intact'])
+
+    @requires_gil_enabled('tail removal is implemented for the GIL GC')
+    def test_scc_tail_resurrect_in_del(self):
+        # A tail whose finalizer resurrects it must stay alive and usable, and
+        # must not end up in gc.garbage.
+        holder = []
+
+        class Plain:
+            pass
+
+        class Tail:
+            def __del__(self):
+                holder.append(self)
+
+        a = Plain()
+        b = Plain()
+        a.p = b
+        b.p = a
+        b.tail = Tail()
+
+        gc.collect()
+        del a, b
+        gc.collect()
+
+        self.assertEqual(len(holder), 1)
+        obj = holder[0]
+        obj.value = 42
+        self.assertEqual(obj.value, 42)
+        self.assertNotIn(obj, gc.garbage)
+
+        # Dropping the last reference collects cleanly.
+        holder.clear()
+        del obj
+        gc.collect()
+        self.assertEqual(gc.garbage, [])
+
+    @requires_gil_enabled('tail removal is implemented for the GIL GC')
+    def test_scc_saveall_includes_tails(self):
+        # Under DEBUG_SAVEALL the tail split is skipped, so tails are finalized
+        # by the GC and preserved in gc.garbage like the rest of the set.
+        class Plain:
+            pass
+
+        gc.collect()
+        del gc.garbage[:]
+        old_debug = gc.get_debug()
+        gc.set_debug(gc.DEBUG_SAVEALL)
+        try:
+            a = Plain()
+            b = Plain()
+            a.p = b
+            b.p = a
+            t = Plain()
+            b.tail = t
+            ids = {id(a), id(b), id(t)}
+            del a, b, t
+            gc.collect()
+            got = {id(o) for o in gc.garbage}
+            self.assertTrue(ids <= got)
+        finally:
+            gc.set_debug(old_debug)
+            del gc.garbage[:]
+            gc.collect()
+
+    @requires_gil_enabled('tail removal is implemented for the GIL GC')
+    def test_scc_buffered_writer_flushed_in_cycle(self):
+        # gh-62052: a buffered writer reachable only through a cycle must be
+        # flushed before its underlying file descriptor is closed.  Removing
+        # the writer chain as a tail lets the refcount cascade finalize it
+        # outermost-first (flush before close).
+        import os
+        import tempfile
+
+        fd, path = tempfile.mkstemp()
+        os.close(fd)
+        try:
+            data = 'x' * 5000
+
+            def make_garbage():
+                f = open(path, 'w')
+                f.write(data)
+                cycle = {}
+                cycle['self'] = cycle
+                cycle['writer'] = f
+
+            make_garbage()
+            gc.collect()
+
+            with open(path) as r:
+                self.assertEqual(r.read(), data)
+        finally:
+            os.unlink(path)
+
     def test_class(self):
         class A:
             pass
