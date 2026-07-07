@@ -28,6 +28,9 @@ typedef struct _gc_runtime_state GCState;
 #define GC_NEXT _PyGCHead_NEXT
 #define GC_PREV _PyGCHead_PREV
 
+#define GC_ENABLE_SCC_CLEAR 1
+#define GC_DEBUG_SCC_CLEAR 0
+
 // update_refs() set this bit for all objects in current generation.
 // subtract_refs() and move_unreachable() uses this to distinguish
 // visited object is in GCing or not.
@@ -1075,6 +1078,514 @@ finalize_garbage(PyThreadState *tstate, PyGC_Head *collectable)
     gc_list_merge(&seen, collectable);
 }
 
+
+#if GC_ENABLE_SCC_CLEAR
+/* Split the final unreachable set into a smaller set of objects whose
+ * tp_clear calls should break all cycles.  The implementation builds the
+ * unreachable-only traverse graph, finds SCCs with iterative Tarjan, then
+ * selects clearable nodes covering DFS back-edges inside cyclic SCCs.
+ */
+#define SCC_SPLIT_OK 0
+#define SCC_SPLIT_FALLBACK 1
+#define SCC_SPLIT_OOM (-1)
+
+typedef struct {
+    PyGC_Head *gc;
+    Py_ssize_t index;
+    Py_ssize_t lowlink;
+    Py_ssize_t edge_start;
+    Py_ssize_t edge_count;
+    Py_ssize_t scc_id;
+    Py_ssize_t path_pos;
+    unsigned char on_stack;
+    unsigned char self_loop;
+    unsigned char selected;
+    unsigned char dfs_color;
+} GCSccNode;
+
+typedef struct {
+    PyGC_Head *key;
+    Py_ssize_t value;
+} GCSccMapEntry;
+
+typedef struct {
+    Py_ssize_t node;
+    Py_ssize_t next_edge;
+    unsigned char entered;
+} GCSccFrame;
+
+typedef struct {
+    Py_ssize_t size;
+    Py_ssize_t selected_count;
+    unsigned char cyclic;
+} GCSccInfo;
+
+typedef struct {
+    GCSccNode *nodes;
+    GCSccMapEntry *map;
+    size_t map_mask;
+    Py_ssize_t source;
+    Py_ssize_t *edges;
+    Py_ssize_t edge_count;
+    Py_ssize_t edge_capacity;
+    int oom;
+} GCSccBuildCtx;
+
+static size_t
+scc_hash_gc(PyGC_Head *gc)
+{
+    uintptr_t x = (uintptr_t)gc;
+    x >>= 4;
+    x *= (uintptr_t)11400714819323198485ull;
+    return (size_t)x;
+}
+
+static Py_ssize_t
+scc_map_lookup(GCSccMapEntry *map, size_t mask, PyGC_Head *key)
+{
+    size_t i = scc_hash_gc(key) & mask;
+    while (map[i].key != NULL) {
+        if (map[i].key == key) {
+            return map[i].value;
+        }
+        i = (i + 1) & mask;
+    }
+    return -1;
+}
+
+static void
+scc_map_insert(GCSccMapEntry *map, size_t mask, PyGC_Head *key,
+               Py_ssize_t value)
+{
+    size_t i = scc_hash_gc(key) & mask;
+    while (map[i].key != NULL) {
+        assert(map[i].key != key);
+        i = (i + 1) & mask;
+    }
+    map[i].key = key;
+    map[i].value = value;
+}
+
+static int
+scc_map_size(Py_ssize_t node_count, size_t *size)
+{
+    size_t n = (size_t)node_count;
+    if (node_count < 0 || n > (SIZE_MAX / 2)) {
+        return -1;
+    }
+    n *= 2;
+    if (n < 8) {
+        n = 8;
+    }
+    if (n > ((SIZE_MAX / 2) + 1)) {
+        return -1;
+    }
+    size_t pow2 = 8;
+    while (pow2 < n) {
+        if (pow2 > (SIZE_MAX / 2)) {
+            return -1;
+        }
+        pow2 *= 2;
+    }
+    *size = pow2;
+    return 0;
+}
+
+static int
+scc_append_edge(GCSccBuildCtx *ctx, Py_ssize_t target)
+{
+    if (ctx->edge_count == ctx->edge_capacity) {
+        Py_ssize_t new_capacity;
+        if (ctx->edge_capacity == 0) {
+            new_capacity = 64;
+        }
+        else {
+            if (ctx->edge_capacity > PY_SSIZE_T_MAX / 2) {
+                ctx->oom = 1;
+                return -1;
+            }
+            new_capacity = ctx->edge_capacity * 2;
+        }
+        if (new_capacity > PY_SSIZE_T_MAX / (Py_ssize_t)sizeof(Py_ssize_t)) {
+            ctx->oom = 1;
+            return -1;
+        }
+        Py_ssize_t *new_edges = PyMem_RawRealloc(
+            ctx->edges, (size_t)new_capacity * sizeof(Py_ssize_t));
+        if (new_edges == NULL) {
+            ctx->oom = 1;
+            return -1;
+        }
+        ctx->edges = new_edges;
+        ctx->edge_capacity = new_capacity;
+    }
+    ctx->edges[ctx->edge_count++] = target;
+    return 0;
+}
+
+static int
+scc_visit_edge(PyObject *op, void *arg)
+{
+    GCSccBuildCtx *ctx = (GCSccBuildCtx *)arg;
+    if (!_PyObject_IS_GC(op)) {
+        return 0;
+    }
+
+    PyGC_Head *target_gc = AS_GC(op);
+    Py_ssize_t target = scc_map_lookup(ctx->map, ctx->map_mask, target_gc);
+    if (target < 0 || !gc_is_collecting(target_gc)) {
+        return 0;
+    }
+
+    if (target == ctx->source) {
+        ctx->nodes[ctx->source].self_loop = 1;
+    }
+    return scc_append_edge(ctx, target);
+}
+
+static inline int
+scc_node_is_clearable(GCSccNode *node)
+{
+    PyObject *op = FROM_GC(node->gc);
+    return Py_TYPE(op)->tp_clear != NULL;
+}
+
+static int
+scc_run_tarjan(GCSccNode *nodes, Py_ssize_t node_count,
+               Py_ssize_t *edges, GCSccInfo *sccs,
+               Py_ssize_t *scc_count)
+{
+    Py_ssize_t *tarjan_stack = NULL;
+    Py_ssize_t *parent = NULL;
+    GCSccFrame *frames = NULL;
+    Py_ssize_t tarjan_top = 0;
+    Py_ssize_t frame_top = 0;
+    Py_ssize_t next_index = 0;
+    Py_ssize_t next_scc = 0;
+
+    tarjan_stack = PyMem_RawMalloc((size_t)node_count * sizeof(Py_ssize_t));
+    parent = PyMem_RawMalloc((size_t)node_count * sizeof(Py_ssize_t));
+    frames = PyMem_RawMalloc((size_t)node_count * sizeof(GCSccFrame));
+    if (tarjan_stack == NULL || parent == NULL || frames == NULL) {
+        PyMem_RawFree(tarjan_stack);
+        PyMem_RawFree(parent);
+        PyMem_RawFree(frames);
+        return SCC_SPLIT_OOM;
+    }
+
+    for (Py_ssize_t i = 0; i < node_count; i++) {
+        nodes[i].index = -1;
+        nodes[i].lowlink = -1;
+        nodes[i].scc_id = -1;
+        nodes[i].on_stack = 0;
+        parent[i] = -1;
+    }
+
+    for (Py_ssize_t root = 0; root < node_count; root++) {
+        if (nodes[root].index != -1) {
+            continue;
+        }
+
+        parent[root] = -1;
+        frames[frame_top++] = (GCSccFrame){root, 0, 0};
+        while (frame_top != 0) {
+            GCSccFrame *frame = &frames[frame_top - 1];
+            Py_ssize_t v = frame->node;
+
+            if (!frame->entered) {
+                frame->entered = 1;
+                nodes[v].index = next_index;
+                nodes[v].lowlink = next_index;
+                next_index++;
+                tarjan_stack[tarjan_top++] = v;
+                nodes[v].on_stack = 1;
+            }
+
+            if (frame->next_edge < nodes[v].edge_count) {
+                Py_ssize_t w = edges[nodes[v].edge_start + frame->next_edge];
+                frame->next_edge++;
+                if (nodes[w].index == -1) {
+                    parent[w] = v;
+                    frames[frame_top++] = (GCSccFrame){w, 0, 0};
+                }
+                else if (nodes[w].on_stack) {
+                    if (nodes[w].index < nodes[v].lowlink) {
+                        nodes[v].lowlink = nodes[w].index;
+                    }
+                }
+                continue;
+            }
+
+            frame_top--;
+            Py_ssize_t p = parent[v];
+            if (p != -1 && nodes[v].lowlink < nodes[p].lowlink) {
+                nodes[p].lowlink = nodes[v].lowlink;
+            }
+
+            if (nodes[v].lowlink == nodes[v].index) {
+                Py_ssize_t size = 0;
+                int self_loop = 0;
+                Py_ssize_t w;
+                do {
+                    assert(tarjan_top > 0);
+                    w = tarjan_stack[--tarjan_top];
+                    nodes[w].on_stack = 0;
+                    nodes[w].scc_id = next_scc;
+                    size++;
+                    if (nodes[w].self_loop) {
+                        self_loop = 1;
+                    }
+                } while (w != v);
+                sccs[next_scc].size = size;
+                sccs[next_scc].selected_count = 0;
+                sccs[next_scc].cyclic = (size > 1 || self_loop) ? 1 : 0;
+                next_scc++;
+            }
+        }
+    }
+
+    PyMem_RawFree(tarjan_stack);
+    PyMem_RawFree(parent);
+    PyMem_RawFree(frames);
+    *scc_count = next_scc;
+    return SCC_SPLIT_OK;
+}
+
+static int
+scc_select_node(GCSccNode *nodes, GCSccInfo *sccs, Py_ssize_t node)
+{
+    if (!nodes[node].selected) {
+        nodes[node].selected = 1;
+        sccs[nodes[node].scc_id].selected_count++;
+    }
+    return SCC_SPLIT_OK;
+}
+
+static int
+scc_cover_back_edge(GCSccNode *nodes, GCSccInfo *sccs,
+                    Py_ssize_t *path, Py_ssize_t path_len,
+                    Py_ssize_t source, Py_ssize_t target)
+{
+    if (scc_node_is_clearable(&nodes[source])) {
+        return scc_select_node(nodes, sccs, source);
+    }
+
+    Py_ssize_t target_pos = nodes[target].path_pos;
+    if (target_pos < 0 || target_pos >= path_len) {
+        return SCC_SPLIT_FALLBACK;
+    }
+    for (Py_ssize_t pos = path_len - 1; pos >= target_pos; pos--) {
+        Py_ssize_t node = path[pos];
+        if (scc_node_is_clearable(&nodes[node])) {
+            return scc_select_node(nodes, sccs, node);
+        }
+    }
+    return SCC_SPLIT_FALLBACK;
+}
+
+static int
+scc_select_clear_subset(GCSccNode *nodes, Py_ssize_t node_count,
+                        Py_ssize_t *edges, GCSccInfo *sccs,
+                        Py_ssize_t scc_count)
+{
+    GCSccFrame *frames = NULL;
+    Py_ssize_t *path = NULL;
+    Py_ssize_t frame_top = 0;
+    Py_ssize_t path_len = 0;
+
+    frames = PyMem_RawMalloc((size_t)node_count * sizeof(GCSccFrame));
+    path = PyMem_RawMalloc((size_t)node_count * sizeof(Py_ssize_t));
+    if (frames == NULL || path == NULL) {
+        PyMem_RawFree(frames);
+        PyMem_RawFree(path);
+        return SCC_SPLIT_OOM;
+    }
+
+    for (Py_ssize_t i = 0; i < node_count; i++) {
+        nodes[i].dfs_color = 0;
+        nodes[i].path_pos = -1;
+        nodes[i].selected = 0;
+    }
+
+    for (Py_ssize_t root = 0; root < node_count; root++) {
+        Py_ssize_t root_scc = nodes[root].scc_id;
+        if (!sccs[root_scc].cyclic || nodes[root].dfs_color != 0) {
+            continue;
+        }
+
+        frame_top = 0;
+        path_len = 0;
+        frames[frame_top++] = (GCSccFrame){root, 0, 0};
+        while (frame_top != 0) {
+            GCSccFrame *frame = &frames[frame_top - 1];
+            Py_ssize_t u = frame->node;
+
+            if (!frame->entered) {
+                frame->entered = 1;
+                nodes[u].dfs_color = 1;
+                nodes[u].path_pos = path_len;
+                path[path_len++] = u;
+            }
+
+            if (frame->next_edge < nodes[u].edge_count) {
+                Py_ssize_t v = edges[nodes[u].edge_start + frame->next_edge];
+                frame->next_edge++;
+                if (nodes[v].scc_id != root_scc) {
+                    continue;
+                }
+                if (nodes[v].dfs_color == 0) {
+                    frames[frame_top++] = (GCSccFrame){v, 0, 0};
+                }
+                else if (nodes[v].dfs_color == 1) {
+                    int res = scc_cover_back_edge(nodes, sccs, path, path_len,
+                                                  u, v);
+                    if (res != SCC_SPLIT_OK) {
+                        PyMem_RawFree(frames);
+                        PyMem_RawFree(path);
+                        return res;
+                    }
+                }
+                continue;
+            }
+
+            frame_top--;
+            nodes[u].dfs_color = 2;
+            nodes[u].path_pos = -1;
+            assert(path_len > 0 && path[path_len - 1] == u);
+            path_len--;
+        }
+    }
+
+    PyMem_RawFree(frames);
+    PyMem_RawFree(path);
+
+    for (Py_ssize_t i = 0; i < scc_count; i++) {
+        if (sccs[i].cyclic && sccs[i].selected_count == 0) {
+            return SCC_SPLIT_FALLBACK;
+        }
+    }
+    return SCC_SPLIT_OK;
+}
+
+static int
+move_scc_clear_subset(PyGC_Head *unreachable, PyGC_Head *to_clear,
+                      Py_ssize_t *num_selected, Py_ssize_t *num_edges)
+{
+    Py_ssize_t node_count = gc_list_size(unreachable);
+    GCSccNode *nodes = NULL;
+    GCSccMapEntry *map = NULL;
+    GCSccInfo *sccs = NULL;
+    Py_ssize_t *edges = NULL;
+    size_t map_entries = 0;
+    Py_ssize_t scc_count = 0;
+    int result = SCC_SPLIT_OOM;
+
+    if (num_selected != NULL) {
+        *num_selected = 0;
+    }
+    if (num_edges != NULL) {
+        *num_edges = 0;
+    }
+    gc_list_init(to_clear);
+    if (node_count == 0) {
+        return SCC_SPLIT_OK;
+    }
+
+    if (scc_map_size(node_count, &map_entries) < 0 ||
+        node_count > PY_SSIZE_T_MAX / (Py_ssize_t)sizeof(GCSccNode) ||
+        node_count > PY_SSIZE_T_MAX / (Py_ssize_t)sizeof(GCSccInfo) ||
+        map_entries > SIZE_MAX / sizeof(GCSccMapEntry))
+    {
+        return SCC_SPLIT_OOM;
+    }
+
+    nodes = PyMem_RawCalloc((size_t)node_count, sizeof(GCSccNode));
+    map = PyMem_RawCalloc(map_entries, sizeof(GCSccMapEntry));
+    sccs = PyMem_RawCalloc((size_t)node_count, sizeof(GCSccInfo));
+    if (nodes == NULL || map == NULL || sccs == NULL) {
+        goto done;
+    }
+
+    Py_ssize_t i = 0;
+    for (PyGC_Head *gc = GC_NEXT(unreachable); gc != unreachable;
+         gc = GC_NEXT(gc))
+    {
+        nodes[i].gc = gc;
+        nodes[i].index = -1;
+        nodes[i].scc_id = -1;
+        nodes[i].path_pos = -1;
+        scc_map_insert(map, map_entries - 1, gc, i);
+        i++;
+    }
+    assert(i == node_count);
+
+    GCSccBuildCtx ctx = {
+        .nodes = nodes,
+        .map = map,
+        .map_mask = map_entries - 1,
+        .source = -1,
+        .edges = NULL,
+        .edge_count = 0,
+        .edge_capacity = 0,
+        .oom = 0,
+    };
+
+    for (i = 0; i < node_count; i++) {
+        PyObject *op = FROM_GC(nodes[i].gc);
+        traverseproc traverse = Py_TYPE(op)->tp_traverse;
+        nodes[i].edge_start = ctx.edge_count;
+        ctx.source = i;
+        if (traverse != NULL && traverse(op, scc_visit_edge, &ctx) < 0) {
+            result = ctx.oom ? SCC_SPLIT_OOM : SCC_SPLIT_FALLBACK;
+            edges = ctx.edges;
+            goto done;
+        }
+        nodes[i].edge_count = ctx.edge_count - nodes[i].edge_start;
+    }
+    edges = ctx.edges;
+    if (num_edges != NULL) {
+        *num_edges = ctx.edge_count;
+    }
+
+    result = scc_run_tarjan(nodes, node_count, edges, sccs, &scc_count);
+    if (result != SCC_SPLIT_OK) {
+        goto done;
+    }
+    result = scc_select_clear_subset(nodes, node_count, edges, sccs, scc_count);
+    if (result != SCC_SPLIT_OK) {
+        goto done;
+    }
+
+    Py_ssize_t selected = 0;
+    for (i = 0; i < node_count; i++) {
+        if (nodes[i].selected) {
+            selected++;
+        }
+    }
+    if (num_selected != NULL) {
+        *num_selected = selected;
+    }
+
+    PyGC_Head *next;
+    for (PyGC_Head *gc = GC_NEXT(unreachable); gc != unreachable; gc = next) {
+        next = GC_NEXT(gc);
+        Py_ssize_t idx = scc_map_lookup(map, map_entries - 1, gc);
+        assert(idx >= 0);
+        if (nodes[idx].selected) {
+            gc_list_move(gc, to_clear);
+        }
+    }
+    result = SCC_SPLIT_OK;
+
+done:
+    PyMem_RawFree(nodes);
+    PyMem_RawFree(map);
+    PyMem_RawFree(sccs);
+    PyMem_RawFree(edges);
+    return result;
+}
+#endif  /* GC_ENABLE_SCC_CLEAR */
+
 /* Break reference cycles by clearing the containers involved.  This is
  * tricky business as the lists can be changing and we don't know which
  * objects may be freed.  It is possible I screwed something up here.
@@ -1573,12 +2084,52 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
      */
     clear_weakrefs(&final_unreachable);
 
-    /* Call tp_clear on objects in the final_unreachable set.  This will cause
-    * the reference cycles to be broken.  It may also cause some objects
-    * in finalizers to be freed.
-    */
-    stats.collected += gc_list_size(&final_unreachable);
-    delete_garbage(tstate, gcstate, &final_unreachable, old);
+    /* Call tp_clear on enough objects in the final_unreachable set to break
+     * cycles.  This may also cause some objects in finalizers to be freed.
+     */
+    Py_ssize_t final_count = gc_list_size(&final_unreachable);
+    stats.collected += final_count;
+#if GC_ENABLE_SCC_CLEAR
+    if ((gcstate->debug & _PyGC_DEBUG_SAVEALL) == 0) {
+        PyGC_Head to_clear;
+        Py_ssize_t scc_selected = 0;
+        Py_ssize_t scc_edges = 0;
+        int split = move_scc_clear_subset(&final_unreachable, &to_clear,
+                                          &scc_selected, &scc_edges);
+        if (split == SCC_SPLIT_OK) {
+#if GC_DEBUG_SCC_CLEAR
+            PySys_WriteStderr(
+                "gc-scc: final=%zd selected=%zd skipped=%zd edges=%zd\n",
+                final_count, scc_selected, final_count - scc_selected,
+                scc_edges);
+#endif
+            delete_garbage(tstate, gcstate, &to_clear, old);
+
+            /* Conservative prototype fallback: skipped objects should
+             * normally vanish by refcount cascades.  If any remain, use the
+             * old behavior to preserve correctness and avoid leaks.
+             */
+            if (!gc_list_is_empty(&final_unreachable)) {
+#if GC_DEBUG_SCC_CLEAR
+                PySys_WriteStderr(
+                    "gc-scc: survivor fallback for %zd objects\n",
+                    gc_list_size(&final_unreachable));
+#endif
+                delete_garbage(tstate, gcstate, &final_unreachable, old);
+            }
+        }
+        else {
+#if GC_DEBUG_SCC_CLEAR
+            PySys_WriteStderr("gc-scc: split fallback, code=%d\n", split);
+#endif
+            delete_garbage(tstate, gcstate, &final_unreachable, old);
+        }
+    }
+    else
+#endif
+    {
+        delete_garbage(tstate, gcstate, &final_unreachable, old);
+    }
 
     /* Collect statistics on uncollectable objects found and print
      * debugging information. */

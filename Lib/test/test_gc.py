@@ -115,6 +115,52 @@ class GCTests(unittest.TestCase):
         del l
         self.assertEqual(gc.collect(), 2)
 
+    @requires_gil_enabled('SCC-guided clearing is implemented for the GIL GC')
+    @unittest.skipIf(_testcapi is None or not hasattr(_testcapi, 'SccGcNode'),
+                     'requires _testcapi.SccGcNode')
+    def test_scc_clear_self_cycle(self):
+        Node = _testcapi.SccGcNode
+        gc.collect()
+        _testcapi.reset_scc_gc_node_clear_count()
+
+        node = Node()
+        node.next = node
+        del node
+
+        self.assertEqual(gc.collect(), 1)
+        self.assertEqual(_testcapi.get_scc_gc_node_clear_count(), 1)
+
+    @requires_gil_enabled('SCC-guided clearing is implemented for the GIL GC')
+    @unittest.skipIf(_testcapi is None or not hasattr(_testcapi, 'SccGcNode'),
+                     'requires _testcapi.SccGcNode')
+    def test_scc_clear_skips_acyclic_tail(self):
+        Node = _testcapi.SccGcNode
+
+        def make_garbage(tail_len):
+            a = Node()
+            b = Node()
+            a.next = b
+            b.next = a
+            current = b
+            for _ in range(tail_len):
+                node = Node()
+                if current is b:
+                    current.tail = node
+                else:
+                    current.next = node
+                current = node
+
+        tail_len = 25
+        gc.collect()
+        _testcapi.reset_scc_gc_node_clear_count()
+        make_garbage(tail_len)
+
+        total = tail_len + 2
+        self.assertEqual(gc.collect(), total)
+        clear_count = _testcapi.get_scc_gc_node_clear_count()
+        self.assertGreaterEqual(clear_count, 1)
+        self.assertLess(clear_count, total)
+
     def test_class(self):
         class A:
             pass
