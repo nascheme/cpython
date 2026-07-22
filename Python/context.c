@@ -80,6 +80,29 @@ PyContext_New(void)
 
 
 PyObject *
+_PyContext_NewEmptyWithSnapshot(void)
+{
+    PyInterpreterState *interp = _PyInterpreterState_GET();
+    if (!interp->thread_inherit_context_warn) {
+        return PyContext_New();
+    }
+
+    PyContext *snapshot = (PyContext *)PyContext_CopyCurrent();
+    if (snapshot == NULL) {
+        return NULL;
+    }
+
+    PyContext *ctx = context_new_empty();
+    if (ctx == NULL) {
+        Py_DECREF(snapshot);
+        return NULL;
+    }
+    ctx->ctx_starter_snapshot = snapshot;
+    return (PyObject *)ctx;
+}
+
+
+PyObject *
 PyContext_Copy(PyObject * octx)
 {
     ENSURE_Context(octx, NULL)
@@ -298,7 +321,8 @@ PyContextVar_Get(PyObject *ovar, PyObject *def, PyObject **val)
 #endif
 
     assert(PyContext_CheckExact(ts->context));
-    PyHamtObject *vars = ((PyContext *)ts->context)->ctx_vars;
+    PyContext *ctx = (PyContext *)ts->context;
+    PyHamtObject *vars = ctx->ctx_vars;
 
     PyObject *found = NULL;
     int res = _PyHamt_Find(vars, (PyObject*)var, &found);
@@ -315,6 +339,30 @@ PyContextVar_Get(PyObject *ovar, PyObject *def, PyObject **val)
 
         *val = found;
         goto found;
+    }
+
+    PyContext *snapshot = ctx->ctx_starter_snapshot;
+    if (snapshot != NULL) {
+        res = _PyHamt_Find(snapshot->ctx_vars, (PyObject *)var, &found);
+        if (res < 0) {
+            goto error;
+        }
+        if (res == 1) {
+            // Detach the snapshot before warning so that warning machinery
+            // using context variables cannot recursively warn.  This also
+            // means we warn once per thread.
+            ctx->ctx_starter_snapshot = NULL;
+            Py_DECREF(snapshot);
+            if (PyErr_WarnEx(
+                    PyExc_DeprecationWarning,
+                    "threads will inherit context by default in Python 3.16; "
+                    "set thread_inherit_context explicitly to select the "
+                    "behavior now",
+                    1) < 0)
+            {
+                goto error;
+            }
+        }
     }
 
 not_found:
@@ -437,6 +485,7 @@ _context_alloc(void)
 
     ctx->ctx_vars = NULL;
     ctx->ctx_prev = NULL;
+    ctx->ctx_starter_snapshot = NULL;
     ctx->ctx_entered = 0;
     ctx->ctx_weakreflist = NULL;
 
@@ -523,6 +572,7 @@ context_tp_clear(PyObject *op)
     PyContext *self = _PyContext_CAST(op);
     Py_CLEAR(self->ctx_prev);
     Py_CLEAR(self->ctx_vars);
+    Py_CLEAR(self->ctx_starter_snapshot);
     return 0;
 }
 
@@ -532,6 +582,7 @@ context_tp_traverse(PyObject *op, visitproc visit, void *arg)
     PyContext *self = _PyContext_CAST(op);
     Py_VISIT(self->ctx_prev);
     Py_VISIT(self->ctx_vars);
+    Py_VISIT(self->ctx_starter_snapshot);
     return 0;
 }
 
