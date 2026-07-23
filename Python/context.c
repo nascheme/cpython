@@ -56,7 +56,7 @@ static PyContextToken *
 token_new(PyContext *ctx, PyContextVar *var, PyObject *val);
 
 static PyContextVar *
-contextvar_new(PyObject *name, PyObject *def);
+contextvar_new(PyObject *name, PyObject *def, int thread_inherited);
 
 static int
 contextvar_set(PyContextVar *var, PyObject *val);
@@ -82,11 +82,6 @@ PyContext_New(void)
 PyObject *
 _PyContext_NewEmptyWithSnapshot(void)
 {
-    PyInterpreterState *interp = _PyInterpreterState_GET();
-    if (!interp->thread_inherit_context_warn) {
-        return PyContext_New();
-    }
-
     PyContext *snapshot = (PyContext *)PyContext_CopyCurrent();
     if (snapshot == NULL) {
         return NULL;
@@ -292,7 +287,7 @@ PyContextVar_New(const char *name, PyObject *def)
     if (pyname == NULL) {
         return NULL;
     }
-    PyContextVar *var = contextvar_new(pyname, def);
+    PyContextVar *var = contextvar_new(pyname, def, 0);
     Py_DECREF(pyname);
     return (PyObject *)var;
 }
@@ -342,17 +337,23 @@ PyContextVar_Get(PyObject *ovar, PyObject *def, PyObject **val)
     }
 
     PyContext *snapshot = ctx->ctx_starter_snapshot;
-    if (snapshot != NULL) {
+    if (snapshot != NULL &&
+            (var->var_thread_inherited ||
+             (ts->interp->thread_inherit_context_warn &&
+              !ctx->ctx_inherit_warning_issued)))
+    {
         res = _PyHamt_Find(snapshot->ctx_vars, (PyObject *)var, &found);
         if (res < 0) {
             goto error;
         }
         if (res == 1) {
-            // Detach the snapshot before warning so that warning machinery
-            // using context variables cannot recursively warn.  This also
-            // means we warn once per thread.
-            ctx->ctx_starter_snapshot = NULL;
-            Py_DECREF(snapshot);
+            if (var->var_thread_inherited) {
+                *val = found;
+                goto found;
+            }
+            // Mark the warning as issued before calling warning machinery so
+            // that context variable lookups there cannot recursively warn.
+            ctx->ctx_inherit_warning_issued = 1;
             if (PyErr_WarnEx(
                     PyExc_DeprecationWarning,
                     "threads will inherit context by default in Python 3.16; "
@@ -486,6 +487,7 @@ _context_alloc(void)
     ctx->ctx_vars = NULL;
     ctx->ctx_prev = NULL;
     ctx->ctx_starter_snapshot = NULL;
+    ctx->ctx_inherit_warning_issued = 0;
     ctx->ctx_entered = 0;
     ctx->ctx_weakreflist = NULL;
 
@@ -919,7 +921,7 @@ contextvar_generate_hash(void *addr, PyObject *name)
 }
 
 static PyContextVar *
-contextvar_new(PyObject *name, PyObject *def)
+contextvar_new(PyObject *name, PyObject *def, int thread_inherited)
 {
     if (!PyUnicode_Check(name)) {
         PyErr_SetString(PyExc_TypeError,
@@ -934,6 +936,7 @@ contextvar_new(PyObject *name, PyObject *def)
 
     var->var_name = Py_NewRef(name);
     var->var_default = Py_XNewRef(def);
+    var->var_thread_inherited = thread_inherited;
 
 #ifndef Py_GIL_DISABLED
     var->var_cached = NULL;
@@ -978,7 +981,7 @@ contextvar_tp_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         return NULL;
     }
 
-    return (PyObject *)contextvar_new(name, def);
+    return (PyObject *)contextvar_new(name, def, 0);
 }
 
 static int
@@ -1057,6 +1060,28 @@ contextvar_tp_repr(PyObject *op)
 error:
     PyUnicodeWriter_Discard(writer);
     return NULL;
+}
+
+
+/*[clinic input]
+@classmethod
+_contextvars.ContextVar.thread_inherited_var
+    name: object
+    /
+    *
+    default: object = NULL
+
+Create a context variable whose value is inherited by new threads.
+[clinic start generated code]*/
+
+static PyObject *
+_contextvars_ContextVar_thread_inherited_var_impl(PyTypeObject *type,
+                                                  PyObject *name,
+                                                  PyObject *default_value)
+/*[clinic end generated code: output=013cc401beb21f2d input=2f2d251aa5de4c3f]*/
+{
+    assert(type == &PyContextVar_Type);
+    return (PyObject *)contextvar_new(name, default_value, 1);
 }
 
 
@@ -1150,6 +1175,7 @@ static PyMemberDef PyContextVar_members[] = {
 };
 
 static PyMethodDef PyContextVar_methods[] = {
+    _CONTEXTVARS_CONTEXTVAR_THREAD_INHERITED_VAR_METHODDEF
     _CONTEXTVARS_CONTEXTVAR_GET_METHODDEF
     _CONTEXTVARS_CONTEXTVAR_SET_METHODDEF
     _CONTEXTVARS_CONTEXTVAR_RESET_METHODDEF

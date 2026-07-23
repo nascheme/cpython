@@ -45,6 +45,29 @@ Context Variables
    :class:`!ContextVar`\s are :ref:`generic <generics>` over the type of
    their contained value.
 
+   .. classmethod:: ContextVar.thread_inherited_var(name, [*, default])
+
+      Return a new context variable whose binding is inherited by an
+      implicitly empty :class:`threading.Thread` context.  The binding is
+      obtained from the context captured by :meth:`threading.Thread.start`.
+      This allows individual context variables to opt in to thread inheritance
+      when :data:`sys.flags.thread_inherit_context` is false.  A binding in the
+      new thread's context takes precedence, and explicitly supplied thread
+      contexts are unaffected.
+
+      The *name* and *default* parameters have the same meaning as for the
+      :class:`ContextVar` constructor.
+
+      Libraries that also support Python versions without this method can
+      gracefully fall back to creating an ordinary context variable::
+
+          new_context_var = getattr(
+              ContextVar, "thread_inherited_var", ContextVar
+          )
+          var = new_context_var("var")
+
+      .. versionadded:: 3.16
+
    .. attribute:: ContextVar.name
 
       The name of the variable.  This is a read-only property.

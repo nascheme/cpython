@@ -677,9 +677,11 @@ Miscellaneous options
    * :samp:`-X thread_inherit_context={0,1}` causes :class:`~threading.Thread`
      to, by default, use a copy of context of the caller of
      ``Thread.start()`` when starting.  Otherwise, threads will start
-     with an empty context.  If unset, the value of this option defaults
-     to ``1`` on free-threaded builds and to ``0`` otherwise.  On GIL-enabled
-     builds, leaving the option and :envvar:`PYTHON_THREAD_INHERIT_CONTEXT`
+     with an empty context, with bindings for context variables created by
+     :meth:`contextvars.ContextVar.thread_inherited_var` available as lookup
+     fallbacks.  If unset, the value of this option defaults to ``1`` on
+     free-threaded builds and to ``0`` otherwise.  On GIL-enabled builds,
+     leaving the option and :envvar:`PYTHON_THREAD_INHERIT_CONTEXT`
      unset can cause an implicitly empty thread context to emit a
      :exc:`DeprecationWarning` when a context variable lookup would differ
      under inheritance.  In Python 3.16, this option will default to ``1`` on
@@ -1374,9 +1376,12 @@ conflict.
 
    If this variable is set to ``1`` then :class:`~threading.Thread` will,
    by default, use a copy of context of the caller of ``Thread.start()``
-   when starting.  Otherwise, new threads will start with an empty context.
-   If unset, this variable defaults to ``1`` on free-threaded builds and to
-   ``0`` otherwise.  See also :option:`-X thread_inherit_context<-X>`.
+   when starting.  Otherwise, new threads will start with an empty context,
+   with bindings for context variables created by
+   :meth:`contextvars.ContextVar.thread_inherited_var` available as lookup
+   fallbacks.  If unset, this variable defaults to ``1`` on free-threaded
+   builds and to ``0`` otherwise.  See also
+   :option:`-X thread_inherit_context<-X>`.
 
    .. versionadded:: 3.14
 

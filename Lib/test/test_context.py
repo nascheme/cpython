@@ -51,6 +51,22 @@ class ContextTest(unittest.TestCase):
         with self.assertRaises(AttributeError):
             c.name = 'bbb'
 
+        inherited = contextvars.ContextVar.thread_inherited_var('inherited')
+        self.assertIs(type(inherited), contextvars.ContextVar)
+        self.assertEqual(inherited.name, 'inherited')
+
+        inherited_with_default = (
+            contextvars.ContextVar.thread_inherited_var(
+                'inherited_with_default', default=42,
+            )
+        )
+        self.assertEqual(inherited_with_default.get(), 42)
+
+        with self.assertRaises(TypeError):
+            contextvars.ContextVar.thread_inherited_var('var', None)
+        with self.assertRaises(TypeError):
+            contextvars.ContextVar('var', inherit=True)
+
         self.assertNotEqual(hash(c), hash('aaa'))
 
     @isolated_context
@@ -471,11 +487,12 @@ class ContextTest(unittest.TestCase):
     def test_context_thread_inherit_warning(self):
         import threading
 
+        inherited = contextvars.ContextVar.thread_inherited_var("inherited")
         call_default = contextvars.ContextVar("call_default")
         var_default = contextvars.ContextVar("var_default", default="variable")
         missing = contextvars.ContextVar("missing")
         other = contextvars.ContextVar("other")
-        for var in (call_default, var_default, missing, other):
+        for var in (inherited, call_default, var_default, missing, other):
             var.set("starter")
 
         results = []
@@ -489,14 +506,17 @@ class ContextTest(unittest.TestCase):
                     contextvars.Context().run(call_default.get, "nested"),
                     contextvars.copy_context().run(call_default.get, "copy"),
                     call_default.get("argument"),
+                    # The snapshot remains available for selective inheritance
+                    # after the compatibility warning has been emitted.
+                    inherited.get(),
                     var_default.get(),
                 ]
                 try:
                     missing.get()
                 except LookupError:
                     values.append("LookupError")
-                # The snapshot is detached after the first mismatch, including
-                # for repeated lookups and other variables.
+                # The warning is suppressed after the first mismatch,
+                # including for repeated lookups and other variables.
                 values.extend((call_default.get("again"), other.get(None)))
                 results.append((values, caught))
 
@@ -506,8 +526,8 @@ class ContextTest(unittest.TestCase):
 
         values, caught = results[0]
         self.assertEqual(values, [
-            "nested", "copy", "argument", "variable", "LookupError",
-            "again", None,
+            "nested", "copy", "argument", "starter", "variable",
+            "LookupError", "again", None,
         ])
         self.assertEqual(len(caught), 1)
         self.assertIs(caught[0].category, DeprecationWarning)
@@ -524,7 +544,9 @@ class ContextTest(unittest.TestCase):
 
         unbound = contextvars.ContextVar("unbound")
         bound = contextvars.ContextVar("bound")
+        inherited = contextvars.ContextVar.thread_inherited_var("inherited")
         bound.set("starter")
+        inherited.set("starter")
         results = []
 
         def no_starter_binding():
@@ -538,14 +560,29 @@ class ContextTest(unittest.TestCase):
                 bound.set("child")
                 results.append((bound.get(), len(caught)))
 
+        def inherited_binding():
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", DeprecationWarning)
+                starter_value = inherited.get(None)
+                token = inherited.set("child")
+                child_value = inherited.get(None)
+                inherited.reset(token)
+                reset_value = inherited.get(None)
+                results.append((
+                    starter_value, child_value, reset_value, len(caught),
+                ))
+
         def explicit_empty():
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always", DeprecationWarning)
-                results.append((bound.get(None), len(caught)))
+                results.append((
+                    bound.get(None), inherited.get(None), len(caught),
+                ))
 
         threads = [
             threading.Thread(target=no_starter_binding),
             threading.Thread(target=child_binding),
+            threading.Thread(target=inherited_binding),
             threading.Thread(target=explicit_empty,
                              context=contextvars.Context()),
         ]
@@ -553,7 +590,12 @@ class ContextTest(unittest.TestCase):
             thread.start()
             thread.join()
 
-        self.assertEqual(results, [(None, 0), ("child", 0), (None, 0)])
+        self.assertEqual(results, [
+            (None, 0),
+            ("child", 0),
+            ("starter", "child", "starter", 0),
+            (None, None, 0),
+        ])
 
     @threading_helper.requires_working_threading()
     def test_context_thread_inherit_warning_explicitly_disabled(self):
@@ -563,18 +605,20 @@ import threading
 import warnings
 
 var = contextvars.ContextVar('var')
+inherited = contextvars.ContextVar.thread_inherited_var('inherited')
 var.set('starter')
+inherited.set('inherited value')
 result = []
 
 def target():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always', DeprecationWarning)
-        result.append((var.get(None), len(caught)))
+        result.append((var.get(None), inherited.get(None), len(caught)))
 
 thread = threading.Thread(target=target)
 thread.start()
 thread.join()
-assert result == [(None, 0)], result
+assert result == [(None, 'inherited value', 0)], result
 """
         script_helper.assert_python_ok(
             "-X", "thread_inherit_context=0", "-c", code)
@@ -663,13 +707,22 @@ assert result == ['warning'], result
             "-W", "error::DeprecationWarning",
             "-X", "context_aware_warnings=1", "-c", code)
 
+    @isolated_context
     def test_private_empty_context(self):
         import _contextvars
 
+        inherited = contextvars.ContextVar.thread_inherited_var("inherited")
+        not_inherited = contextvars.ContextVar("not_inherited")
+        inherited.set("starter")
+        not_inherited.set("starter")
+
         self.assertFalse(hasattr(contextvars, "_empty_context"))
         ctx = _contextvars._empty_context()
+        inherited.set("changed after snapshot")
+
         self.assertIs(type(ctx), contextvars.Context)
-        self.assertEqual(ctx.run(lambda: "result"), "result")
+        self.assertEqual(dict(ctx), {})
+        self.assertEqual(ctx.run(inherited.get), "starter")
 
     def test_token_contextmanager_with_default(self):
         ctx = contextvars.Context()

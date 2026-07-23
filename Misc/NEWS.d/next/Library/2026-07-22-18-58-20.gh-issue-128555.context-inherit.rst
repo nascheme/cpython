@@ -2,4 +2,7 @@ On GIL-enabled builds, emit a :exc:`DeprecationWarning` when the default
 implicitly empty :class:`threading.Thread` context causes a context variable
 lookup to differ from the context that Python 3.17 will inherit by default.
 Setting ``thread_inherit_context`` or passing an explicit ``context=`` selects
-the desired behavior without a warning.
+the desired behavior without a warning.  Add
+:meth:`contextvars.ContextVar.thread_inherited_var` so individual variables can
+opt in to inheritance when a thread otherwise starts with an implicitly empty
+context.

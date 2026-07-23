@@ -26,8 +26,9 @@ struct _pycontextobject {
     PyHamtObject *ctx_vars;
     PyObject *ctx_weakreflist;
     int ctx_entered;
-    // used to emit warnings about thread_inherit_context
+    // Used for selective inheritance and thread_inherit_context warnings.
     PyContext *ctx_starter_snapshot;
+    char ctx_inherit_warning_issued;
 };
 
 
@@ -35,6 +36,7 @@ struct _pycontextvarobject {
     PyObject_HEAD
     PyObject *var_name;
     PyObject *var_default;
+    char var_thread_inherited;
 #ifndef Py_GIL_DISABLED
     PyObject *var_cached;
     uint64_t var_cached_tsid;
