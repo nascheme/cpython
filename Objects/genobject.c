@@ -1598,6 +1598,41 @@ PyCoro_New(PyFrameObject *f, PyObject *name, PyObject *qualname)
 /* ========= Asynchronous Generators ========= */
 
 
+// Memory ordering of the async generator fields, in the free-threaded build.
+//
+// Only two fields carry a happens-before edge, and each one publishes a
+// specific payload:
+//
+//   gi_frame_state    acquired by the seq_cst CAS on entry to gen_send_ex()
+//                     and _gen_throw(), released by the paired
+//                     FT_ATOMIC_STORE_INT8_RELEASE on exit.  This publishes
+//                     the frame and everything else the generator wrote.
+//
+//   ag_running_async  acquired by the seq_cst CAS in
+//                     async_gen_try_claim_running(), released by the paired
+//                     FT_ATOMIC_STORE_INT8_RELEASE(..., 0).  This publishes
+//                     ag_closed, which is only ever written while the claim
+//                     is held and only ever read after acquiring it.  Using
+//                     release is therefore required: with a relaxed
+//                     store, a thread that claims the generator next could
+//                     miss ag_closed == 1.
+//
+// ags_state/agt_state are not a publication channel.  The rest of the
+// awaitable (ags_gen, ags_sendval, agt_typ, agt_val, agt_tb) is written at
+// construction and never mutated by an operation, so the state field guards
+// no data; a thread that observes RUNNING or CLOSED only raises an error.
+// All of its accesses are therefore relaxed.  They must still be atomic:
+// threads that do not hold the claim write it (the INIT -> CLOSED CAS taken
+// when claiming fails), so a plain access would be a data race.
+//
+// A relaxed load of the state is only a hint.  Every consequential
+// transition goes through a compare-and-set, and an atomic
+// read-modify-write always observes the latest value in the modification
+// order, so a stale load can only make the CAS fail, never succeed wrongly.
+// The one plain store into the state, INIT -> RUNNING once the claim is
+// held, must not become visible before the claim; that is guaranteed by the
+// claim CAS being sequentially consistent, not by the ordering of the store
+// itself.
 typedef enum {
     /* new awaitable, has not yet been iterated */
     AWAITABLE_STATE_INIT,
