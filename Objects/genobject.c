@@ -2525,6 +2525,15 @@ async_gen_athrow_send(PyObject *self, PyObject *arg)
     }
     assert(state == AWAITABLE_STATE_INIT);
 
+    if (arg != Py_None) {
+        // Validate the argument before claiming the generator: this path
+        // does no generator work, so it must not make the claim visible
+        // to other threads.  The awaitable stays in the INIT state and
+        // can be awaited again.
+        PyErr_SetString(PyExc_RuntimeError, NON_INIT_CORO_MSG);
+        return NULL;
+    }
+
     // The generator may be running through another asend()/athrow()
     // object.  Claim it before leaving the INIT state so that SUSPENDED
     // and RUNNING are only ever observable while this object holds the
@@ -2542,14 +2551,6 @@ async_gen_athrow_send(PyObject *self, PyObject *arg)
         FT_ATOMIC_STORE_INT8_RELAXED(o->agt_state, AWAITABLE_STATE_CLOSED);
         FT_ATOMIC_STORE_INT8_RELEASE(o->agt_gen->ag_running_async, 0);
         PyErr_SetNone(PyExc_StopAsyncIteration);
-        return NULL;
-    }
-
-    if (arg != Py_None) {
-        // The awaitable stays in the INIT state and can be awaited
-        // again.
-        FT_ATOMIC_STORE_INT8_RELEASE(o->agt_gen->ag_running_async, 0);
-        PyErr_SetString(PyExc_RuntimeError, NON_INIT_CORO_MSG);
         return NULL;
     }
 

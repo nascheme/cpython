@@ -619,6 +619,33 @@ class AsyncGenTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "coroutine ignored GeneratorExit"):
             gen.close()
 
+    def test_async_gen_athrow_send_non_none(self):
+        # gh-120321: sending a non-None value to a just-started athrow()
+        # awaitable must not claim the generator, so the generator stays
+        # usable and the awaitable can still be awaited afterwards.
+        class MyExc(Exception):
+            pass
+
+        async def agenfn():
+            try:
+                yield 1
+            except MyExc:
+                yield 2
+
+        agen = agenfn()
+        with self.assertRaises(StopIteration):
+            agen.asend(None).send(None)
+
+        gen = agen.athrow(MyExc)
+        with self.assertRaisesRegex(RuntimeError, "non-None value"):
+            gen.send(42)
+        self.assertFalse(agen.ag_running)
+
+        # The awaitable is still in its initial state and works normally.
+        with self.assertRaises(StopIteration) as cm:
+            gen.send(None)
+        self.assertEqual(cm.exception.value, 2)
+
 
 class AsyncGenAsyncioTest(unittest.TestCase):
 
