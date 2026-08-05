@@ -2374,7 +2374,10 @@ async_gen_athrow_send(PyObject *self, PyObject *arg)
     }
 
     if (FRAME_STATE_FINISHED(FT_ATOMIC_LOAD_INT8_RELAXED(gen->gi_frame_state))) {
-        FT_ATOMIC_STORE_INT8_RELAXED(o->agt_state, AWAITABLE_STATE_CLOSED);
+        // Close the awaitable, unless another thread transitioned it
+        // to a different state in the meantime.
+        (void)_Py_ASYNC_GEN_TRY_SET_STATE(o->agt_state, state,
+                                          AWAITABLE_STATE_CLOSED);
         PyErr_SetNone(PyExc_StopIteration);
         return NULL;
     }
