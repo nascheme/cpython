@@ -2458,6 +2458,10 @@ do_send:
     if (o->agt_typ) {
         retval = async_gen_unwrap_value(o->agt_gen, retval);
         if (retval == NULL) {
+            // The operation is complete; close the awaitable so that it
+            // is never observable in the ITER state without holding the
+            // claim on the generator.
+            FT_ATOMIC_STORE_INT8_RELAXED(o->agt_state, AWAITABLE_STATE_CLOSED);
             FT_ATOMIC_STORE_INT8_RELEASE(o->agt_gen->ag_running_async, 0);
         }
         return retval;
