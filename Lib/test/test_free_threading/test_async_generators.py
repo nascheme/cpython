@@ -6,6 +6,13 @@ from test.support import threading_helper
 threading_helper.requires_working_threading(module=True)
 
 
+class YieldOnce:
+    # Awaitable that suspends the async generator exactly once, so that an
+    # asend()/athrow() operation needs more than one send() to complete.
+    def __await__(self):
+        yield
+
+
 class TestFTAsyncGenerators(unittest.TestCase):
     NUM_THREADS = 4
 
@@ -120,6 +127,50 @@ class TestFTAsyncGenerators(unittest.TestCase):
         # The awaitable is closed after the operation completed.
         self.assertRaises(RuntimeError, aw.send, None)
 
+    def test_concurrent_shared_asend_in_progress(self):
+        # Multiple threads racing on a single asend awaitable whose
+        # operation has already started: the generator is suspended inside
+        # an await, so the awaitable holds a claim on the generator across
+        # the suspension.  The value must be delivered to the awaitable
+        # exactly once and must never be handed to an unrelated asend().
+        async def agen():
+            await YieldOnce()
+            yield 'value'
+
+        for _ in range(20):
+            ag = agen()
+            aw = ag.asend(None)
+            # Start the operation; the generator suspends in the await.
+            self.assertIsNone(aw.send(None))
+
+            delivered = []
+            hijacked = []
+
+            def worker():
+                try:
+                    aw.send(None)
+                except StopIteration as e:
+                    delivered.append(e.value)
+                except RuntimeError:
+                    # Another thread is currently driving the awaitable,
+                    # or the operation already completed.
+                    pass
+
+            def hijacker():
+                # An unrelated asend() must never receive the value that
+                # belongs to the in-progress operation.
+                try:
+                    ag.asend(None).send(None)
+                except StopIteration as e:
+                    hijacked.append(e.value)
+                except (RuntimeError, StopAsyncIteration):
+                    pass
+
+            threading_helper.run_concurrently(
+                [worker, worker, worker, hijacker])
+            self.assertEqual(delivered, ['value'])
+            self.assertEqual(hijacked, [])
+
     def test_concurrent_shared_athrow(self):
         # Multiple threads racing on a single athrow awaitable.
         async def agen():
@@ -142,6 +193,53 @@ class TestFTAsyncGenerators(unittest.TestCase):
         self.assertRaises(StopAsyncIteration, ag.asend(None).send, None)
         # The awaitable is closed after the operation completed.
         self.assertRaises(RuntimeError, aw.send, None)
+
+    def test_concurrent_shared_athrow_in_progress(self):
+        # Same as test_concurrent_shared_asend_in_progress, but the
+        # in-progress operation is an athrow(): the exception handler
+        # suspends in an await before the generator yields again.
+        async def agen():
+            try:
+                yield 1
+            except ValueError:
+                await YieldOnce()
+                yield 'value'
+
+        for _ in range(20):
+            ag = agen()
+            with self.assertRaises(StopIteration):
+                ag.asend(None).send(None)  # advance to the first yield
+            aw = ag.athrow(ValueError)
+            # Start the operation; the handler suspends in the await.
+            self.assertIsNone(aw.send(None))
+
+            delivered = []
+            hijacked = []
+
+            def worker():
+                try:
+                    aw.send(None)
+                except StopIteration as e:
+                    delivered.append(e.value)
+                except RuntimeError:
+                    # Another thread is currently driving the awaitable,
+                    # or the operation already completed.
+                    pass
+
+            def hijacker():
+                # An unrelated asend() must never receive the value that
+                # belongs to the in-progress athrow().
+                try:
+                    ag.asend(None).send(None)
+                except StopIteration as e:
+                    hijacked.append(e.value)
+                except (RuntimeError, StopAsyncIteration):
+                    pass
+
+            threading_helper.run_concurrently(
+                [worker, worker, worker, hijacker])
+            self.assertEqual(delivered, ['value'])
+            self.assertEqual(hijacked, [])
 
     def test_concurrent_shared_aclose(self):
         # Multiple threads racing on a single aclose awaitable: the

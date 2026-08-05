@@ -1,0 +1,4 @@
+Resuming an :term:`asynchronous generator`'s ``asend()`` or ``athrow()``
+awaitable while that awaitable is already running, either reentrantly or from
+another thread, now raises :exc:`RuntimeError` instead of :exc:`ValueError`,
+and no longer disturbs the operation that is already in progress.
