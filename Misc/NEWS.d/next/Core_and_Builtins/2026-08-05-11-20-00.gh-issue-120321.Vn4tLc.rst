@@ -1,0 +1,6 @@
+The awaitable returned by an :term:`asynchronous generator`'s
+:meth:`~agen.athrow` method can now only be awaited once, matching
+:meth:`~agen.asend` and :meth:`~agen.aclose`.  Previously, resuming it after
+it had already completed silently resumed the asynchronous generator and
+consumed the value it would have yielded to the next
+:meth:`~agen.__anext__`; it now raises :exc:`RuntimeError`.

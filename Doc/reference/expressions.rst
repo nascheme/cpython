@@ -1432,6 +1432,13 @@ which are used to control the execution of a generator function.
       The second signature \(type\[, value\[, traceback\]\]\) is deprecated and
       may be removed in a future version of Python.
 
+   .. versionchanged:: next
+
+      The returned awaitable can only be awaited once, as is already the case
+      for :meth:`~agen.asend` and :meth:`~agen.aclose`.  Resuming it after it
+      has completed raises :exc:`RuntimeError`; previously it resumed the
+      asynchronous generator again.
+
 .. index:: pair: exception; GeneratorExit
 
 
