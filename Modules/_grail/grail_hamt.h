@@ -1,4 +1,4 @@
-/* Copied from grail-compat src/grail/_c/ by tools/sync_to_proto.py; do not edit here. */
+/* Copied from grail-compat src/grail/_c/ by tools/sync_to_cpython_grail.py; do not edit here. */
 /* Grail's copy of CPython's HAMT (Python/hamt.c), the immutable mapping
  * behind contextvars, used by PMap and PSet.  See grail_hamt.c for the
  * provenance and the differences from upstream.

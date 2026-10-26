@@ -1,4 +1,4 @@
-# Copied from grail-compat tests/ by tools/sync_to_proto.py; do not edit here.
+# Copied from grail-compat tests/ by tools/sync_to_cpython_grail.py; do not edit here.
 """Grail persistent maps and sets: PMap and PSet.
 
 Ported from cpython-proto/Lib/test/test_grail_pds.py.  Backend-agnostic: runs

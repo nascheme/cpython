@@ -1,4 +1,4 @@
-# Copied from grail-compat tests/ by tools/sync_to_proto.py; do not edit here.
+# Copied from grail-compat tests/ by tools/sync_to_cpython_grail.py; do not edit here.
 """Persistent trie vector API, sharing, ownership, and free-threaded access."""
 import collections.abc
 import concurrent.futures

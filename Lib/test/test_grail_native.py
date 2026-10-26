@@ -2,7 +2,7 @@
 
 What Grail does is specified by grail-compat's tests (grail-compat/tests),
 copied into this directory as test_grail.py, test_grail_atom.py and so on by
-grail-compat's tools/sync_to_proto.py; edit them there, not here.  This file
+grail-compat's tools/sync_to_cpython_grail.py; edit them there, not here.  This file
 holds the tests only the native implementation can pass: the generic-dispatch
 caches and their ablation switches, operator dispatch through the interpreter
 for non-record types, allocation-failure cleanup and structural sharing in the

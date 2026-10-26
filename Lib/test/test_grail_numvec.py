@@ -1,4 +1,4 @@
-# Copied from grail-compat tests/ by tools/sync_to_proto.py; do not edit here.
+# Copied from grail-compat tests/ by tools/sync_to_cpython_grail.py; do not edit here.
 """Unboxed FloatVector/IntVector API, buffers, transients and threads."""
 import array
 import collections.abc

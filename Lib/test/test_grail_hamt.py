@@ -1,4 +1,4 @@
-# Copied from grail-compat tests/ by tools/sync_to_proto.py; do not edit here.
+# Copied from grail-compat tests/ by tools/sync_to_cpython_grail.py; do not edit here.
 """The HAMT under PMap: CPython's HAMT tests, run through PMap.
 
 Ported from Lib/test/test_context.py (HamtTest), which drives the trie

@@ -1,4 +1,4 @@
-/* Copied from grail-compat src/grail/_c/ by tools/sync_to_proto.py; do not edit here. */
+/* Copied from grail-compat src/grail/_c/ by tools/sync_to_cpython_grail.py; do not edit here. */
 /* Grail's copy of CPython's HAMT.
 
    Vendored from cpython-proto 58b6a084ae0 Python/hamt.c, which is the

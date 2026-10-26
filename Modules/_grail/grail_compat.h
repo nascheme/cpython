@@ -1,4 +1,4 @@
-/* Copied from grail-compat src/grail/_c/ by tools/sync_to_proto.py; do not edit here. */
+/* Copied from grail-compat src/grail/_c/ by tools/sync_to_cpython_grail.py; do not edit here. */
 /* Portability layer for Grail's native modules.
  *
  * The same sources build two ways:

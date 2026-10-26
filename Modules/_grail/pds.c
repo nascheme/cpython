@@ -1,4 +1,4 @@
-/* Copied from grail-compat src/grail/_c/ by tools/sync_to_proto.py; do not edit here. */
+/* Copied from grail-compat src/grail/_c/ by tools/sync_to_cpython_grail.py; do not edit here. */
 /* Grail persistent maps and sets over a copy of CPython's immutable HAMT
  * (grail_hamt.c, the trie behind contextvars).
  * Builders and bulk construction update nodes in place while the builder's

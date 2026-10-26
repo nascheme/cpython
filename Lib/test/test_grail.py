@@ -1,4 +1,4 @@
-# Copied from grail-compat tests/ by tools/sync_to_proto.py; do not edit here.
+# Copied from grail-compat tests/ by tools/sync_to_cpython_grail.py; do not edit here.
 """Semantic tests for Grail, shared by the native runtime and the shim.
 
 Runs against whichever ``grail`` is importable: the native prototype

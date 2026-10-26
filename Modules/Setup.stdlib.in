@@ -37,7 +37,7 @@ _grail_atom _grail_atom.c
 _grail_vector _grail_vector.c
 _grail_numvec _grail_numvec.c
 # Built into the interpreter, like the core HAMT it was forked from.  The
-# sources in _grail/ are copied from grail-compat (tools/sync_to_proto.py).
+# sources in _grail/ are copied from grail-compat (tools/sync_to_cpython_grail.py).
 *static*
 _grail_pds _grail/pds.c _grail/grail_hamt.c -DPy_BUILD_CORE
 *@MODULE_BUILDTYPE@*
