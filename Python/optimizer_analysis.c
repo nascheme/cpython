@@ -26,6 +26,7 @@
 #include "pycore_optimizer.h"
 #include "pycore_object.h"
 #include "pycore_function.h"
+#include "pycore_grail.h"         // _PyGrail_IsPositionalRecordCall()
 #include "pycore_uop_ids.h"
 #include "pycore_range.h"
 #include "pycore_unicodeobject.h"
@@ -611,6 +612,25 @@ _Py_opt_assert_within_stack_bounds(
 #else
 #define ASSERT_WITHIN_STACK_BOUNDS(F, L) (void)0
 #endif
+
+/* Fold Grail generic and operator dispatch into constants guarded by
+ * executor invalidation. PYTHON_GRAIL_JIT_FOLD_DISPATCH=0 disables it, as an
+ * ablation (use a fresh process for each setting). */
+static int
+grail_fold_dispatch(void)
+{
+    const char *value = Py_GETENV("PYTHON_GRAIL_JIT_FOLD_DISPATCH");
+    return value == NULL || strcmp(value, "0") != 0;
+}
+
+/* Type record field loads from their plans when the record's type is known
+ * (_LOAD_ATTR_RECORD_TYPED). PYTHON_GRAIL_JIT_TYPED_FIELDS=0 disables it. */
+static int
+grail_typed_fields(void)
+{
+    const char *value = Py_GETENV("PYTHON_GRAIL_JIT_TYPED_FIELDS");
+    return value == NULL || strcmp(value, "0") != 0;
+}
 
 /* >0 (length) for success, 0 for not ready, clears all possible errors. */
 static int

@@ -297,6 +297,9 @@ Known values:
     Python 3.15a8 3664 (Fix __qualname__ for __annotate__ functions)
     Python 3.15a8 3665 (Add FOR_ITER_VIRTUAL and GET_ITER specializations)
     Python 3.15b1 3666 (Add SEND_VIRTUAL and SEND_ASYNC_GEN specializations)
+    Grail prototype 3667 (Add GRAIL_BINARY_CHECK; renumbers opcodes)
+    Grail prototype 3668 (Remove GRAIL_BINARY_CHECK; renumbers opcodes)
+    Grail prototype 3669 (Add MATCH_CLASS inline cache and MATCH_CLASS_RECORD)
 
 
     Python 3.16 will start with 3700
@@ -310,7 +313,7 @@ PC/launcher.c must also be updated.
 
 */
 
-#define PYC_MAGIC_NUMBER 3666
+#define PYC_MAGIC_NUMBER 3669
 /* This is equivalent to converting PYC_MAGIC_NUMBER to 2 bytes
    (little-endian) and then appending b'\r\n'. */
 #define PYC_MAGIC_NUMBER_TOKEN \

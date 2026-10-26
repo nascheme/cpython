@@ -1927,6 +1927,7 @@ class SizeofTest(unittest.TestCase):
                   '10P'                 # PySequenceMethods
                   '2P'                  # PyBufferProcs
                   '7P'
+                  'P'                   # Grail record schema
                   '1PIP2I'              # Specializer cache
                   + typeid              # heap type id (free-threaded only)
                   )

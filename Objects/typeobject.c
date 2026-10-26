@@ -4504,6 +4504,7 @@ type_new_alloc(type_new_ctx *ctx)
     et->ht_module = NULL;
     et->_ht_tpname = NULL;
     et->ht_token = NULL;
+    et->_ht_grail_schema = NULL;
 
 #ifdef Py_GIL_DISABLED
     et->unique_id = _PyObject_AssignUniqueId((PyObject *)et);
@@ -7112,6 +7113,7 @@ type_dealloc(PyObject *self)
         _PyDictKeys_DecRef(et->ht_cached_keys);
     }
     Py_XDECREF(et->ht_module);
+    Py_XDECREF(et->_ht_grail_schema);
     PyMem_Free(et->_ht_tpname);
 #ifdef Py_GIL_DISABLED
     assert(et->unique_id == _Py_INVALID_UNIQUE_ID);
@@ -7290,6 +7292,7 @@ type_traverse(PyObject *self, visitproc visit, void *arg)
     Py_VISIT(type->tp_bases);
     Py_VISIT(type->tp_base);
     Py_VISIT(((PyHeapTypeObject *)type)->ht_module);
+    Py_VISIT(((PyHeapTypeObject *)type)->_ht_grail_schema);
 
     /* There's no need to visit others because they can't be involved
        in cycles:
@@ -7345,6 +7348,7 @@ type_clear(PyObject *self)
         PyDict_Clear(dict);
     }
     Py_CLEAR(((PyHeapTypeObject *)type)->ht_module);
+    Py_CLEAR(((PyHeapTypeObject *)type)->_ht_grail_schema);
 
     Py_CLEAR(type->tp_mro);
 

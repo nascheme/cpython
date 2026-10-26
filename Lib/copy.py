@@ -53,6 +53,11 @@ import types
 import weakref
 from copyreg import dispatch_table
 
+try:
+    from _grail import _deepcopy_is_self
+except ImportError:
+    _deepcopy_is_self = None
+
 class Error(Exception):
     pass
 error = Error   # backward compatibility
@@ -128,6 +133,9 @@ def deepcopy(x, memo=None):
     copier = _deepcopy_dispatch.get(cls)
     if copier is not None:
         y = copier(x, memo)
+    elif _deepcopy_is_self is not None and _deepcopy_is_self(x):
+        # Conforming Grail value record, as its __deepcopy__ would return.
+        return x
     else:
         if issubclass(cls, type):
             y = x # atomic copy
@@ -298,3 +306,8 @@ def replace(obj, /, **changes):
     if func is None:
         raise TypeError(f"replace() does not support {cls.__name__} objects")
     return func(obj, **changes)
+
+try:
+    from _grail import replace
+except ImportError:
+    pass

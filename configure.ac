@@ -7544,6 +7544,7 @@ SRCDIRS="\
   Modules/_ctypes \
   Modules/_decimal \
   Modules/_decimal/libmpdec \
+  Modules/_grail \
   Modules/_hacl \
   Modules/_io \
   Modules/_multiprocessing \

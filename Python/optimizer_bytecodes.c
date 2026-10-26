@@ -2,6 +2,7 @@
 #include "pycore_long.h"
 #include "pycore_opcode_utils.h"
 #include "pycore_optimizer.h"
+#include "pycore_grail.h"
 #include "pycore_typeobject.h"
 #include "pycore_uops.h"
 #include "pycore_uop_ids.h"
@@ -676,6 +677,56 @@ dummy_func(void) {
         new_frame = PyJitRef_WrapInvalid(f);
     }
 
+    op(_GRAIL_BINARY_CHECK_FUNC, (func_version/2, left, right -- left, right, impl)) {
+        PyTypeObject *left_type = sym_get_probable_type(left);
+        PyTypeObject *right_type = sym_get_probable_type(right);
+        PyObject *impl_o = NULL;
+        if (left_type != NULL && right_type != NULL) {
+            // The guard admits only an implementation with func_version,
+            // whose code is the one the trace followed.
+            impl_o = _PyGrail_BinaryOpLookup(left_type, right_type, oparg);
+            if (impl_o != NULL && !(PyFunction_Check(impl_o) &&
+                ((PyFunctionObject *)impl_o)->func_version == func_version)) {
+                impl_o = NULL;
+            }
+        }
+        bool left_known = sym_get_type(left) == left_type;
+        bool right_known = sym_get_type(right) == right_type;
+        // Fold only when the trace already knows both types: new type
+        // guards fail at sites where several operand types share one
+        // implementation, which the func_version check accepts.
+        if (impl_o != NULL && grail_fold_dispatch() && left_known && right_known) {
+            // Constant for these operand types: registration invalidates
+            // the executor.
+            ADD_OP(_GRAIL_BINARY_LOAD_IMPL, oparg, (uintptr_t)impl_o);
+            _Py_BloomFilter_Add(dependencies, _PyGrail_BinaryOpGeneric(oparg));
+            _Py_BloomFilter_Add(dependencies, impl_o);
+            impl = sym_new_const(ctx, impl_o);
+        }
+        else {
+            impl = sym_new_not_null(ctx);
+            if (impl_o != NULL) {
+                sym_set_recorded_value(impl, impl_o);
+            }
+        }
+    }
+
+    op(_GRAIL_BINARY_INIT_CALL, (left, right, impl -- new_frame)) {
+        _Py_UOpsAbstractFrame *f = frame_new_from_symbol(ctx, impl, NULL, 0);
+        if (f == NULL) {
+            break;
+        }
+        f->locals[0] = left;
+        f->locals[1] = right;
+        new_frame = PyJitRef_WrapInvalid(f);
+    }
+
+    op(_GRAIL_BINARY_KERNEL, (left, right -- res, l, r)) {
+        res = sym_new_not_null(ctx);
+        l = left;
+        r = right;
+    }
+
     op(_BINARY_OP_PY_CHECK_FUNC, (type_version/2, func_version/2, left, right -- left, right, func)) {
         PyTypeObject *tp = sym_get_probable_type(left);
         PyTypeObject *rtp = sym_get_probable_type(right);
@@ -685,6 +736,7 @@ dummy_func(void) {
         PyTypeObject *owner = reflected ? rtp : tp;
         if (tp != NULL && rtp != NULL && owner->tp_version_tag == type_version &&
             (reflected || rtp == tp || !PyType_IsSubtype(rtp, tp)) &&
+            _PyGrail_BinaryOpLookup(tp, rtp, oparg) == NULL &&
             (tp->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(tp)) &&
             (rtp->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(rtp))) {
             PyObject *name = reflected
@@ -710,6 +762,11 @@ dummy_func(void) {
                 sym_set_type_version(right, rtp->tp_version_tag);
             }
             watch_type(owner, dependencies);
+            PyObject *generic = _PyGrail_BinaryOpGeneric(oparg);
+            if (generic != NULL) {
+                // A registration for the pair would take precedence.
+                _Py_BloomFilter_Add(dependencies, generic);
+            }
             _Py_BloomFilter_Add(dependencies, func_o);
             ADD_OP(_BINARY_OP_PY_LOAD_FUNC, oparg, (uintptr_t)func_o);
             func = sym_new_const(ctx, func_o);
@@ -1243,6 +1300,37 @@ dummy_func(void) {
         o = owner;
     }
 
+    op(_LOAD_ATTR_RECORD, (index/1, owner -- attr, o)) {
+        PyTypeObject *type = sym_get_type(owner);
+        PyTypeObject *field_type = NULL;
+        if (type != NULL && grail_typed_fields()) {
+            field_type = _PyGrail_ConformingFieldType(type, index);
+        }
+        if (field_type != NULL) {
+            // Exits unless the instance conforms, so the field has its
+            // plan's exact type. Record types are frozen.
+            REPLACE_OP(this_instr, _LOAD_ATTR_RECORD_TYPED, oparg, index);
+            attr = sym_new_type(ctx, field_type);
+            if (_PyGrail_IsRecordTypeFast(field_type) &&
+                field_type->tp_version_tag != 0) {
+                sym_set_type_version(attr, field_type->tp_version_tag);
+                watch_type(field_type, dependencies);
+            }
+        }
+        else {
+            attr = sym_new_not_null(ctx);
+        }
+        o = owner;
+    }
+
+    op(_LOAD_ATTR_RECORD_TYPED, (index/1, owner -- attr, o)) {
+        PyTypeObject *type = sym_get_type(owner);
+        PyTypeObject *field_type = type != NULL ?
+            _PyGrail_ConformingFieldType(type, index) : NULL;
+        attr = field_type != NULL ? sym_new_type(ctx, field_type) : sym_new_not_null(ctx);
+        o = owner;
+    }
+
     op(_LOAD_ATTR_SLOT, (index/1, owner -- attr, o)) {
         attr = sym_new_not_null(ctx);
         (void)index;
@@ -1393,6 +1481,65 @@ dummy_func(void) {
         // Guarded on this, so it can be promoted.
         sym_set_const(callable, func);
         _Py_BloomFilter_Add(dependencies, func);
+    }
+
+    op(_GRAIL_CALL_GENERIC_SELECT_TIER_TWO, (func_version/2, callable, self_or_null, args[oparg] -- callable, self_or_null, args[oparg])) {
+        // The recorder is the first uop of the same CALL_GENERIC.
+        PyObject *impl = NULL;
+        for (_PyUOpInstruction *prev = this_instr - 1;
+             prev >= trace && prev >= this_instr - 3; prev--) {
+            if (prev->opcode == _RECORD_GRAIL_GENERIC_IMPL) {
+                impl = (PyObject *)prev->operand0;
+                break;
+            }
+        }
+        if (impl != NULL && !(PyFunction_Check(impl) &&
+            _PyFunction_IsVersionValid(((PyFunctionObject *)impl)->func_version))) {
+            impl = NULL;
+        }
+        PyObject *generic = sym_get_const(ctx, callable);
+        PyTypeObject *arg_type = sym_get_type(args[0]);
+        unsigned int type_version = 0;
+        if (arg_type == NULL) {
+            arg_type = sym_get_probable_type(args[0]);
+            type_version = arg_type != NULL ? arg_type->tp_version_tag : 0;
+        }
+        PyObject *folded = NULL;
+        // As for operators, fold only for a type the trace already knows.
+        if (impl != NULL && generic != NULL && arg_type != NULL &&
+            type_version == 0 && grail_fold_dispatch()) {
+            folded = _PyGrail_GenericExactSelect(generic, arg_type);
+            if (folded != NULL && !(PyFunction_Check(folded) &&
+                ((PyFunctionObject *)folded)->func_version ==
+                ((PyFunctionObject *)impl)->func_version)) {
+                folded = NULL;
+            }
+        }
+        if (folded != NULL) {
+            // A constant selection: register/override invalidates the
+            // executor, so only the argument's type needs a check.
+            ADD_OP(_GRAIL_CALL_GENERIC_FOLDED, oparg, type_version);
+            uop_buffer_last(&ctx->out_buffer)->operand1 = (uintptr_t)folded;
+            _Py_BloomFilter_Add(dependencies, generic);
+            _Py_BloomFilter_Add(dependencies, folded);
+            if (type_version != 0) {
+                sym_set_type(args[0], arg_type);
+                sym_set_type_version(args[0], type_version);
+                watch_type(arg_type, dependencies);
+            }
+            callable = sym_new_const(ctx, folded);
+        }
+        else if (impl != NULL) {
+            // Guard on the version of the implementation the trace followed.
+            REPLACE_OP(this_instr, _GRAIL_CALL_GENERIC_SELECT_TIER_TWO, oparg,
+                       ((PyFunctionObject *)impl)->func_version);
+            callable = sym_new_not_null(ctx);
+            sym_set_recorded_value(callable, impl);
+            _Py_BloomFilter_Add(dependencies, impl);
+        }
+        else {
+            callable = sym_new_not_null(ctx);
+        }
     }
 
     op(_CHECK_FUNCTION_VERSION_KW, (func_version/2, callable, unused, unused[oparg], unused -- callable, unused, unused[oparg], unused)) {
@@ -2734,6 +2881,27 @@ dummy_func(void) {
         }
     }
 
+    op(_GUARD_CALLABLE_RECORD, (callable, self_or_null, unused[oparg] -- callable, self_or_null, unused[oparg])) {
+        PyObject *type = sym_get_const(ctx, callable);
+        if (type != NULL && sym_is_null(self_or_null) &&
+            _PyGrail_IsPositionalRecordCall(type, oparg)) {
+            // Record types are immutable and their schema is frozen, so the
+            // check holds on every execution with this callable.
+            ADD_OP(_NOP, 0, 0);
+        }
+    }
+
+    op(_CALL_RECORD, (callable, null, args[oparg] -- res, c)) {
+        PyObject *type = sym_get_const(ctx, callable);
+        if (type != NULL && PyType_Check(type)) {
+            res = sym_new_type(ctx, (PyTypeObject *)type);
+        }
+        else {
+            res = sym_new_not_null(ctx);
+        }
+        c = callable;
+    }
+
     op(_CALL_LEN, (callable, null, arg -- res, a, c)) {
         res = sym_new_type(ctx, &PyLong_Type);
         Py_ssize_t length = sym_tuple_length(arg);
@@ -2978,6 +3146,13 @@ dummy_func(void) {
     }
 
     op(_MATCH_CLASS, (subject, type, names -- attrs, s, tp, n)) {
+        attrs = sym_new_not_null(ctx);
+        s = subject;
+        tp = type;
+        n = names;
+    }
+
+    op(_MATCH_CLASS_RECORD, (subject, type, names -- attrs, s, tp, n)) {
         attrs = sym_new_not_null(ctx);
         s = subject;
         tp = type;

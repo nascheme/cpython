@@ -878,6 +878,8 @@ interpreter_clear(PyInterpreterState *interp, PyThreadState *tstate)
 
     Py_CLEAR(interp->sysdict_copy);
     Py_CLEAR(interp->builtins_copy);
+    _Py_atomic_store_int_release(&interp->grail_operators_active, 0);
+    Py_CLEAR(interp->grail_operators);
     Py_CLEAR(interp->dict);
 #ifdef HAVE_FORK
     Py_CLEAR(interp->before_forkers);

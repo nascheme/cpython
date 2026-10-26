@@ -33,6 +33,8 @@ extern "C" {
 #  define Py_pycfunctionobject_MAXFREELIST 16
 #  define Py_pycmethodobject_MAXFREELIST 16
 #  define Py_pymethodobjects_MAXFREELIST 20
+#  define Py_grail_records_MAXSAVESIZE 10   // Largest record (fields) to save
+#  define Py_grail_records_MAXFREELIST 100  // Records of each size to save
 
 // A generic freelist of either PyObjects or other data structures.
 struct _Py_freelist {
@@ -70,6 +72,8 @@ struct _Py_freelists {
     struct _Py_freelist pycfunctionobject;
     struct _Py_freelist pycmethodobject;
     struct _Py_freelist pymethodobjects;
+    // Indexed by field count; entries have type _PyGrail_FreeRecord_Type.
+    struct _Py_freelist grail_records[Py_grail_records_MAXSAVESIZE + 1];
 };
 
 #ifdef __cplusplus

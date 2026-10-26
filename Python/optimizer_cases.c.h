@@ -1378,6 +1378,96 @@
             break;
         }
 
+        case _GRAIL_BINARY_CHECK_FUNC: {
+            JitOptRef right;
+            JitOptRef left;
+            JitOptRef impl;
+            right = stack_pointer[-1];
+            left = stack_pointer[-2];
+            uint32_t func_version = (uint32_t)this_instr->operand0;
+            PyTypeObject *left_type = sym_get_probable_type(left);
+            PyTypeObject *right_type = sym_get_probable_type(right);
+            PyObject *impl_o = NULL;
+            if (left_type != NULL && right_type != NULL) {
+                impl_o = _PyGrail_BinaryOpLookup(left_type, right_type, oparg);
+                if (impl_o != NULL && !(PyFunction_Check(impl_o) &&
+                                    ((PyFunctionObject *)impl_o)->func_version == func_version)) {
+                    impl_o = NULL;
+                }
+            }
+            bool left_known = sym_get_type(left) == left_type;
+            bool right_known = sym_get_type(right) == right_type;
+            if (impl_o != NULL && grail_fold_dispatch() && left_known && right_known) {
+                ADD_OP(_GRAIL_BINARY_LOAD_IMPL, oparg, (uintptr_t)impl_o);
+                _Py_BloomFilter_Add(dependencies, _PyGrail_BinaryOpGeneric(oparg));
+                _Py_BloomFilter_Add(dependencies, impl_o);
+                impl = sym_new_const(ctx, impl_o);
+            }
+            else {
+                impl = sym_new_not_null(ctx);
+                if (impl_o != NULL) {
+                    sym_set_recorded_value(impl, impl_o);
+                }
+            }
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[0] = impl;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _GRAIL_BINARY_LOAD_IMPL: {
+            JitOptRef impl;
+            impl = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[0] = impl;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _GRAIL_BINARY_INIT_CALL: {
+            JitOptRef impl;
+            JitOptRef right;
+            JitOptRef left;
+            JitOptRef new_frame;
+            impl = stack_pointer[-1];
+            right = stack_pointer[-2];
+            left = stack_pointer[-3];
+            _Py_UOpsAbstractFrame *f = frame_new_from_symbol(ctx, impl, NULL, 0);
+            if (f == NULL) {
+                break;
+            }
+            f->locals[0] = left;
+            f->locals[1] = right;
+            new_frame = PyJitRef_WrapInvalid(f);
+            CHECK_STACK_BOUNDS(-2);
+            stack_pointer[-3] = new_frame;
+            stack_pointer += -2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _GRAIL_BINARY_KERNEL: {
+            JitOptRef right;
+            JitOptRef left;
+            JitOptRef res;
+            JitOptRef l;
+            JitOptRef r;
+            right = stack_pointer[-1];
+            left = stack_pointer[-2];
+            res = sym_new_not_null(ctx);
+            l = left;
+            r = right;
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-2] = res;
+            stack_pointer[-1] = l;
+            stack_pointer[0] = r;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
         case _GUARD_NOS_OBJ_TYPE_VERSION: {
             break;
         }
@@ -1420,6 +1510,7 @@
             PyTypeObject *owner = reflected ? rtp : tp;
             if (tp != NULL && rtp != NULL && owner->tp_version_tag == type_version &&
                 (reflected || rtp == tp || !PyType_IsSubtype(rtp, tp)) &&
+                _PyGrail_BinaryOpLookup(tp, rtp, oparg) == NULL &&
                 (tp->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(tp)) &&
                 (rtp->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(rtp))) {
                 PyObject *name = reflected
@@ -1442,6 +1533,10 @@
                     sym_set_type_version(right, rtp->tp_version_tag);
                 }
                 watch_type(owner, dependencies);
+                PyObject *generic = _PyGrail_BinaryOpGeneric(oparg);
+                if (generic != NULL) {
+                    _Py_BloomFilter_Add(dependencies, generic);
+                }
                 _Py_BloomFilter_Add(dependencies, func_o);
                 ADD_OP(_BINARY_OP_PY_LOAD_FUNC, oparg, (uintptr_t)func_o);
                 func = sym_new_const(ctx, func_o);
@@ -2356,6 +2451,22 @@
             break;
         }
 
+        case _GUARD_TOS_MATCHED_RECORD: {
+            break;
+        }
+
+        case _UNPACK_SEQUENCE_RECORD: {
+            JitOptRef *values;
+            values = &stack_pointer[-1];
+            for (int _i = oparg; --_i >= 0;) {
+                values[_i] = sym_new_not_null(ctx);
+            }
+            CHECK_STACK_BOUNDS(-1 + oparg);
+            stack_pointer += -1 + oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
         case _UNPACK_SEQUENCE_TUPLE: {
             JitOptRef seq;
             JitOptRef *values;
@@ -3031,6 +3142,58 @@
             uint16_t index = (uint16_t)this_instr->operand0;
             attr = sym_new_not_null(ctx);
             (void)index;
+            o = owner;
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-1] = attr;
+            stack_pointer[0] = o;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _LOAD_ATTR_RECORD: {
+            JitOptRef owner;
+            JitOptRef attr;
+            JitOptRef o;
+            owner = stack_pointer[-1];
+            uint16_t index = (uint16_t)this_instr->operand0;
+            PyTypeObject *type = sym_get_type(owner);
+            PyTypeObject *field_type = NULL;
+            if (type != NULL && grail_typed_fields()) {
+                field_type = _PyGrail_ConformingFieldType(type, index);
+            }
+            if (field_type != NULL) {
+                REPLACE_OP(this_instr, _LOAD_ATTR_RECORD_TYPED, oparg, index);
+                attr = sym_new_type(ctx, field_type);
+                if (_PyGrail_IsRecordTypeFast(field_type) &&
+                    field_type->tp_version_tag != 0) {
+                    sym_set_type_version(attr, field_type->tp_version_tag);
+                    stack_pointer[-1] = attr;
+                    watch_type(field_type, dependencies);
+                }
+            }
+            else {
+                attr = sym_new_not_null(ctx);
+            }
+            o = owner;
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-1] = attr;
+            stack_pointer[0] = o;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _LOAD_ATTR_RECORD_TYPED: {
+            JitOptRef owner;
+            JitOptRef attr;
+            JitOptRef o;
+            owner = stack_pointer[-1];
+            uint16_t index = (uint16_t)this_instr->operand0;
+            PyTypeObject *type = sym_get_type(owner);
+            PyTypeObject *field_type = type != NULL ?
+            _PyGrail_ConformingFieldType(type, index) : NULL;
+            attr = field_type != NULL ? sym_new_type(ctx, field_type) : sym_new_not_null(ctx);
             o = owner;
             CHECK_STACK_BOUNDS(1);
             stack_pointer[-1] = attr;
@@ -3930,6 +4093,35 @@
             break;
         }
 
+        case _GUARD_MATCH_CLASS_RECORD: {
+            break;
+        }
+
+        case _MATCH_CLASS_RECORD: {
+            JitOptRef names;
+            JitOptRef type;
+            JitOptRef subject;
+            JitOptRef attrs;
+            JitOptRef s;
+            JitOptRef tp;
+            JitOptRef n;
+            names = stack_pointer[-1];
+            type = stack_pointer[-2];
+            subject = stack_pointer[-3];
+            attrs = sym_new_not_null(ctx);
+            s = subject;
+            tp = type;
+            n = names;
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-3] = attrs;
+            stack_pointer[-2] = s;
+            stack_pointer[-1] = tp;
+            stack_pointer[0] = n;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
         case _MATCH_MAPPING: {
             JitOptRef res;
             res = sym_new_not_null(ctx);
@@ -4713,6 +4905,74 @@
             break;
         }
 
+        /* _GRAIL_CALL_GENERIC_SELECT is not a viable micro-op for tier 2 */
+
+        case _GRAIL_CALL_GENERIC_SELECT_TIER_TWO: {
+            JitOptRef *args;
+            JitOptRef callable;
+            args = &stack_pointer[-oparg];
+            callable = stack_pointer[-2 - oparg];
+            uint32_t func_version = (uint32_t)this_instr->operand0;
+            PyObject *impl = NULL;
+            for (_PyUOpInstruction *prev = this_instr - 1;
+             prev >= trace && prev >= this_instr - 3; prev--) {
+                if (prev->opcode == _RECORD_GRAIL_GENERIC_IMPL) {
+                    impl = (PyObject *)prev->operand0;
+                    break;
+                }
+            }
+            if (impl != NULL && !(PyFunction_Check(impl) &&
+                              _PyFunction_IsVersionValid(((PyFunctionObject *)impl)->func_version))) {
+                impl = NULL;
+            }
+            PyObject *generic = sym_get_const(ctx, callable);
+            PyTypeObject *arg_type = sym_get_type(args[0]);
+            unsigned int type_version = 0;
+            if (arg_type == NULL) {
+                arg_type = sym_get_probable_type(args[0]);
+                type_version = arg_type != NULL ? arg_type->tp_version_tag : 0;
+            }
+            PyObject *folded = NULL;
+            if (impl != NULL && generic != NULL && arg_type != NULL &&
+                type_version == 0 && grail_fold_dispatch()) {
+                folded = _PyGrail_GenericExactSelect(generic, arg_type);
+                if (folded != NULL && !(PyFunction_Check(folded) &&
+                                    ((PyFunctionObject *)folded)->func_version ==
+                                    ((PyFunctionObject *)impl)->func_version)) {
+                    folded = NULL;
+                }
+            }
+            if (folded != NULL) {
+                ADD_OP(_GRAIL_CALL_GENERIC_FOLDED, oparg, type_version);
+                uop_buffer_last(&ctx->out_buffer)->operand1 = (uintptr_t)folded;
+                _Py_BloomFilter_Add(dependencies, generic);
+                _Py_BloomFilter_Add(dependencies, folded);
+                if (type_version != 0) {
+                    sym_set_type(args[0], arg_type);
+                    sym_set_type_version(args[0], type_version);
+                    watch_type(arg_type, dependencies);
+                }
+                callable = sym_new_const(ctx, folded);
+            }
+            else if (impl != NULL) {
+                REPLACE_OP(this_instr, _GRAIL_CALL_GENERIC_SELECT_TIER_TWO, oparg,
+                       ((PyFunctionObject *)impl)->func_version);
+                callable = sym_new_not_null(ctx);
+                sym_set_recorded_value(callable, impl);
+                stack_pointer[-2 - oparg] = callable;
+                _Py_BloomFilter_Add(dependencies, impl);
+            }
+            else {
+                callable = sym_new_not_null(ctx);
+            }
+            stack_pointer[-2 - oparg] = callable;
+            break;
+        }
+
+        case _GRAIL_CALL_GENERIC_FOLDED: {
+            break;
+        }
+
         case _GUARD_NOS_NULL: {
             JitOptRef null;
             null = stack_pointer[-2];
@@ -4942,6 +5202,40 @@
             callable = stack_pointer[-2 - oparg];
             callable = sym_new_not_null(ctx);
             stack_pointer[-2 - oparg] = callable;
+            break;
+        }
+
+        case _GUARD_CALLABLE_RECORD: {
+            JitOptRef self_or_null;
+            JitOptRef callable;
+            self_or_null = stack_pointer[-1 - oparg];
+            callable = stack_pointer[-2 - oparg];
+            PyObject *type = sym_get_const(ctx, callable);
+            if (type != NULL && sym_is_null(self_or_null) &&
+                _PyGrail_IsPositionalRecordCall(type, oparg)) {
+                ADD_OP(_NOP, 0, 0);
+            }
+            break;
+        }
+
+        case _CALL_RECORD: {
+            JitOptRef callable;
+            JitOptRef res;
+            JitOptRef c;
+            callable = stack_pointer[-2 - oparg];
+            PyObject *type = sym_get_const(ctx, callable);
+            if (type != NULL && PyType_Check(type)) {
+                res = sym_new_type(ctx, (PyTypeObject *)type);
+            }
+            else {
+                res = sym_new_not_null(ctx);
+            }
+            c = callable;
+            CHECK_STACK_BOUNDS(-oparg);
+            stack_pointer[-2 - oparg] = res;
+            stack_pointer[-1 - oparg] = c;
+            stack_pointer += -oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
             break;
         }
 
@@ -6394,6 +6688,10 @@
             JitOptRef func;
             func = stack_pointer[-2 - oparg];
             sym_set_recorded_value(func, (PyObject *)this_instr->operand0);
+            break;
+        }
+
+        case _RECORD_GRAIL_GENERIC_IMPL: {
             break;
         }
 

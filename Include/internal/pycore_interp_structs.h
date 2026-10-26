@@ -933,6 +933,23 @@ struct _is {
 
     PyObject *dict;  /* Stores per-interpreter state */
 
+    /* Published once by Grail configuration; retained until interpreter clear.
+       The monotonic atomic flag guards builtin arithmetic specializations. */
+    PyObject *grail_operators;
+    int grail_operators_active;
+    /* PYTHON_GRAIL_RECORD_MATCH=0: class patterns on records take the
+       generic __match_args__/getattr path. */
+    int grail_record_match_off;
+    /* PYTHON_GRAIL_NATIVE_HOOKS=0: record hash/== always call their hooks. */
+    int grail_native_hooks_off;
+    /* PYTHON_GRAIL_REPLACE_CHANGED_ONLY=0: copy.replace checks every field's
+       conformance, not only the replaced ones. */
+    int grail_replace_check_all;
+    /* PYTHON_GRAIL_RECORD_FREELIST=0: freed records are not kept for reuse. */
+    int grail_record_freelist_off;
+    /* Monotonic native ABC registration epoch for Grail resolution guards. */
+    uint64_t grail_abc_epoch;
+
     PyObject *sysdict_copy;
     PyObject *builtins_copy;
     // Initialized to _PyEval_EvalFrameDefault().

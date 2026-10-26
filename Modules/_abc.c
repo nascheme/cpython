@@ -4,6 +4,7 @@
 #endif
 
 #include "Python.h"
+#include "pycore_pystate.h"       // Grail per-interpreter ABC epoch
 #include "pycore_moduleobject.h"  // _PyModule_GetState()
 #include "pycore_object.h"        // _PyType_GetSubclasses()
 #include "pycore_runtime.h"       // _Py_ID()
@@ -50,6 +51,9 @@ increment_invalidation_counter(_abcmodule_state *state)
 #else
     state->abc_invalidation_counter++;
 #endif
+    /* Publish after the native token: a resolution racing registration must
+       not cache an old negative answer under the new Grail epoch. */
+    _Py_atomic_add_uint64(&_PyInterpreterState_GET()->grail_abc_epoch, 1);
 }
 
 /* This object stores internal state for ABCs.
@@ -953,6 +957,7 @@ _abcmodule_exec(PyObject *module)
 {
     _abcmodule_state *state = get_abc_state(module);
     state->abc_invalidation_counter = 0;
+    _Py_atomic_add_uint64(&_PyInterpreterState_GET()->grail_abc_epoch, 1);
     state->_abc_data_type = (PyTypeObject *)PyType_FromModuleAndSpec(module, &_abc_data_type_spec, NULL);
     if (state->_abc_data_type == NULL) {
         return -1;

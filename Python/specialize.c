@@ -7,6 +7,7 @@
 #include "pycore_critical_section.h"
 #include "pycore_descrobject.h"   // _PyMethodWrapper_Type
 #include "pycore_dict.h"          // DICT_KEYS_UNICODE
+#include "pycore_grail.h"
 #include "pycore_function.h"      // _PyFunction_GetVersionForCurrentState()
 #include "pycore_interpframe.h"   // FRAME_SPECIALS_SIZE
 #include "pycore_lazyimportobject.h" // PyLazyImport_CheckExact
@@ -886,7 +887,26 @@ do_specialize_instance_load_attr(PyObject* owner, _Py_CODEUNIT* instr, PyObject*
             assert(offset > 0);
             cache->index = (uint16_t)offset;
             write_u32(cache->version, tp_version);
-            specialize(instr, LOAD_ATTR_SLOT);
+            /* Only native record fields are permanently initialized and
+             * immutable. The private schema is installed before publication;
+             * do not extend this path to ordinary read-only descriptors.
+             * Keep the scalar version guard: no borrowed type/layout pointer
+             * is retained in the bytecode cache after the type dies.
+             * The environment switch is a specialization-time ablation, not
+             * a hot-path check (use a fresh process for each setting).
+             */
+            const char *record_loads = Py_GETENV("PYTHON_GRAIL_RECORD_LOADS");
+            if (PyType_HasFeature(type, Py_TPFLAGS_HEAPTYPE) &&
+                PyType_HasFeature(type, Py_TPFLAGS_IMMUTABLETYPE) &&
+                ((PyHeapTypeObject *)type)->_ht_grail_schema != NULL &&
+                member->d_common.d_type == type &&
+                (dmem->flags & Py_READONLY) &&
+                !(record_loads != NULL && strcmp(record_loads, "0") == 0)) {
+                specialize(instr, LOAD_ATTR_RECORD);
+            }
+            else {
+                specialize(instr, LOAD_ATTR_SLOT);
+            }
             return 0;
         }
         case DUNDER_CLASS:
@@ -1658,6 +1678,15 @@ specialize_class_call(PyObject *callable, _Py_CODEUNIT *instr, int nargs)
     PyTypeObject *tp = _PyType_CAST(callable);
     if (tp->tp_flags & Py_TPFLAGS_IMMUTABLETYPE) {
         int oparg = instr->op.arg;
+        /* PYTHON_GRAIL_RECORD_CALLS=0 disables CALL_RECORD at specialization
+         * time (use a fresh process per setting). */
+        if (nargs == oparg && _PyGrail_IsPositionalRecordCall(callable, nargs)) {
+            const char *record_calls = Py_GETENV("PYTHON_GRAIL_RECORD_CALLS");
+            if (record_calls == NULL || strcmp(record_calls, "0") != 0) {
+                specialize(instr, CALL_RECORD);
+                return 0;
+            }
+        }
         if (nargs == 1 && oparg == 1) {
             if (tp == &PyUnicode_Type) {
                 specialize(instr, CALL_STR_1);
@@ -1869,8 +1898,35 @@ specialize_c_call(PyObject *callable, _Py_CODEUNIT *instr, int nargs)
     }
 }
 
+/* CALL_GENERIC: a Grail generic whose selection for the current first
+ * argument is a simple Python function taking exactly nargs positional
+ * arguments. The selection is borrowed from a QSBR-protected table and only
+ * inspected here. PYTHON_GRAIL_INLINE_GENERICS=0 disables this at
+ * specialization time (use a fresh process per setting). */
+static int
+specialize_grail_generic_call(PyObject *callable, PyObject *first,
+                              _Py_CODEUNIT *instr, int nargs)
+{
+    PyObject *impl = _PyGrail_GenericSelect(callable, first, 0);
+    if (impl == NULL || !PyFunction_Check(impl)) {
+        return 0;
+    }
+    const char *inline_generics = Py_GETENV("PYTHON_GRAIL_INLINE_GENERICS");
+    if (inline_generics != NULL && strcmp(inline_generics, "0") == 0) {
+        return 0;
+    }
+    PyCodeObject *fcode = (PyCodeObject *)PyFunction_GET_CODE(impl);
+    if (function_kind(fcode) != SIMPLE_FUNCTION || fcode->co_argcount != nargs ||
+        !_PyInterpreterState_IsSpecializationEnabled(_PyInterpreterState_GET())) {
+        return 0;
+    }
+    specialize(instr, CALL_GENERIC);
+    return 1;
+}
+
 Py_NO_INLINE void
-_Py_Specialize_Call(_PyStackRef callable_st, _PyStackRef self_or_null_st, _Py_CODEUNIT *instr, int nargs)
+_Py_Specialize_Call(_PyStackRef callable_st, _PyStackRef self_or_null_st,
+                    _PyStackRef *args, _Py_CODEUNIT *instr, int nargs)
 {
     PyObject *callable = PyStackRef_AsPyObjectBorrow(callable_st);
 
@@ -1878,6 +1934,11 @@ _Py_Specialize_Call(_PyStackRef callable_st, _PyStackRef self_or_null_st, _Py_CO
     assert(_PyOpcode_Caches[CALL] == INLINE_CACHE_ENTRIES_CALL);
     assert(_Py_OPCODE(*instr) != INSTRUMENTED_CALL);
     int fail;
+    if (nargs > 0 && PyStackRef_IsNull(self_or_null_st) &&
+        specialize_grail_generic_call(
+            callable, PyStackRef_AsPyObjectBorrow(args[0]), instr, nargs)) {
+        return;
+    }
     if (PyCFunction_CheckExact(callable)) {
         fail = specialize_c_call(callable, instr, nargs);
     }
@@ -2749,6 +2810,38 @@ _Py_Specialize_BinaryOp(_PyStackRef lhs_st, _PyStackRef rhs_st, _Py_CODEUNIT *in
         write_ptr(cache->external_cache, NULL);
     }
 
+    int grail_op = (oparg == NB_ADD || oparg == NB_INPLACE_ADD ||
+                    oparg == NB_SUBTRACT || oparg == NB_INPLACE_SUBTRACT ||
+                    oparg == NB_MULTIPLY || oparg == NB_INPLACE_MULTIPLY ||
+                    oparg == NB_TRUE_DIVIDE || oparg == NB_INPLACE_TRUE_DIVIDE);
+    if (grail_op && _PyGrail_OperatorsActive()) {
+        /* A registered exact pair implemented by a simple Python function is
+         * entered directly (BINARY_OP_GRAIL). The environment switch is a
+         * specialization-time ablation; use a fresh process per setting.
+         * The implementation is borrowed from a QSBR-protected table and
+         * only inspected here; nothing below reaches a quiescent state.
+         */
+        const char *inline_ops = Py_GETENV("PYTHON_GRAIL_INLINE_OPERATORS");
+        PyObject *impl = _PyGrail_BinaryOpLookup(Py_TYPE(lhs), Py_TYPE(rhs), oparg);
+        if (impl != NULL && _PyGrail_IsKernel(impl) &&
+            !(inline_ops != NULL && strcmp(inline_ops, "0") == 0)) {
+            specialize(instr, BINARY_OP_GRAIL_KERNEL);
+            return;
+        }
+        if (impl != NULL && PyFunction_Check(impl) &&
+            !(inline_ops != NULL && strcmp(inline_ops, "0") == 0) &&
+            _PyInterpreterState_IsSpecializationEnabled(_PyInterpreterState_GET())) {
+            PyCodeObject *fcode = (PyCodeObject *)PyFunction_GET_CODE(impl);
+            uint32_t version;
+            if (function_kind(fcode) == SIMPLE_FUNCTION &&
+                fcode->co_argcount == 2 &&
+                (version = function_get_version(impl, BINARY_OP)) != 0) {
+                write_u32(cache->external_cache, version);
+                specialize(instr, BINARY_OP_GRAIL);
+                return;
+            }
+        }
+    }
     switch (oparg) {
         case NB_ADD:
         case NB_INPLACE_ADD:
@@ -2875,7 +2968,8 @@ _Py_Specialize_BinaryOp(_PyStackRef lhs_st, _PyStackRef rhs_st, _Py_CODEUNIT *in
         PyObject *name = reflected ? _PyType_BinaryOpReflectedDunder(tp, oparg)
                                    : _PyType_BinaryOpDunder(tp, oparg);
         if (name != NULL &&
-            (reflected || rtp == tp || !PyType_IsSubtype(rtp, tp))) {
+            (reflected || rtp == tp || !PyType_IsSubtype(rtp, tp)) &&
+            _PyGrail_BinaryOpLookup(ltp, rtp, oparg) == NULL) {
             unsigned int tp_version;
             PyObject *descr = _PyType_LookupRefAndVersion(tp, name, &tp_version);
             if (descr != NULL && Py_TYPE(descr) == &PyFunction_Type && tp_version != 0) {
@@ -3008,13 +3102,23 @@ unpack_sequence_fail_kind(PyObject *seq)
 #endif   // Py_STATS
 
 Py_NO_INLINE void
-_Py_Specialize_UnpackSequence(_PyStackRef seq_st, _Py_CODEUNIT *instr, int oparg)
+_Py_Specialize_UnpackSequence(_PyStackRef seq_st, _Py_CODEUNIT *instr, int oparg,
+                              _PyInterpreterFrame *frame)
 {
     PyObject *seq = PyStackRef_AsPyObjectBorrow(seq_st);
 
     assert(ENABLE_SPECIALIZATION);
     assert(_PyOpcode_Caches[UNPACK_SEQUENCE] ==
            INLINE_CACHE_ENTRIES_UNPACK_SEQUENCE);
+    /* A record reaches UNPACK_SEQUENCE from MATCH_CLASS_RECORD, or from an
+     * ordinary unpack, which must keep raising. */
+    if (_PyGrail_IsRecordTypeFast(Py_TYPE(seq)) &&
+        _PyGrail_IsRecordMatchSite(_PyFrame_GetCode(frame),
+                                   instr - _PyFrame_GetBytecode(frame) - _PyGrail_MATCH_TO_UNPACK,
+                                   oparg)) {
+        specialize(instr, UNPACK_SEQUENCE_RECORD);
+        return;
+    }
     if (PyTuple_CheckExact(seq)) {
         if (PyTuple_GET_SIZE(seq) != oparg) {
             SPECIALIZATION_FAIL(UNPACK_SEQUENCE, SPEC_FAIL_EXPECTED_ERROR);
@@ -3348,6 +3452,37 @@ containsop_fail_kind(PyObject *value) {
     return SPEC_FAIL_OTHER;
 }
 #endif
+
+/* MATCH_CLASS_RECORD needs the record match path
+ * (PYTHON_GRAIL_RECORD_MATCH=0 leaves MATCH_CLASS generic).
+ * PYTHON_GRAIL_RECORD_MATCH_OP=0 keeps the C match path but disables the
+ * specialization (read at specialization time). */
+Py_NO_INLINE void
+_Py_Specialize_MatchClass(_PyStackRef subject_st, _PyStackRef type_st,
+                          _PyStackRef names_st, _Py_CODEUNIT *instr,
+                          _PyInterpreterFrame *frame)
+{
+    PyObject *type = PyStackRef_AsPyObjectBorrow(type_st);
+    PyObject *names = PyStackRef_AsPyObjectBorrow(names_st);
+
+    assert(ENABLE_SPECIALIZATION);
+    assert(_PyOpcode_Caches[MATCH_CLASS] == INLINE_CACHE_ENTRIES_MATCH_CLASS);
+    if (!_PyInterpreterState_GET()->grail_record_match_off &&
+        PyType_Check(type) && _PyGrail_IsRecordTypeFast((PyTypeObject *)type) &&
+        PyTuple_GET_SIZE(names) == 0 &&
+        _PyGrail_IsRecordTypeFast(PyStackRef_TYPE(subject_st)) &&
+        _PyGrail_IsRecordMatchSite(_PyFrame_GetCode(frame),
+                                   instr - _PyFrame_GetBytecode(frame),
+                                   instr->op.arg)) {
+        const char *op = Py_GETENV("PYTHON_GRAIL_RECORD_MATCH_OP");
+        if (op == NULL || strcmp(op, "0") != 0) {
+            specialize(instr, MATCH_CLASS_RECORD);
+            return;
+        }
+    }
+    SPECIALIZATION_FAIL(MATCH_CLASS, SPEC_FAIL_OTHER);
+    unspecialize(instr);
+}
 
 Py_NO_INLINE void
 _Py_Specialize_ContainsOp(_PyStackRef value_st, _Py_CODEUNIT *instr)

@@ -1487,6 +1487,7 @@ extern "C" {
     INIT_ID(__reduce__), \
     INIT_ID(__reduce_ex__), \
     INIT_ID(__release_buffer__), \
+    INIT_ID(__replace__), \
     INIT_ID(__repr__), \
     INIT_ID(__reversed__), \
     INIT_ID(__rfloordiv__), \

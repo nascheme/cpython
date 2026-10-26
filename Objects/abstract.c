@@ -6,6 +6,7 @@
 #include "pycore_call.h"          // _PyObject_CallNoArgs()
 #include "pycore_ceval.h"         // _Py_EnterRecursiveCallTstate()
 #include "pycore_crossinterp.h"   // _Py_CallInInterpreter()
+#include "pycore_grail.h"
 #include "pycore_genobject.h"     // _PyGen_FetchStopIterationValue()
 #include "pycore_list.h"          // _PyList_AppendTakeRef()
 #include "pycore_long.h"          // _PyLong_IsNegative()
@@ -991,6 +992,28 @@ binary_op1(PyObject *v, PyObject *w, const int op_slot
     Py_RETURN_NOTIMPLEMENTED;
 }
 
+/* Exact-pair registry, tried once before the ordinary protocol. Returns 1
+   with *result set (final, NotImplemented included; NULL on error), or 0 when
+   no implementation is registered for the pair. Two builtin types never have
+   one. */
+static inline int
+grail_binary_op(PyObject *v, PyObject *w, int slot, PyObject **result)
+{
+    if (!_PyGrail_OperatorsActive() ||
+        _PyGrail_IsStaticPair(Py_TYPE(v), Py_TYPE(w))) {
+        return 0;
+    }
+    int index;
+    switch (slot) {
+        case NB_SLOT(nb_add): index = 0; break;
+        case NB_SLOT(nb_subtract): index = 1; break;
+        case NB_SLOT(nb_multiply): index = 2; break;
+        case NB_SLOT(nb_true_divide): index = 3; break;
+        default: return 0;
+    }
+    return _PyGrail_BinaryOp(v, w, index, result);
+}
+
 #ifdef NDEBUG
 #  define BINARY_OP1(v, w, op_slot, op_name) binary_op1(v, w, op_slot)
 #else
@@ -1087,7 +1110,11 @@ _PyNumber_BinaryOpAfterNotImplemented(PyObject *v, PyObject *w, int nb_op)
 static PyObject *
 binary_op(PyObject *v, PyObject *w, const int op_slot, const char *op_name)
 {
-    PyObject *result = BINARY_OP1(v, w, op_slot, op_name);
+    PyObject *result;
+    if (grail_binary_op(v, w, op_slot, &result)) {
+        return result;
+    }
+    result = BINARY_OP1(v, w, op_slot, op_name);
     if (result == Py_NotImplemented) {
         Py_DECREF(result);
         return binop_type_error(v, w, op_name);
@@ -1214,7 +1241,11 @@ BINARY_FUNC(PyNumber_Divmod, nb_divmod, "divmod()")
 PyObject *
 PyNumber_Add(PyObject *v, PyObject *w)
 {
-    PyObject *result = BINARY_OP1(v, w, NB_SLOT(nb_add), "+");
+    PyObject *result;
+    if (grail_binary_op(v, w, NB_SLOT(nb_add), &result)) {
+        return result;
+    }
+    result = BINARY_OP1(v, w, NB_SLOT(nb_add), "+");
     if (result != Py_NotImplemented) {
         return result;
     }
@@ -1252,7 +1283,11 @@ sequence_repeat(ssizeargfunc repeatfunc, PyObject *seq, PyObject *n)
 PyObject *
 PyNumber_Multiply(PyObject *v, PyObject *w)
 {
-    PyObject *result = BINARY_OP1(v, w, NB_SLOT(nb_multiply), "*");
+    PyObject *result;
+    if (grail_binary_op(v, w, NB_SLOT(nb_multiply), &result)) {
+        return result;
+    }
+    result = BINARY_OP1(v, w, NB_SLOT(nb_multiply), "*");
     if (result == Py_NotImplemented) {
         PySequenceMethods *mv = Py_TYPE(v)->tp_as_sequence;
         PySequenceMethods *mw = Py_TYPE(w)->tp_as_sequence;
@@ -1333,11 +1368,16 @@ binary_iop1(PyObject *v, PyObject *w, const int iop_slot, const int op_slot
 #  define BINARY_IOP1(v, w, iop_slot, op_slot, op_name) binary_iop1(v, w, iop_slot, op_slot, op_name)
 #endif
 
+/* The corresponding non-in-place registry takes precedence over __iop__. */
 static PyObject *
 binary_iop(PyObject *v, PyObject *w, const int iop_slot, const int op_slot,
                 const char *op_name)
 {
-    PyObject *result = BINARY_IOP1(v, w, iop_slot, op_slot, op_name);
+    PyObject *result;
+    if (grail_binary_op(v, w, op_slot, &result)) {
+        return result;
+    }
+    result = BINARY_IOP1(v, w, iop_slot, op_slot, op_name);
     if (result == Py_NotImplemented) {
         Py_DECREF(result);
         return binop_type_error(v, w, op_name);
@@ -1383,8 +1423,12 @@ INPLACE_BINOP(PyNumber_InPlaceRemainder, nb_inplace_remainder, nb_remainder, "%=
 PyObject *
 PyNumber_InPlaceAdd(PyObject *v, PyObject *w)
 {
-    PyObject *result = BINARY_IOP1(v, w, NB_SLOT(nb_inplace_add),
-                                   NB_SLOT(nb_add), "+=");
+    PyObject *result;
+    if (grail_binary_op(v, w, NB_SLOT(nb_add), &result)) {
+        return result;
+    }
+    result = BINARY_IOP1(v, w, NB_SLOT(nb_inplace_add),
+                         NB_SLOT(nb_add), "+=");
     if (result == Py_NotImplemented) {
         PySequenceMethods *m = Py_TYPE(v)->tp_as_sequence;
         Py_DECREF(result);
@@ -1406,8 +1450,12 @@ PyNumber_InPlaceAdd(PyObject *v, PyObject *w)
 PyObject *
 PyNumber_InPlaceMultiply(PyObject *v, PyObject *w)
 {
-    PyObject *result = BINARY_IOP1(v, w, NB_SLOT(nb_inplace_multiply),
-                                   NB_SLOT(nb_multiply), "*=");
+    PyObject *result;
+    if (grail_binary_op(v, w, NB_SLOT(nb_multiply), &result)) {
+        return result;
+    }
+    result = BINARY_IOP1(v, w, NB_SLOT(nb_inplace_multiply),
+                         NB_SLOT(nb_multiply), "*=");
     if (result == Py_NotImplemented) {
         ssizeargfunc f = NULL;
         PySequenceMethods *mv = Py_TYPE(v)->tp_as_sequence;
@@ -1812,7 +1860,11 @@ PySequence_Concat(PyObject *s, PyObject *o)
        have an nb_add slot, not an sq_concat slot.      So we fall back
        to nb_add if both arguments appear to be sequences. */
     if (PySequence_Check(s) && PySequence_Check(o)) {
-        PyObject *result = BINARY_OP1(s, o, NB_SLOT(nb_add), "+");
+        PyObject *result;
+        if (grail_binary_op(s, o, NB_SLOT(nb_add), &result)) {
+            return result;
+        }
+        result = BINARY_OP1(s, o, NB_SLOT(nb_add), "+");
         if (result != Py_NotImplemented)
             return result;
         Py_DECREF(result);
@@ -1842,6 +1894,10 @@ PySequence_Repeat(PyObject *o, Py_ssize_t count)
         n = PyLong_FromSsize_t(count);
         if (n == NULL)
             return NULL;
+        if (grail_binary_op(o, n, NB_SLOT(nb_multiply), &result)) {
+            Py_DECREF(n);
+            return result;
+        }
         result = BINARY_OP1(o, n, NB_SLOT(nb_multiply), "*");
         Py_DECREF(n);
         if (result != Py_NotImplemented)
@@ -1871,8 +1927,12 @@ PySequence_InPlaceConcat(PyObject *s, PyObject *o)
     }
 
     if (PySequence_Check(s) && PySequence_Check(o)) {
-        PyObject *result = BINARY_IOP1(s, o, NB_SLOT(nb_inplace_add),
-                                       NB_SLOT(nb_add), "+=");
+        PyObject *result;
+        if (grail_binary_op(s, o, NB_SLOT(nb_add), &result)) {
+            return result;
+        }
+        result = BINARY_IOP1(s, o, NB_SLOT(nb_inplace_add),
+                             NB_SLOT(nb_add), "+=");
         if (result != Py_NotImplemented)
             return result;
         Py_DECREF(result);
@@ -1904,6 +1964,10 @@ PySequence_InPlaceRepeat(PyObject *o, Py_ssize_t count)
         n = PyLong_FromSsize_t(count);
         if (n == NULL)
             return NULL;
+        if (grail_binary_op(o, n, NB_SLOT(nb_multiply), &result)) {
+            Py_DECREF(n);
+            return result;
+        }
         result = BINARY_IOP1(o, n, NB_SLOT(nb_inplace_multiply),
                              NB_SLOT(nb_multiply), "*=");
         Py_DECREF(n);

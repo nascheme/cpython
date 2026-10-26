@@ -118,6 +118,39 @@ class TestGC(TestCase):
         gc.collect()
         self.assertEqual(load(), ((0, 1, 2, 3, 4), frozenset({int, str}), [1]))
 
+    @support.cpython_only
+    def test_cell_record_gets_deferred_refcount(self):
+        # Conforming Grail value records are immutable values too.
+        _testinternalcapi = import_helper.import_module("_testinternalcapi")
+        grail = import_helper.import_module("grail")
+
+        @grail.record
+        class Value:
+            a: int
+
+        @grail.record
+        class Loose:
+            a: object
+
+        tup = tuple(range(5))
+        gc.collect()
+        value, loose, lst = Value(1), Loose([]), [1]
+        self.assertFalse(gc.is_tracked(tup))
+
+        def load():
+            return tup, value, loose, lst
+
+        t = Thread(target=load)
+        with threading_helper.start_threads([t]):
+            pass
+        self.assertTrue(_testinternalcapi.has_deferred_refcount(tup))
+        self.assertTrue(gc.is_tracked(tup))
+        self.assertTrue(_testinternalcapi.has_deferred_refcount(value))
+        self.assertFalse(_testinternalcapi.has_deferred_refcount(loose))
+        self.assertFalse(_testinternalcapi.has_deferred_refcount(lst))
+        gc.collect()
+        self.assertEqual(load(), ((0, 1, 2, 3, 4), Value(1), loose, [1]))
+
     def test_freeze_object_in_brc_queue(self):
         # GH-142975: Freezing objects in the BRC queue could result in some
         # objects having a zero refcount without being deallocated.

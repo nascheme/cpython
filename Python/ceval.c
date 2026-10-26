@@ -1,6 +1,7 @@
 /* Execute compiled code */
 
 #include "ceval.h"
+#include "pycore_grail.h"
 #include "pycore_long.h"
 
 #ifdef HAVE_PTHREAD_NP_H
@@ -560,6 +561,13 @@ _PyEval_MatchClass(PyThreadState *tstate, PyObject *subject, PyObject *type,
         return NULL;
     }
     assert(PyTuple_CheckExact(kwargs));
+    // Grail record patterns on records skip isinstance and __match_args__.
+    if (!tstate->interp->grail_record_match_off) {
+        PyObject *attrs;
+        if (_PyGrail_MatchRecord(subject, type, nargs, kwargs, &attrs)) {
+            return attrs;
+        }
+    }
     // First, an isinstance check:
     if (PyObject_IsInstance(subject, type) <= 0) {
         return NULL;

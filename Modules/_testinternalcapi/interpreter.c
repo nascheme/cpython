@@ -6,6 +6,7 @@
 #endif
 
 #include "../../Python/ceval.h"
+#include "pycore_grail.h"
 
 #include "../../Python/ceval_macros.h"
 

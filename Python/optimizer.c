@@ -8,6 +8,7 @@
 #include "pycore_bitutils.h"        // _Py_popcount32()
 #include "pycore_ceval.h"       // _Py_set_eval_breaker_bit
 #include "pycore_code.h"            // _Py_GetBaseCodeUnit
+#include "pycore_grail.h"           // _PyGrail_GenericSelect()
 #include "pycore_interpframe.h"
 #include "pycore_object.h"          // _PyObject_GC_UNTRACK()
 #include "pycore_opcode_metadata.h" // _PyOpcode_OpName[]
@@ -505,6 +506,7 @@ _PyUOp_Replacements[MAX_UOP_ID + 1] = {
     [_LOAD_BYTECODE] = _NOP,
     [_SEND_VIRTUAL] = _SEND_VIRTUAL_TIER_TWO,
     [_SEND_ASYNC_GEN] = _SEND_ASYNC_GEN_TIER_TWO,
+    [_GRAIL_CALL_GENERIC_SELECT] = _GRAIL_CALL_GENERIC_SELECT_TIER_TWO,
 };
 
 static const uint8_t
@@ -1016,6 +1018,10 @@ _PyJit_translate_single_bytecode_to_trace(
                             else {
                                 target = next_inst;
                             }
+                        }
+                        else if (uop == _GRAIL_CALL_GENERIC_SELECT_TIER_TWO) {
+                            // Not a jump: a guard whose operand the optimizer
+                            // supplies (see CALL_GENERIC).
                         }
                         else {
                             int extended_arg = orig_oparg > 255;

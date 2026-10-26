@@ -23,6 +23,7 @@
 #include "pycore_long.h"          // _PyLong_GetZero()
 #include "pycore_memoryobject.h"  // _PyManagedBuffer_Type
 #include "pycore_namespace.h"     // _PyNamespace_Type
+#include "pycore_grail.h"         // _PyGrail_IsConformingValueRecord()
 #include "pycore_object.h"        // export _Py_SwappedOp
 #include "pycore_optimizer.h"     // _PyUOpExecutor_Type
 #include "pycore_pyerrors.h"      // _PyErr_Occurred()
@@ -942,6 +943,9 @@ _PyObject_ClearFreeLists(struct _Py_freelists *freelists, int is_finalization)
     clear_freelist(&freelists->ranges, is_finalization, free_object);
     clear_freelist(&freelists->range_iters, is_finalization, free_object);
     clear_freelist(&freelists->contexts, is_finalization, free_object);
+    for (Py_ssize_t i = 0; i <= Py_grail_records_MAXSAVESIZE; i++) {
+        clear_freelist(&freelists->grail_records[i], is_finalization, free_object);
+    }
     clear_freelist(&freelists->funcs, is_finalization, free_object);
     clear_freelist(&freelists->cells, is_finalization, free_object);
     clear_freelist(&freelists->async_gens, is_finalization, free_object);
@@ -2905,9 +2909,10 @@ _PyObject_MaybeDeferCellValue(PyObject *op)
     // Deferred objects are freed only by the GC.  Unlike module globals, cell
     // contents are often short-lived, so only defer values whose delayed
     // deallocation is unobservable: untracked tuples and frozensets (no GC
-    // children).
-    if ((PyTuple_CheckExact(op) || PyFrozenSet_CheckExact(op)) &&
-        !_PyObject_GC_IS_TRACKED(op)) {
+    // children) and conforming Grail value records.
+    if (((PyTuple_CheckExact(op) || PyFrozenSet_CheckExact(op)) &&
+         !_PyObject_GC_IS_TRACKED(op)) ||
+        _PyGrail_IsConformingValueRecord(op)) {
         _PyObject_EnableDeferredShared(op);
     }
 }

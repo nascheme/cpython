@@ -119,6 +119,7 @@ _Py_GetSpecializationStats(void) {
     }
     int err = 0;
     err += add_stat_dict(src, stats, CONTAINS_OP, "contains_op");
+    err += add_stat_dict(src, stats, MATCH_CLASS, "match_class");
     err += add_stat_dict(src, stats, LOAD_SUPER_ATTR, "load_super_attr");
     err += add_stat_dict(src, stats, LOAD_ATTR, "load_attr");
     err += add_stat_dict(src, stats, LOAD_GLOBAL, "load_global");

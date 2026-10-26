@@ -512,6 +512,10 @@ def has_error_without_pop(op: parser.CodeDef) -> bool:
 
 
 NON_ESCAPING_FUNCTIONS = (
+    "_PyGrail_OperatorsActive",
+    "_PyGrail_IsKernel",
+    "_PyGrail_BinaryOpLookup",
+    "_PyGrail_GenericSelect",
     "PyCFunction_GET_FLAGS",
     "PyCFunction_GET_FUNCTION",
     "PyCFunction_GET_SELF",
@@ -584,6 +588,9 @@ NON_ESCAPING_FUNCTIONS = (
     "_PyFrame_GetCode",
     "_PyFrame_IsIncomplete",
     "_PyFrame_PushUnchecked",
+    "_PyFrame_PushTrampolineUnchecked",
+    "_PyGrail_IsPositionalRecordCall",
+    "_PyGrail_IsRecordTypeFast",
     "_PyFrame_SetStackPointer",
     "_PyFrame_StackPush",
     "_PyFunction_SetVersion",

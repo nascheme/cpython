@@ -15,6 +15,7 @@
 #include "pycore_code.h"
 #include "pycore_emscripten_signal.h"  // _Py_CHECK_EMSCRIPTEN_SIGNALS
 #include "pycore_function.h"
+#include "pycore_grail.h"
 #include "pycore_import.h"        // _PyImport_LoadLazyImportTstate()
 #include "pycore_instruments.h"
 #include "pycore_interpolation.h" // _PyInterpolation_Build()
@@ -639,6 +640,8 @@ dummy_func(
             BINARY_OP_SUBSCR_GETITEM,
             BINARY_OP_INPLACE_ADD_UNICODE,
             BINARY_OP_EXTEND,
+            BINARY_OP_GRAIL,
+            BINARY_OP_GRAIL_KERNEL,
             BINARY_OP_PY,
         };
 
@@ -1080,6 +1083,87 @@ dummy_func(
         macro(BINARY_OP_INPLACE_ADD_UNICODE) =
             _GUARD_TOS_UNICODE + _GUARD_NOS_UNICODE + unused/5 + _BINARY_OP_INPLACE_ADD_UNICODE;
 
+        /* Registered exact-pair Grail operator implemented by a simple Python
+         * function. The registry is read on every execution (lock-free, no
+         * cached callable), so registration and override take effect at
+         * once; func_version only guards the validated code shape of the
+         * function actually selected. A miss deopts to the generic path.
+         */
+        op(_GRAIL_BINARY_CHECK_FUNC, (func_version/2, left, right -- left, right, impl)) {
+            PyObject *impl_o = _PyGrail_BinaryOpLookup(
+                Py_TYPE(PyStackRef_AsPyObjectBorrow(left)),
+                Py_TYPE(PyStackRef_AsPyObjectBorrow(right)), oparg);
+            EXIT_IF(impl_o == NULL);
+            EXIT_IF(!PyFunction_Check(impl_o));
+            EXIT_IF(((PyFunctionObject *)impl_o)->func_version != func_version);
+            PyCodeObject *code = (PyCodeObject *)PyFunction_GET_CODE(impl_o);
+            EXIT_IF(code->co_argcount != 2);
+            EXIT_IF(!_PyThreadState_HasStackSpace(tstate, code->co_framesize));
+            /* Borrowed from a QSBR-protected table: own it before any
+               quiescent state. */
+            impl = PyStackRef_FromPyObjectNew(impl_o);
+        }
+
+        /* Tier 2, emitted by the optimizer once both operand types are
+         * known: the exact pair's implementation is a constant, since
+         * registration invalidates the executor.
+         */
+        tier2 op(_GRAIL_BINARY_LOAD_IMPL, (impl_o/4, left, right -- left, right, impl)) {
+            PyCodeObject *code = (PyCodeObject *)PyFunction_GET_CODE((PyObject *)impl_o);
+            EXIT_IF(!_PyThreadState_HasStackSpace(tstate, code->co_framesize));
+            impl = PyStackRef_FromPyObjectNew((PyObject *)impl_o);
+        }
+
+        /* The implementation's frame owns both operands, as for
+         * CALL_PY_EXACT_ARGS. Its result, NotImplemented included, is final.
+         */
+        op(_GRAIL_BINARY_INIT_CALL, (left, right, impl -- new_frame)) {
+            STAT_INC(BINARY_OP, hit);
+            _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, impl, 2, frame);
+            pushed_frame->localsplus[0] = left;
+            pushed_frame->localsplus[1] = right;
+            INPUTS_DEAD();
+            frame->return_offset = INSTRUCTION_SIZE;
+            new_frame = PyStackRef_Wrap(pushed_frame);
+        }
+
+        macro(BINARY_OP_GRAIL) =
+            _RECORD_NOS +
+            _RECORD_TOS_TYPE +
+            unused/1 +
+            _CHECK_PEP_523 +
+            _CHECK_RECURSION_REMAINING +
+            _GRAIL_BINARY_CHECK_FUNC +
+            unused/2 +
+            _GRAIL_BINARY_INIT_CALL +
+            _PUSH_FRAME;
+
+        /* Registered exact pair implemented by an element-wise record kernel:
+         * computed in C, without a frame. The registry is read on every
+         * execution, as for BINARY_OP_GRAIL; the kernel is only borrowed
+         * (_PyGrail_KernelApply reads it before anything can run).
+         */
+        op(_GRAIL_BINARY_KERNEL, (left, right -- res, l, r)) {
+            PyObject *left_o = PyStackRef_AsPyObjectBorrow(left);
+            PyObject *right_o = PyStackRef_AsPyObjectBorrow(right);
+            PyObject *impl_o = _PyGrail_BinaryOpLookup(
+                Py_TYPE(left_o), Py_TYPE(right_o), oparg);
+            DEOPT_IF(impl_o == NULL);
+            DEOPT_IF(!_PyGrail_IsKernel(impl_o));
+            STAT_INC(BINARY_OP, hit);
+            PyObject *res_o = _PyGrail_KernelApply(impl_o, left_o, right_o);
+            if (res_o == NULL) {
+                ERROR_NO_POP();
+            }
+            res = PyStackRef_FromPyObjectSteal(res_o);
+            l = left;
+            r = right;
+            INPUTS_DEAD();
+        }
+
+        macro(BINARY_OP_GRAIL_KERNEL) =
+            unused/5 + _GRAIL_BINARY_KERNEL + POP_TOP + POP_TOP;
+
         tier2 op(_GUARD_NOS_OBJ_TYPE_VERSION, (type_version/2, nos, unused -- nos, unused)) {
             PyTypeObject *tp = Py_TYPE(PyStackRef_AsPyObjectBorrow(nos));
             EXIT_IF(FT_ATOMIC_LOAD_UINT_RELAXED(tp->tp_version_tag) != type_version);
@@ -1122,8 +1206,9 @@ dummy_func(
          * The left operand's type and the method's code are guarded; the
          * right operand is of the same type or not of a subtype, so the
          * slot would call the method first and nothing else (see
-         * _PyType_BinaryOpDunder). A shim frame (_Py_BinaryOpCleanup)
-         * completes the protocol if the method returns NotImplemented.
+         * _PyType_BinaryOpDunder), and no registered Grail operator takes
+         * precedence. A shim frame (_Py_BinaryOpCleanup) completes the
+         * protocol if the method returns NotImplemented.
          */
         op(_BINARY_OP_PY_CHECK_FUNC, (type_version/2, func_version/2, left, right -- left, right, func)) {
             PyTypeObject *tp = Py_TYPE(PyStackRef_AsPyObjectBorrow(left));
@@ -1148,6 +1233,7 @@ dummy_func(
                 name = _PyType_BinaryOpDunder(tp, oparg);
             }
             EXIT_IF(name == NULL);
+            EXIT_IF(_PyGrail_BinaryOpLookup(tp, rtp, oparg) != NULL);
             PyObject *func_o = _PyType_LookupRef(owner, name);
             if (func_o != NULL && !(PyFunction_Check(func_o) &&
                 ((PyFunctionObject *)func_o)->func_version == func_version &&
@@ -1162,8 +1248,8 @@ dummy_func(
         }
 
         /* Tier 2, emitted by the optimizer once both operand types are
-         * known: the method is a constant, since changing the type
-         * invalidates the executor.
+         * known: the method is a constant, since changing the type or
+         * registering a Grail operator invalidates the executor.
          */
         tier2 op(_BINARY_OP_PY_LOAD_FUNC, (func_o/4, left, right -- left, right, func)) {
             PyCodeObject *code = (PyCodeObject *)PyFunction_GET_CODE((PyObject *)func_o);
@@ -2208,13 +2294,14 @@ dummy_func(
             UNPACK_SEQUENCE_TWO_TUPLE,
             UNPACK_SEQUENCE_TUPLE,
             UNPACK_SEQUENCE_LIST,
+            UNPACK_SEQUENCE_RECORD,
         };
 
         specializing op(_SPECIALIZE_UNPACK_SEQUENCE, (counter/1, seq -- seq)) {
             #if ENABLE_SPECIALIZATION
             if (ADAPTIVE_COUNTER_TRIGGERS(counter)) {
                 next_instr = this_instr;
-                _Py_Specialize_UnpackSequence(seq, next_instr, oparg);
+                _Py_Specialize_UnpackSequence(seq, next_instr, oparg, frame);
                 DISPATCH_SAME_OPARG();
             }
             OPCODE_DEFERRED_INC(UNPACK_SEQUENCE);
@@ -2226,7 +2313,16 @@ dummy_func(
 
         op(_UNPACK_SEQUENCE, (seq -- unused[oparg], top[0])) {
             PyObject *seq_o = PyStackRef_AsPyObjectSteal(seq);
-            int res = _PyEval_UnpackIterableStackRef(tstate, seq_o, oparg, -1, top);
+            int res;
+            /* A record here is a MATCH_CLASS_RECORD result if this is a
+             * record match site (see _PyGrail_IsRecordMatchSite). */
+            if (_PyGrail_IsRecordTypeFast(Py_TYPE(seq_o)) &&
+                _PyGrail_UnpackMatchedRecord(frame, seq_o, oparg, top)) {
+                res = 1;
+            }
+            else {
+                res = _PyEval_UnpackIterableStackRef(tstate, seq_o, oparg, -1, top);
+            }
             Py_DECREF(seq_o);
             ERROR_IF(res == 0);
         }
@@ -2268,6 +2364,29 @@ dummy_func(
 
         macro(UNPACK_SEQUENCE_TUPLE) =
             _GUARD_TOS_TUPLE + unused/1 + _UNPACK_SEQUENCE_TUPLE;
+
+        /* The UNPACK_SEQUENCE of a record class pattern (specialized only at
+         * a record match site): MATCH_CLASS_RECORD pushed the matched record,
+         * which has at least oparg fields, all present. A tuple from the
+         * generic MATCH_CLASS exits to the generic unpack. */
+        op(_GUARD_TOS_MATCHED_RECORD, (seq -- seq)) {
+            EXIT_IF(!_PyGrail_IsRecordTypeFast(PyStackRef_TYPE(seq)));
+        }
+
+        op(_UNPACK_SEQUENCE_RECORD, (seq -- values[oparg])) {
+            PyObject *seq_o = PyStackRef_AsPyObjectBorrow(seq);
+            assert(_PyGrail_RecordFieldCount(seq_o) >= oparg);
+            STAT_INC(UNPACK_SEQUENCE, hit);
+            PyObject **fields = ((RecordObject *)seq_o)->fields;
+            for (int i = oparg; --i >= 0; ) {
+                assert(fields[i] != NULL);
+                *values++ = PyStackRef_FromPyObjectNew(fields[i]);
+            }
+            DECREF_INPUTS();
+        }
+
+        macro(UNPACK_SEQUENCE_RECORD) =
+            _GUARD_TOS_MATCHED_RECORD + unused/1 + _UNPACK_SEQUENCE_RECORD;
 
         op(_UNPACK_SEQUENCE_TUPLE, (seq -- values[oparg])) {
             PyObject *seq_o = PyStackRef_AsPyObjectBorrow(seq);
@@ -2984,6 +3103,7 @@ dummy_func(
             LOAD_ATTR_MODULE,
             LOAD_ATTR_WITH_HINT,
             LOAD_ATTR_SLOT,
+            LOAD_ATTR_RECORD,
             LOAD_ATTR_CLASS,
             LOAD_ATTR_CLASS_WITH_METACLASS_CHECK,
             LOAD_ATTR_PROPERTY,
@@ -3188,6 +3308,42 @@ dummy_func(
             _RECORD_TOS_TYPE +
             _GUARD_TYPE_VERSION +
             _LOAD_ATTR_SLOT +  // NOTE: This action may also deopt
+            POP_TOP +
+            unused/5 +
+            _PUSH_NULL_CONDITIONAL;
+
+        op(_LOAD_ATTR_RECORD, (index/1, owner -- attr, o)) {
+            PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            /* Published record fields are never NULL and never replaced.
+             * Holding owner keeps the child alive during reference acquisition,
+             * even when the child is mutable or owned by another thread.
+             */
+            PyObject *attr_o = *(PyObject **)((char *)owner_o + index);
+            assert(attr_o != NULL);
+            attr = PyStackRef_FromPyObjectNew(attr_o);
+            STAT_INC(LOAD_ATTR, hit);
+            o = owner;
+            DEAD(owner);
+        }
+
+        /* Tier 2 only: _LOAD_ATTR_RECORD of a field whose plan names an exact
+         * type, which the optimizer then knows. A nonconforming instance
+         * exits before anything is loaded. */
+        tier2 op(_LOAD_ATTR_RECORD_TYPED, (index/1, owner -- attr, o)) {
+            PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            EXIT_IF(!((RecordObject *)owner_o)->conforming);
+            PyObject *attr_o = *(PyObject **)((char *)owner_o + index);
+            assert(attr_o != NULL);
+            attr = PyStackRef_FromPyObjectNew(attr_o);
+            o = owner;
+            DEAD(owner);
+        }
+
+        macro(LOAD_ATTR_RECORD) =
+            unused/1 +
+            _RECORD_TOS_TYPE +
+            _GUARD_TYPE_VERSION +
+            _LOAD_ATTR_RECORD +
             POP_TOP +
             unused/5 +
             _PUSH_NULL_CONDITIONAL;
@@ -3959,6 +4115,22 @@ dummy_func(
             len = PyStackRef_FromPyObjectSteal(len_o);
         }
 
+        family(MATCH_CLASS, INLINE_CACHE_ENTRIES_MATCH_CLASS) = {
+            MATCH_CLASS_RECORD,
+        };
+
+        specializing op(_SPECIALIZE_MATCH_CLASS, (counter/1, subject, type, names -- subject, type, names)) {
+            #if ENABLE_SPECIALIZATION
+            if (ADAPTIVE_COUNTER_TRIGGERS(counter)) {
+                next_instr = this_instr;
+                _Py_Specialize_MatchClass(subject, type, names, next_instr, frame);
+                DISPATCH_SAME_OPARG();
+            }
+            OPCODE_DEFERRED_INC(MATCH_CLASS);
+            ADVANCE_ADAPTIVE_COUNTER(this_instr[1].counter);
+            #endif  /* ENABLE_SPECIALIZATION */
+        }
+
         op(_MATCH_CLASS, (subject, type, names -- attrs, s, tp, n)) {
             // Pop TOS and TOS1. Set TOS to a tuple of attributes on success, or
             // None on failure.
@@ -3983,7 +4155,46 @@ dummy_func(
             INPUTS_DEAD();
         }
 
-        macro(MATCH_CLASS) = _MATCH_CLASS + POP_TOP + POP_TOP + POP_TOP;
+        macro(MATCH_CLASS) = _SPECIALIZE_MATCH_CLASS + _MATCH_CLASS + POP_TOP + POP_TOP + POP_TOP;
+
+        /* Grail record subject against a record type, positional sub-patterns
+         * only, at a record match site (_PyGrail_IsRecordMatchSite). Record
+         * types are final with the standard metaclass, so a record of another
+         * type is no match without isinstance, and sub-pattern i is field i.
+         * A match pushes the record itself for the following UNPACK_SEQUENCE
+         * instead of an attribute tuple. The guard reads both types' schemas
+         * on each execution; nothing is cached. */
+        op(_GUARD_MATCH_CLASS_RECORD, (subject, type, names -- subject, type, names)) {
+            PyObject *type_o = PyStackRef_AsPyObjectBorrow(type);
+            EXIT_IF(!PyType_Check(type_o));
+            EXIT_IF(!_PyGrail_IsRecordTypeFast((PyTypeObject *)type_o));
+            EXIT_IF(PyTuple_GET_SIZE(PyStackRef_AsPyObjectBorrow(names)) != 0);
+            EXIT_IF(!_PyGrail_IsRecordTypeFast(PyStackRef_TYPE(subject)));
+        }
+
+        op(_MATCH_CLASS_RECORD, (subject, type, names -- attrs, s, tp, n)) {
+            STAT_INC(MATCH_CLASS, hit);
+            PyObject *attrs_o = _PyGrail_MatchRecordPositional(tstate,
+                PyStackRef_AsPyObjectBorrow(subject),
+                PyStackRef_AsPyObjectBorrow(type), oparg,
+                PyStackRef_AsPyObjectBorrow(names));
+            if (attrs_o) {
+                attrs = PyStackRef_FromPyObjectSteal(attrs_o);
+            }
+            else {
+                if (_PyErr_Occurred(tstate)) {
+                    ERROR_NO_POP();
+                }
+                attrs = PyStackRef_None;
+            }
+            s = subject;
+            tp = type;
+            n = names;
+            INPUTS_DEAD();
+        }
+
+        macro(MATCH_CLASS_RECORD) = unused/1 + _GUARD_MATCH_CLASS_RECORD +
+            _MATCH_CLASS_RECORD + POP_TOP + POP_TOP + POP_TOP;
 
         inst(MATCH_MAPPING, (subject -- subject, res)) {
             int match = PyStackRef_TYPE(subject)->tp_flags & Py_TPFLAGS_MAPPING;
@@ -4643,13 +4854,15 @@ dummy_func(
             CALL_PY_GENERAL,
             CALL_BOUND_METHOD_GENERAL,
             CALL_NON_PY_GENERAL,
+            CALL_GENERIC,
+            CALL_RECORD,
         };
 
-        specializing op(_SPECIALIZE_CALL, (counter/1, callable, self_or_null, unused[oparg] -- callable, self_or_null, unused[oparg])) {
+        specializing op(_SPECIALIZE_CALL, (counter/1, callable, self_or_null, args[oparg] -- callable, self_or_null, args[oparg])) {
             #if ENABLE_SPECIALIZATION
             if (ADAPTIVE_COUNTER_TRIGGERS(counter)) {
                 next_instr = this_instr;
-                _Py_Specialize_Call(callable, self_or_null, next_instr, oparg + !PyStackRef_IsNull(self_or_null));
+                _Py_Specialize_Call(callable, self_or_null, args, next_instr, oparg + !PyStackRef_IsNull(self_or_null));
                 DISPATCH_SAME_OPARG();
             }
             OPCODE_DEFERRED_INC(CALL);
@@ -5040,6 +5253,87 @@ dummy_func(
             _SAVE_RETURN_OFFSET +
             _PUSH_FRAME;
 
+        /* Grail generic function: dispatch on the first argument's exact type
+         * (or a guarded cached resolution) on every execution, then enter the
+         * selected Python implementation's frame directly instead of calling
+         * the generic object. No callable is cached, so registration,
+         * override and implementation mutation take effect at once, and one
+         * site may select different implementations. Anything else deopts
+         * to the generic object's vectorcall.
+         */
+        replaced op(_GRAIL_CALL_GENERIC_SELECT, (callable, self_or_null, args[oparg] -- callable, self_or_null, args[oparg])) {
+            DEOPT_IF(!PyStackRef_IsNull(self_or_null));
+            DEOPT_IF(oparg == 0);
+            PyObject *impl_o = _PyGrail_GenericSelect(
+                PyStackRef_AsPyObjectBorrow(callable),
+                PyStackRef_AsPyObjectBorrow(args[0]), 1);
+            DEOPT_IF(impl_o == NULL);
+            DEOPT_IF(!PyFunction_Check(impl_o));
+            PyCodeObject *code = (PyCodeObject *)PyFunction_GET_CODE(impl_o);
+            DEOPT_IF(code->co_argcount != oparg);
+            DEOPT_IF(code->co_kwonlyargcount != 0);
+            DEOPT_IF(code->co_flags & (CO_VARARGS | CO_VARKEYWORDS));
+            DEOPT_IF(!_PyThreadState_HasStackSpace(tstate, code->co_framesize));
+            STAT_INC(CALL, hit);
+            /* Borrowed from a QSBR-protected table: own it before any
+               quiescent state, then release the generic. */
+            _PyStackRef temp = callable;
+            callable = PyStackRef_FromPyObjectNew(impl_o);
+            PyStackRef_CLOSE(temp);
+        }
+
+        /* Tier 2: the trace follows the implementation selected while
+         * recording, so the selection must yield a function with that
+         * implementation's func_version. The optimizer supplies the version
+         * from _RECORD_GRAIL_GENERIC_IMPL; an unoptimized trace (version 0)
+         * always exits. Unlike tier 1, the site is monomorphic per trace;
+         * other selections take a side exit.
+         */
+        tier2 op(_GRAIL_CALL_GENERIC_SELECT_TIER_TWO, (func_version/2, callable, self_or_null, args[oparg] -- callable, self_or_null, args[oparg])) {
+            EXIT_IF(!PyStackRef_IsNull(self_or_null));
+            EXIT_IF(func_version < FUNC_VERSION_FIRST_VALID);
+            PyObject *impl_o = _PyGrail_GenericSelect(
+                PyStackRef_AsPyObjectBorrow(callable),
+                PyStackRef_AsPyObjectBorrow(args[0]), 1);
+            EXIT_IF(impl_o == NULL);
+            EXIT_IF(!PyFunction_Check(impl_o));
+            EXIT_IF(((PyFunctionObject *)impl_o)->func_version != func_version);
+            PyCodeObject *code = (PyCodeObject *)PyFunction_GET_CODE(impl_o);
+            EXIT_IF(!_PyThreadState_HasStackSpace(tstate, code->co_framesize));
+            STAT_INC(CALL, hit);
+            _PyStackRef temp = callable;
+            callable = PyStackRef_FromPyObjectNew(impl_o);
+            PyStackRef_CLOSE(temp);
+        }
+
+        /* Tier 2, emitted by the optimizer for a constant generic whose
+         * exact table selects impl for the first argument's type. Table
+         * changes invalidate the executor, so only that type is checked
+         * (type_version 0: the trace already knows it).
+         */
+        tier2 op(_GRAIL_CALL_GENERIC_FOLDED, (type_version/2, impl/4, callable, self_or_null, args[oparg] -- callable, self_or_null, args[oparg])) {
+            EXIT_IF(!PyStackRef_IsNull(self_or_null));
+            EXIT_IF(type_version != 0 &&
+                    Py_TYPE(PyStackRef_AsPyObjectBorrow(args[0]))->tp_version_tag != type_version);
+            PyCodeObject *code = (PyCodeObject *)PyFunction_GET_CODE((PyObject *)impl);
+            EXIT_IF(!_PyThreadState_HasStackSpace(tstate, code->co_framesize));
+            STAT_INC(CALL, hit);
+            _PyStackRef temp = callable;
+            callable = PyStackRef_FromPyObjectNew((PyObject *)impl);
+            PyStackRef_CLOSE(temp);
+        }
+
+        macro(CALL_GENERIC) =
+            _RECORD_GRAIL_GENERIC_IMPL +
+            unused/1 +
+            unused/2 +
+            _CHECK_PEP_523 +
+            _CHECK_RECURSION_REMAINING +
+            _GRAIL_CALL_GENERIC_SELECT +
+            _INIT_CALL_PY_EXACT_ARGS +
+            _SAVE_RETURN_OFFSET +
+            _PUSH_FRAME;
+
         macro(CALL_PY_EXACT_ARGS) =
             _RECORD_CALLABLE +
             unused/1 + // Skip over the counter
@@ -5250,6 +5544,39 @@ dummy_func(
             _GUARD_CALLABLE_BUILTIN_CLASS +
             _CALL_BUILTIN_CLASS +
             _POP_TOP_OPARG +
+            POP_TOP +
+            _CHECK_PERIODIC_AT_END;
+
+        /* Grail record type called with every field positional. The guard
+         * reads the frozen type's private schema on each execution, so no
+         * type or layout pointer is cached. Conformance is still computed
+         * per call; arguments move into the record on success. Keywords,
+         * defaults and errors go through the type's vectorcall (deopt).
+         */
+        op(_GUARD_CALLABLE_RECORD, (callable, self_or_null, unused[oparg] -- callable, self_or_null, unused[oparg])) {
+            EXIT_IF(!PyStackRef_IsNull(self_or_null));
+            EXIT_IF(!_PyGrail_IsPositionalRecordCall(
+                PyStackRef_AsPyObjectBorrow(callable), oparg));
+        }
+
+        op(_CALL_RECORD, (callable, null, args[oparg] -- res, c)) {
+            STAT_INC(CALL, hit);
+            PyObject *res_o = _PyGrail_RecordFromStackRefsStealOnSuccess(
+                (PyTypeObject *)PyStackRef_AsPyObjectBorrow(callable),
+                args, oparg);
+            if (res_o == NULL) {
+                ERROR_NO_POP();
+            }
+            c = callable;
+            INPUTS_DEAD();
+            res = PyStackRef_FromPyObjectSteal(res_o);
+        }
+
+        macro(CALL_RECORD) =
+            unused/1 +
+            unused/2 +
+            _GUARD_CALLABLE_RECORD +
+            _CALL_RECORD +
             POP_TOP +
             _CHECK_PERIODIC_AT_END;
 
@@ -6902,6 +7229,18 @@ dummy_func(
 
         tier2 op(_RECORD_CALLABLE, (func, self, args[oparg] -- func, self, args[oparg])) {
             RECORD_VALUE(PyStackRef_AsPyObjectBorrow(func));
+        }
+
+        /* The implementation a Grail generic selects for the first
+         * argument (None if none): lock-free, no callbacks. */
+        tier2 op(_RECORD_GRAIL_GENERIC_IMPL, (callable, self_or_null, args[oparg] -- callable, self_or_null, args[oparg])) {
+            PyObject *impl_o = NULL;
+            if (oparg > 0 && PyStackRef_IsNull(self_or_null)) {
+                impl_o = _PyGrail_GenericSelect(
+                    PyStackRef_AsPyObjectBorrow(callable),
+                    PyStackRef_AsPyObjectBorrow(args[0]), 0);
+            }
+            RECORD_VALUE(impl_o != NULL ? impl_o : Py_None);
         }
 
         tier2 op(_RECORD_CALLABLE_KW, (func, self, args[oparg], kwnames -- func, self, args[oparg], kwnames)) {

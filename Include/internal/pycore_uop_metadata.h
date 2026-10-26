@@ -135,12 +135,16 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_GUARD_BINARY_OP_EXTEND_RHS] = HAS_EXIT_FLAG,
     [_GUARD_BINARY_OP_EXTEND] = HAS_EXIT_FLAG | HAS_ESCAPES_FLAG,
     [_BINARY_OP_EXTEND] = HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
+    [_GRAIL_BINARY_CHECK_FUNC] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
+    [_GRAIL_BINARY_LOAD_IMPL] = HAS_EXIT_FLAG,
+    [_GRAIL_BINARY_INIT_CALL] = 0,
+    [_GRAIL_BINARY_KERNEL] = HAS_ARG_FLAG | HAS_DEOPT_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_GUARD_NOS_OBJ_TYPE_VERSION] = HAS_EXIT_FLAG,
     [_BINARY_OP_SUBSCR_SSIZE_ITEM] = HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_STORE_SUBSCR_SSIZE_ITEM] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_BINARY_OP_PY_CHECK_FUNC] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ESCAPES_FLAG,
     [_BINARY_OP_PY_LOAD_FUNC] = HAS_EXIT_FLAG,
-    [_BINARY_OP_PY_INIT_CALL] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
+    [_BINARY_OP_PY_INIT_CALL] = HAS_ARG_FLAG,
     [_EXIT_BINARY_OP_CHECK] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_BINARY_SLICE] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_STORE_SLICE] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
@@ -191,6 +195,8 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_UNPACK_SEQUENCE_TWO_TUPLE] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ESCAPES_FLAG,
     [_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE] = 0,
     [_UNPACK_SEQUENCE_UNIQUE_THREE_TUPLE] = 0,
+    [_GUARD_TOS_MATCHED_RECORD] = HAS_EXIT_FLAG,
+    [_UNPACK_SEQUENCE_RECORD] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
     [_UNPACK_SEQUENCE_TUPLE] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ESCAPES_FLAG,
     [_UNPACK_SEQUENCE_UNIQUE_TUPLE] = HAS_ARG_FLAG,
     [_UNPACK_SEQUENCE_LIST] = HAS_ARG_FLAG | HAS_DEOPT_FLAG | HAS_ESCAPES_FLAG,
@@ -241,6 +247,8 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_LOAD_ATTR_MODULE] = HAS_EXIT_FLAG,
     [_LOAD_ATTR_WITH_HINT] = HAS_ARG_FLAG | HAS_NAME_FLAG | HAS_EXIT_FLAG,
     [_LOAD_ATTR_SLOT] = HAS_EXIT_FLAG,
+    [_LOAD_ATTR_RECORD] = 0,
+    [_LOAD_ATTR_RECORD_TYPED] = HAS_EXIT_FLAG,
     [_CHECK_ATTR_CLASS] = HAS_EXIT_FLAG,
     [_LOAD_ATTR_CLASS] = HAS_ESCAPES_FLAG,
     [_LOAD_ATTR_PROPERTY_FRAME] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
@@ -273,6 +281,8 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_IS_NONE] = HAS_ESCAPES_FLAG,
     [_GET_LEN] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_MATCH_CLASS] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
+    [_GUARD_MATCH_CLASS_RECORD] = HAS_EXIT_FLAG,
+    [_MATCH_CLASS_RECORD] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_MATCH_MAPPING] = 0,
     [_MATCH_SEQUENCE] = 0,
     [_MATCH_KEYS] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
@@ -332,6 +342,8 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_INIT_CALL_PY_DEFAULTS] = HAS_ARG_FLAG | HAS_DEOPT_FLAG,
     [_INIT_CALL_PY_VARARGS] = HAS_ARG_FLAG | HAS_DEOPT_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_PUSH_FRAME] = HAS_SYNC_SP_FLAG | HAS_NEEDS_GUARD_IP_FLAG,
+    [_GRAIL_CALL_GENERIC_SELECT_TIER_TWO] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ESCAPES_FLAG,
+    [_GRAIL_CALL_GENERIC_FOLDED] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ESCAPES_FLAG,
     [_GUARD_NOS_NULL] = HAS_EXIT_FLAG,
     [_GUARD_THIRD_NULL] = HAS_EXIT_FLAG,
     [_GUARD_CALLABLE_TYPE_1] = HAS_EXIT_FLAG,
@@ -346,6 +358,8 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_EXIT_INIT_CHECK] = HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_GUARD_CALLABLE_BUILTIN_CLASS] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
     [_CALL_BUILTIN_CLASS] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
+    [_GUARD_CALLABLE_RECORD] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
+    [_CALL_RECORD] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_GUARD_CALLABLE_BUILTIN_O] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
     [_CALL_BUILTIN_O] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_GUARD_CALLABLE_BUILTIN_FAST] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
@@ -450,6 +464,7 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_RECORD_3OS_GEN_FUNC] = HAS_RECORDS_VALUE_FLAG,
     [_RECORD_4OS] = HAS_RECORDS_VALUE_FLAG,
     [_RECORD_CALLABLE] = HAS_ARG_FLAG | HAS_RECORDS_VALUE_FLAG,
+    [_RECORD_GRAIL_GENERIC_IMPL] = HAS_ARG_FLAG | HAS_RECORDS_VALUE_FLAG,
     [_RECORD_CALLABLE_KW] = HAS_ARG_FLAG | HAS_RECORDS_VALUE_FLAG,
     [_RECORD_BOUND_METHOD] = HAS_ARG_FLAG | HAS_RECORDS_VALUE_FLAG,
     [_RECORD_CODE] = HAS_RECORDS_VALUE_FLAG,
@@ -1368,6 +1383,42 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_GRAIL_BINARY_CHECK_FUNC] = {
+        .best = { 0, 1, 2, 2 },
+        .entries = {
+            { 3, 0, _GRAIL_BINARY_CHECK_FUNC_r03 },
+            { 3, 1, _GRAIL_BINARY_CHECK_FUNC_r13 },
+            { 3, 2, _GRAIL_BINARY_CHECK_FUNC_r23 },
+            { -1, -1, -1 },
+        },
+    },
+    [_GRAIL_BINARY_LOAD_IMPL] = {
+        .best = { 0, 1, 2, 2 },
+        .entries = {
+            { 3, 0, _GRAIL_BINARY_LOAD_IMPL_r03 },
+            { 3, 1, _GRAIL_BINARY_LOAD_IMPL_r13 },
+            { 3, 2, _GRAIL_BINARY_LOAD_IMPL_r23 },
+            { -1, -1, -1 },
+        },
+    },
+    [_GRAIL_BINARY_INIT_CALL] = {
+        .best = { 0, 1, 2, 3 },
+        .entries = {
+            { 1, 0, _GRAIL_BINARY_INIT_CALL_r01 },
+            { 1, 1, _GRAIL_BINARY_INIT_CALL_r11 },
+            { 1, 2, _GRAIL_BINARY_INIT_CALL_r21 },
+            { 1, 3, _GRAIL_BINARY_INIT_CALL_r31 },
+        },
+    },
+    [_GRAIL_BINARY_KERNEL] = {
+        .best = { 2, 2, 2, 2 },
+        .entries = {
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { 3, 2, _GRAIL_BINARY_KERNEL_r23 },
+            { -1, -1, -1 },
+        },
+    },
     [_GUARD_NOS_OBJ_TYPE_VERSION] = {
         .best = { 0, 1, 2, 3 },
         .entries = {
@@ -1872,6 +1923,24 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_GUARD_TOS_MATCHED_RECORD] = {
+        .best = { 0, 1, 2, 3 },
+        .entries = {
+            { 1, 0, _GUARD_TOS_MATCHED_RECORD_r01 },
+            { 1, 1, _GUARD_TOS_MATCHED_RECORD_r11 },
+            { 2, 2, _GUARD_TOS_MATCHED_RECORD_r22 },
+            { 3, 3, _GUARD_TOS_MATCHED_RECORD_r33 },
+        },
+    },
+    [_UNPACK_SEQUENCE_RECORD] = {
+        .best = { 1, 1, 1, 1 },
+        .entries = {
+            { -1, -1, -1 },
+            { 0, 1, _UNPACK_SEQUENCE_RECORD_r10 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
     [_UNPACK_SEQUENCE_TUPLE] = {
         .best = { 1, 1, 1, 1 },
         .entries = {
@@ -2322,6 +2391,24 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_LOAD_ATTR_RECORD] = {
+        .best = { 0, 1, 2, 2 },
+        .entries = {
+            { 2, 0, _LOAD_ATTR_RECORD_r02 },
+            { 2, 1, _LOAD_ATTR_RECORD_r12 },
+            { 3, 2, _LOAD_ATTR_RECORD_r23 },
+            { -1, -1, -1 },
+        },
+    },
+    [_LOAD_ATTR_RECORD_TYPED] = {
+        .best = { 0, 1, 2, 2 },
+        .entries = {
+            { 2, 0, _LOAD_ATTR_RECORD_TYPED_r02 },
+            { 2, 1, _LOAD_ATTR_RECORD_TYPED_r12 },
+            { 3, 2, _LOAD_ATTR_RECORD_TYPED_r23 },
+            { -1, -1, -1 },
+        },
+    },
     [_CHECK_ATTR_CLASS] = {
         .best = { 0, 1, 2, 3 },
         .entries = {
@@ -2608,6 +2695,24 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
             { -1, -1, -1 },
             { 3, 3, _MATCH_CLASS_r33 },
+        },
+    },
+    [_GUARD_MATCH_CLASS_RECORD] = {
+        .best = { 0, 1, 2, 3 },
+        .entries = {
+            { 3, 0, _GUARD_MATCH_CLASS_RECORD_r03 },
+            { 3, 1, _GUARD_MATCH_CLASS_RECORD_r13 },
+            { 3, 2, _GUARD_MATCH_CLASS_RECORD_r23 },
+            { 3, 3, _GUARD_MATCH_CLASS_RECORD_r33 },
+        },
+    },
+    [_MATCH_CLASS_RECORD] = {
+        .best = { 3, 3, 3, 3 },
+        .entries = {
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { 3, 3, _MATCH_CLASS_RECORD_r33 },
         },
     },
     [_MATCH_MAPPING] = {
@@ -3141,6 +3246,24 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_GRAIL_CALL_GENERIC_SELECT_TIER_TWO] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 0, 0, _GRAIL_CALL_GENERIC_SELECT_TIER_TWO_r00 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
+    [_GRAIL_CALL_GENERIC_FOLDED] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 0, 0, _GRAIL_CALL_GENERIC_FOLDED_r00 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
     [_GUARD_NOS_NULL] = {
         .best = { 0, 1, 2, 3 },
         .entries = {
@@ -3262,6 +3385,24 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
         .best = { 0, 0, 0, 0 },
         .entries = {
             { 0, 0, _CALL_BUILTIN_CLASS_r00 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
+    [_GUARD_CALLABLE_RECORD] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 0, 0, _GUARD_CALLABLE_RECORD_r00 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
+    [_CALL_RECORD] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 2, 0, _CALL_RECORD_r02 },
             { -1, -1, -1 },
             { -1, -1, -1 },
             { -1, -1, -1 },
@@ -4429,6 +4570,17 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_GUARD_BINARY_OP_EXTEND_RHS_r33] = _GUARD_BINARY_OP_EXTEND_RHS,
     [_GUARD_BINARY_OP_EXTEND_r22] = _GUARD_BINARY_OP_EXTEND,
     [_BINARY_OP_EXTEND_r23] = _BINARY_OP_EXTEND,
+    [_GRAIL_BINARY_CHECK_FUNC_r03] = _GRAIL_BINARY_CHECK_FUNC,
+    [_GRAIL_BINARY_CHECK_FUNC_r13] = _GRAIL_BINARY_CHECK_FUNC,
+    [_GRAIL_BINARY_CHECK_FUNC_r23] = _GRAIL_BINARY_CHECK_FUNC,
+    [_GRAIL_BINARY_LOAD_IMPL_r03] = _GRAIL_BINARY_LOAD_IMPL,
+    [_GRAIL_BINARY_LOAD_IMPL_r13] = _GRAIL_BINARY_LOAD_IMPL,
+    [_GRAIL_BINARY_LOAD_IMPL_r23] = _GRAIL_BINARY_LOAD_IMPL,
+    [_GRAIL_BINARY_INIT_CALL_r01] = _GRAIL_BINARY_INIT_CALL,
+    [_GRAIL_BINARY_INIT_CALL_r11] = _GRAIL_BINARY_INIT_CALL,
+    [_GRAIL_BINARY_INIT_CALL_r21] = _GRAIL_BINARY_INIT_CALL,
+    [_GRAIL_BINARY_INIT_CALL_r31] = _GRAIL_BINARY_INIT_CALL,
+    [_GRAIL_BINARY_KERNEL_r23] = _GRAIL_BINARY_KERNEL,
     [_GUARD_NOS_OBJ_TYPE_VERSION_r02] = _GUARD_NOS_OBJ_TYPE_VERSION,
     [_GUARD_NOS_OBJ_TYPE_VERSION_r12] = _GUARD_NOS_OBJ_TYPE_VERSION,
     [_GUARD_NOS_OBJ_TYPE_VERSION_r22] = _GUARD_NOS_OBJ_TYPE_VERSION,
@@ -4539,6 +4691,11 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r23] = _UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE,
     [_UNPACK_SEQUENCE_UNIQUE_THREE_TUPLE_r03] = _UNPACK_SEQUENCE_UNIQUE_THREE_TUPLE,
     [_UNPACK_SEQUENCE_UNIQUE_THREE_TUPLE_r13] = _UNPACK_SEQUENCE_UNIQUE_THREE_TUPLE,
+    [_GUARD_TOS_MATCHED_RECORD_r01] = _GUARD_TOS_MATCHED_RECORD,
+    [_GUARD_TOS_MATCHED_RECORD_r11] = _GUARD_TOS_MATCHED_RECORD,
+    [_GUARD_TOS_MATCHED_RECORD_r22] = _GUARD_TOS_MATCHED_RECORD,
+    [_GUARD_TOS_MATCHED_RECORD_r33] = _GUARD_TOS_MATCHED_RECORD,
+    [_UNPACK_SEQUENCE_RECORD_r10] = _UNPACK_SEQUENCE_RECORD,
     [_UNPACK_SEQUENCE_TUPLE_r10] = _UNPACK_SEQUENCE_TUPLE,
     [_UNPACK_SEQUENCE_UNIQUE_TUPLE_r10] = _UNPACK_SEQUENCE_UNIQUE_TUPLE,
     [_UNPACK_SEQUENCE_LIST_r10] = _UNPACK_SEQUENCE_LIST,
@@ -4622,6 +4779,12 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_LOAD_ATTR_SLOT_r02] = _LOAD_ATTR_SLOT,
     [_LOAD_ATTR_SLOT_r12] = _LOAD_ATTR_SLOT,
     [_LOAD_ATTR_SLOT_r23] = _LOAD_ATTR_SLOT,
+    [_LOAD_ATTR_RECORD_r02] = _LOAD_ATTR_RECORD,
+    [_LOAD_ATTR_RECORD_r12] = _LOAD_ATTR_RECORD,
+    [_LOAD_ATTR_RECORD_r23] = _LOAD_ATTR_RECORD,
+    [_LOAD_ATTR_RECORD_TYPED_r02] = _LOAD_ATTR_RECORD_TYPED,
+    [_LOAD_ATTR_RECORD_TYPED_r12] = _LOAD_ATTR_RECORD_TYPED,
+    [_LOAD_ATTR_RECORD_TYPED_r23] = _LOAD_ATTR_RECORD_TYPED,
     [_CHECK_ATTR_CLASS_r01] = _CHECK_ATTR_CLASS,
     [_CHECK_ATTR_CLASS_r11] = _CHECK_ATTR_CLASS,
     [_CHECK_ATTR_CLASS_r22] = _CHECK_ATTR_CLASS,
@@ -4679,6 +4842,11 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_IS_NONE_r11] = _IS_NONE,
     [_GET_LEN_r12] = _GET_LEN,
     [_MATCH_CLASS_r33] = _MATCH_CLASS,
+    [_GUARD_MATCH_CLASS_RECORD_r03] = _GUARD_MATCH_CLASS_RECORD,
+    [_GUARD_MATCH_CLASS_RECORD_r13] = _GUARD_MATCH_CLASS_RECORD,
+    [_GUARD_MATCH_CLASS_RECORD_r23] = _GUARD_MATCH_CLASS_RECORD,
+    [_GUARD_MATCH_CLASS_RECORD_r33] = _GUARD_MATCH_CLASS_RECORD,
+    [_MATCH_CLASS_RECORD_r33] = _MATCH_CLASS_RECORD,
     [_MATCH_MAPPING_r02] = _MATCH_MAPPING,
     [_MATCH_MAPPING_r12] = _MATCH_MAPPING,
     [_MATCH_MAPPING_r23] = _MATCH_MAPPING,
@@ -4809,6 +4977,8 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_INIT_CALL_PY_DEFAULTS_r01] = _INIT_CALL_PY_DEFAULTS,
     [_INIT_CALL_PY_VARARGS_r01] = _INIT_CALL_PY_VARARGS,
     [_PUSH_FRAME_r10] = _PUSH_FRAME,
+    [_GRAIL_CALL_GENERIC_SELECT_TIER_TWO_r00] = _GRAIL_CALL_GENERIC_SELECT_TIER_TWO,
+    [_GRAIL_CALL_GENERIC_FOLDED_r00] = _GRAIL_CALL_GENERIC_FOLDED,
     [_GUARD_NOS_NULL_r02] = _GUARD_NOS_NULL,
     [_GUARD_NOS_NULL_r12] = _GUARD_NOS_NULL,
     [_GUARD_NOS_NULL_r22] = _GUARD_NOS_NULL,
@@ -4841,6 +5011,8 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_EXIT_INIT_CHECK_r10] = _EXIT_INIT_CHECK,
     [_GUARD_CALLABLE_BUILTIN_CLASS_r00] = _GUARD_CALLABLE_BUILTIN_CLASS,
     [_CALL_BUILTIN_CLASS_r00] = _CALL_BUILTIN_CLASS,
+    [_GUARD_CALLABLE_RECORD_r00] = _GUARD_CALLABLE_RECORD,
+    [_CALL_RECORD_r02] = _CALL_RECORD,
     [_GUARD_CALLABLE_BUILTIN_O_r00] = _GUARD_CALLABLE_BUILTIN_O,
     [_CALL_BUILTIN_O_r03] = _CALL_BUILTIN_O,
     [_GUARD_CALLABLE_BUILTIN_FAST_r00] = _GUARD_CALLABLE_BUILTIN_FAST,
@@ -5294,6 +5466,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_CALL_METHOD_DESCRIPTOR_O_INLINE_r03] = "_CALL_METHOD_DESCRIPTOR_O_INLINE_r03",
     [_CALL_NON_PY_GENERAL] = "_CALL_NON_PY_GENERAL",
     [_CALL_NON_PY_GENERAL_r01] = "_CALL_NON_PY_GENERAL_r01",
+    [_CALL_RECORD] = "_CALL_RECORD",
+    [_CALL_RECORD_r02] = "_CALL_RECORD_r02",
     [_CALL_STR_1] = "_CALL_STR_1",
     [_CALL_STR_1_r32] = "_CALL_STR_1_r32",
     [_CALL_TUPLE_1] = "_CALL_TUPLE_1",
@@ -5514,6 +5688,25 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_GET_ITER_TRAD_r12] = "_GET_ITER_TRAD_r12",
     [_GET_LEN] = "_GET_LEN",
     [_GET_LEN_r12] = "_GET_LEN_r12",
+    [_GRAIL_BINARY_CHECK_FUNC] = "_GRAIL_BINARY_CHECK_FUNC",
+    [_GRAIL_BINARY_CHECK_FUNC_r03] = "_GRAIL_BINARY_CHECK_FUNC_r03",
+    [_GRAIL_BINARY_CHECK_FUNC_r13] = "_GRAIL_BINARY_CHECK_FUNC_r13",
+    [_GRAIL_BINARY_CHECK_FUNC_r23] = "_GRAIL_BINARY_CHECK_FUNC_r23",
+    [_GRAIL_BINARY_INIT_CALL] = "_GRAIL_BINARY_INIT_CALL",
+    [_GRAIL_BINARY_INIT_CALL_r01] = "_GRAIL_BINARY_INIT_CALL_r01",
+    [_GRAIL_BINARY_INIT_CALL_r11] = "_GRAIL_BINARY_INIT_CALL_r11",
+    [_GRAIL_BINARY_INIT_CALL_r21] = "_GRAIL_BINARY_INIT_CALL_r21",
+    [_GRAIL_BINARY_INIT_CALL_r31] = "_GRAIL_BINARY_INIT_CALL_r31",
+    [_GRAIL_BINARY_KERNEL] = "_GRAIL_BINARY_KERNEL",
+    [_GRAIL_BINARY_KERNEL_r23] = "_GRAIL_BINARY_KERNEL_r23",
+    [_GRAIL_BINARY_LOAD_IMPL] = "_GRAIL_BINARY_LOAD_IMPL",
+    [_GRAIL_BINARY_LOAD_IMPL_r03] = "_GRAIL_BINARY_LOAD_IMPL_r03",
+    [_GRAIL_BINARY_LOAD_IMPL_r13] = "_GRAIL_BINARY_LOAD_IMPL_r13",
+    [_GRAIL_BINARY_LOAD_IMPL_r23] = "_GRAIL_BINARY_LOAD_IMPL_r23",
+    [_GRAIL_CALL_GENERIC_FOLDED] = "_GRAIL_CALL_GENERIC_FOLDED",
+    [_GRAIL_CALL_GENERIC_FOLDED_r00] = "_GRAIL_CALL_GENERIC_FOLDED_r00",
+    [_GRAIL_CALL_GENERIC_SELECT_TIER_TWO] = "_GRAIL_CALL_GENERIC_SELECT_TIER_TWO",
+    [_GRAIL_CALL_GENERIC_SELECT_TIER_TWO_r00] = "_GRAIL_CALL_GENERIC_SELECT_TIER_TWO_r00",
     [_GUARD_3OS_ASYNC_GEN_ASEND] = "_GUARD_3OS_ASYNC_GEN_ASEND",
     [_GUARD_3OS_ASYNC_GEN_ASEND_r03] = "_GUARD_3OS_ASYNC_GEN_ASEND_r03",
     [_GUARD_3OS_ASYNC_GEN_ASEND_r13] = "_GUARD_3OS_ASYNC_GEN_ASEND_r13",
@@ -5622,6 +5815,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_GUARD_CALLABLE_METHOD_DESCRIPTOR_NOARGS_r00] = "_GUARD_CALLABLE_METHOD_DESCRIPTOR_NOARGS_r00",
     [_GUARD_CALLABLE_METHOD_DESCRIPTOR_O] = "_GUARD_CALLABLE_METHOD_DESCRIPTOR_O",
     [_GUARD_CALLABLE_METHOD_DESCRIPTOR_O_r00] = "_GUARD_CALLABLE_METHOD_DESCRIPTOR_O_r00",
+    [_GUARD_CALLABLE_RECORD] = "_GUARD_CALLABLE_RECORD",
+    [_GUARD_CALLABLE_RECORD_r00] = "_GUARD_CALLABLE_RECORD_r00",
     [_GUARD_CALLABLE_STR_1] = "_GUARD_CALLABLE_STR_1",
     [_GUARD_CALLABLE_STR_1_r03] = "_GUARD_CALLABLE_STR_1_r03",
     [_GUARD_CALLABLE_STR_1_r13] = "_GUARD_CALLABLE_STR_1_r13",
@@ -5729,6 +5924,11 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_GUARD_LOAD_SUPER_ATTR_METHOD_r13] = "_GUARD_LOAD_SUPER_ATTR_METHOD_r13",
     [_GUARD_LOAD_SUPER_ATTR_METHOD_r23] = "_GUARD_LOAD_SUPER_ATTR_METHOD_r23",
     [_GUARD_LOAD_SUPER_ATTR_METHOD_r33] = "_GUARD_LOAD_SUPER_ATTR_METHOD_r33",
+    [_GUARD_MATCH_CLASS_RECORD] = "_GUARD_MATCH_CLASS_RECORD",
+    [_GUARD_MATCH_CLASS_RECORD_r03] = "_GUARD_MATCH_CLASS_RECORD_r03",
+    [_GUARD_MATCH_CLASS_RECORD_r13] = "_GUARD_MATCH_CLASS_RECORD_r13",
+    [_GUARD_MATCH_CLASS_RECORD_r23] = "_GUARD_MATCH_CLASS_RECORD_r23",
+    [_GUARD_MATCH_CLASS_RECORD_r33] = "_GUARD_MATCH_CLASS_RECORD_r33",
     [_GUARD_NOS_COMPACT_ASCII] = "_GUARD_NOS_COMPACT_ASCII",
     [_GUARD_NOS_COMPACT_ASCII_r02] = "_GUARD_NOS_COMPACT_ASCII_r02",
     [_GUARD_NOS_COMPACT_ASCII_r12] = "_GUARD_NOS_COMPACT_ASCII_r12",
@@ -5864,6 +6064,11 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_GUARD_TOS_LIST_r11] = "_GUARD_TOS_LIST_r11",
     [_GUARD_TOS_LIST_r22] = "_GUARD_TOS_LIST_r22",
     [_GUARD_TOS_LIST_r33] = "_GUARD_TOS_LIST_r33",
+    [_GUARD_TOS_MATCHED_RECORD] = "_GUARD_TOS_MATCHED_RECORD",
+    [_GUARD_TOS_MATCHED_RECORD_r01] = "_GUARD_TOS_MATCHED_RECORD_r01",
+    [_GUARD_TOS_MATCHED_RECORD_r11] = "_GUARD_TOS_MATCHED_RECORD_r11",
+    [_GUARD_TOS_MATCHED_RECORD_r22] = "_GUARD_TOS_MATCHED_RECORD_r22",
+    [_GUARD_TOS_MATCHED_RECORD_r33] = "_GUARD_TOS_MATCHED_RECORD_r33",
     [_GUARD_TOS_NOT_NULL] = "_GUARD_TOS_NOT_NULL",
     [_GUARD_TOS_NOT_NULL_r01] = "_GUARD_TOS_NOT_NULL_r01",
     [_GUARD_TOS_NOT_NULL_r11] = "_GUARD_TOS_NOT_NULL_r11",
@@ -6017,6 +6222,14 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_LOAD_ATTR_PROPERTY_FRAME_r11] = "_LOAD_ATTR_PROPERTY_FRAME_r11",
     [_LOAD_ATTR_PROPERTY_FRAME_r22] = "_LOAD_ATTR_PROPERTY_FRAME_r22",
     [_LOAD_ATTR_PROPERTY_FRAME_r33] = "_LOAD_ATTR_PROPERTY_FRAME_r33",
+    [_LOAD_ATTR_RECORD] = "_LOAD_ATTR_RECORD",
+    [_LOAD_ATTR_RECORD_r02] = "_LOAD_ATTR_RECORD_r02",
+    [_LOAD_ATTR_RECORD_r12] = "_LOAD_ATTR_RECORD_r12",
+    [_LOAD_ATTR_RECORD_r23] = "_LOAD_ATTR_RECORD_r23",
+    [_LOAD_ATTR_RECORD_TYPED] = "_LOAD_ATTR_RECORD_TYPED",
+    [_LOAD_ATTR_RECORD_TYPED_r02] = "_LOAD_ATTR_RECORD_TYPED_r02",
+    [_LOAD_ATTR_RECORD_TYPED_r12] = "_LOAD_ATTR_RECORD_TYPED_r12",
+    [_LOAD_ATTR_RECORD_TYPED_r23] = "_LOAD_ATTR_RECORD_TYPED_r23",
     [_LOAD_ATTR_SLOT] = "_LOAD_ATTR_SLOT",
     [_LOAD_ATTR_SLOT_r02] = "_LOAD_ATTR_SLOT_r02",
     [_LOAD_ATTR_SLOT_r12] = "_LOAD_ATTR_SLOT_r12",
@@ -6192,6 +6405,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_MAP_ADD_r20] = "_MAP_ADD_r20",
     [_MATCH_CLASS] = "_MATCH_CLASS",
     [_MATCH_CLASS_r33] = "_MATCH_CLASS_r33",
+    [_MATCH_CLASS_RECORD] = "_MATCH_CLASS_RECORD",
+    [_MATCH_CLASS_RECORD_r33] = "_MATCH_CLASS_RECORD_r33",
     [_MATCH_KEYS] = "_MATCH_KEYS",
     [_MATCH_KEYS_r23] = "_MATCH_KEYS_r23",
     [_MATCH_MAPPING] = "_MATCH_MAPPING",
@@ -6267,6 +6482,7 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_RECORD_CALLABLE] = "_RECORD_CALLABLE",
     [_RECORD_CALLABLE_KW] = "_RECORD_CALLABLE_KW",
     [_RECORD_CODE] = "_RECORD_CODE",
+    [_RECORD_GRAIL_GENERIC_IMPL] = "_RECORD_GRAIL_GENERIC_IMPL",
     [_RECORD_NOS] = "_RECORD_NOS",
     [_RECORD_NOS_GEN_FUNC] = "_RECORD_NOS_GEN_FUNC",
     [_RECORD_NOS_TYPE] = "_RECORD_NOS_TYPE",
@@ -6470,6 +6686,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_UNPACK_SEQUENCE_r10] = "_UNPACK_SEQUENCE_r10",
     [_UNPACK_SEQUENCE_LIST] = "_UNPACK_SEQUENCE_LIST",
     [_UNPACK_SEQUENCE_LIST_r10] = "_UNPACK_SEQUENCE_LIST_r10",
+    [_UNPACK_SEQUENCE_RECORD] = "_UNPACK_SEQUENCE_RECORD",
+    [_UNPACK_SEQUENCE_RECORD_r10] = "_UNPACK_SEQUENCE_RECORD_r10",
     [_UNPACK_SEQUENCE_TUPLE] = "_UNPACK_SEQUENCE_TUPLE",
     [_UNPACK_SEQUENCE_TUPLE_r10] = "_UNPACK_SEQUENCE_TUPLE_r10",
     [_UNPACK_SEQUENCE_TWO_TUPLE] = "_UNPACK_SEQUENCE_TWO_TUPLE",
@@ -6691,6 +6909,14 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 0;
         case _BINARY_OP_EXTEND:
             return 2;
+        case _GRAIL_BINARY_CHECK_FUNC:
+            return 0;
+        case _GRAIL_BINARY_LOAD_IMPL:
+            return 0;
+        case _GRAIL_BINARY_INIT_CALL:
+            return 3;
+        case _GRAIL_BINARY_KERNEL:
+            return 2;
         case _GUARD_NOS_OBJ_TYPE_VERSION:
             return 0;
         case _BINARY_OP_SUBSCR_SSIZE_ITEM:
@@ -6803,6 +7029,10 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 1;
         case _UNPACK_SEQUENCE_UNIQUE_THREE_TUPLE:
             return 1;
+        case _GUARD_TOS_MATCHED_RECORD:
+            return 0;
+        case _UNPACK_SEQUENCE_RECORD:
+            return 1;
         case _UNPACK_SEQUENCE_TUPLE:
             return 1;
         case _UNPACK_SEQUENCE_UNIQUE_TUPLE:
@@ -6903,6 +7133,10 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 1;
         case _LOAD_ATTR_SLOT:
             return 1;
+        case _LOAD_ATTR_RECORD:
+            return 1;
+        case _LOAD_ATTR_RECORD_TYPED:
+            return 1;
         case _CHECK_ATTR_CLASS:
             return 0;
         case _LOAD_ATTR_CLASS:
@@ -6966,6 +7200,10 @@ int _PyUop_num_popped(int opcode, int oparg)
         case _GET_LEN:
             return 0;
         case _MATCH_CLASS:
+            return 3;
+        case _GUARD_MATCH_CLASS_RECORD:
+            return 0;
+        case _MATCH_CLASS_RECORD:
             return 3;
         case _MATCH_MAPPING:
             return 0;
@@ -7085,6 +7323,10 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 2 + oparg;
         case _PUSH_FRAME:
             return 1;
+        case _GRAIL_CALL_GENERIC_SELECT_TIER_TWO:
+            return 0;
+        case _GRAIL_CALL_GENERIC_FOLDED:
+            return 0;
         case _GUARD_NOS_NULL:
             return 0;
         case _GUARD_THIRD_NULL:
@@ -7113,6 +7355,10 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 0;
         case _CALL_BUILTIN_CLASS:
             return 0;
+        case _GUARD_CALLABLE_RECORD:
+            return 0;
+        case _CALL_RECORD:
+            return 2 + oparg;
         case _GUARD_CALLABLE_BUILTIN_O:
             return 0;
         case _CALL_BUILTIN_O:
@@ -7320,6 +7566,8 @@ int _PyUop_num_popped(int opcode, int oparg)
         case _RECORD_4OS:
             return 0;
         case _RECORD_CALLABLE:
+            return 0;
+        case _RECORD_GRAIL_GENERIC_IMPL:
             return 0;
         case _RECORD_CALLABLE_KW:
             return 0;

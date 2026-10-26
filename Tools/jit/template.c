@@ -13,6 +13,7 @@
 #include "pycore_frame.h"
 #include "pycore_function.h"
 #include "pycore_genobject.h"
+#include "pycore_grail.h"
 #include "pycore_import.h"
 #include "pycore_interpframe.h"
 #include "pycore_interpolation.h"

@@ -69,6 +69,9 @@ _cache_format = frozendict(
     CONTAINS_OP=frozendict(
         counter=1,
     ),
+    MATCH_CLASS=frozendict(
+        counter=1,
+    ),
     FOR_ITER=frozendict(
         counter=1,
     ),
