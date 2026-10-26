@@ -279,7 +279,7 @@ for changes, expect in [
     ({"xs": (P(1.0, 2.0), P(1.0, "y"))}, False),
     ({"xs": ()}, True),
 ]:
-    for replace in (copy.replace, lambda r, **kw: r.__replace__(**kw)):
+    for replace in (grail.replace, copy.replace, lambda r, **kw: r.__replace__(**kw)):
         assert _grail._is_conforming(replace(ok, **changes)) is expect, changes
 bad = R(P(1.0, 2.0), (P(3.0, 4.0),), "n")
 assert not _grail._is_conforming(bad)
@@ -302,7 +302,7 @@ w = Wide(*range(9))
 # A key that is equal to a field name but not the interned object.
 y = "".join(["la", "st"])
 assert y is not "last"
-for replace in (copy.replace, lambda obj, **kw: obj.__replace__(**kw)):
+for replace in (grail.replace, copy.replace, lambda obj, **kw: obj.__replace__(**kw)):
     assert replace(w) == w
     assert replace(w, last=10, a=-1) == Wide(-1, *range(1, 8), 10)
     assert replace(w, **{y: 11}) == Wide(*range(8), 11)
@@ -546,6 +546,39 @@ class RecordTests(unittest.TestCase):
                 R()
         self.assertEqual(len(events), 10)
         self.assertEqual(R(y=5).y, 5)
+
+    def test_grail_replace(self):
+        self.assertIn("replace", grail.__all__)
+        Point = self.point_type()
+        p = Point(1.0)
+        self.assertEqual(grail.replace(p, y=2.5), Point(1.0, 2.5))
+        self.assertEqual(p.y, 0.0)
+        self.assertTrue(_grail._is_conforming(grail.replace(p, y=2.5)))
+        self.assertFalse(_grail._is_conforming(grail.replace(p, x="bad")))
+        self.assertTrue(grail.substitutable(p, grail.replace(p)))
+        for call in (lambda: grail.replace(p, z=1),
+                     lambda: grail.replace(p, 2),
+                     lambda: grail.replace(obj=p),
+                     lambda: grail.replace(1)):
+            with self.assertRaises(TypeError):
+                call()
+
+        class Lookalike:
+            def __replace__(self, **changes):
+                raise AssertionError("non-record hook must not run")
+        with self.assertRaises(TypeError):
+            grail.replace(Lookalike())
+
+        calls = []
+        @grail.record
+        class R:
+            obj: object
+            items: list = grail.field(factory=lambda: calls.append(1) or [])
+        r = R(1)
+        changed = grail.replace(r, obj=2)
+        self.assertEqual(changed.obj, 2)
+        self.assertIs(changed.items, r.items)
+        self.assertEqual(calls, [1])
 
     def test_replace(self):
         Point = self.point_type()

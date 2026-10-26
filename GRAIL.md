@@ -19,7 +19,8 @@ The `grail` module provides:
   conform is a *value record*: deeply immutable, structurally compared and
   hashed, shareable without synchronization.  Other fields are ordinary
   references with CPython's usual semantics.  Records support
-  `copy.replace`, positional class patterns, copying and pickling.
+  `grail.replace` and `copy.replace`, positional class patterns, copying
+  and pickling.
 - **Generic functions** (`@grail.generic`, `.impl`, `.register`,
   `.override`): single dispatch on the first argument with the same MRO and
   ABC rules as `functools.singledispatch`.  Exact-type calls are resolved
