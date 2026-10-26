@@ -2,7 +2,7 @@
 """Semantic tests for Grail, shared by the native runtime and the shim.
 
 Runs against whichever ``grail`` is importable: the native prototype
-(``_grail``) or the pure-Python shim (``grail._core``).  cpython-proto runs
+(``_grail``) or the pure-Python shim (``grail._core``).  cpython-grail runs
 a copy as Lib/test/test_grail.py; tests of its internals (dispatch caches,
 operator dispatch for non-record types, which needs interpreter support)
 are in its test_grail_native.py.  Native ablation switches are exercised

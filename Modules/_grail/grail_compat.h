@@ -3,7 +3,7 @@
  *
  * The same sources build two ways:
  *   - in grail-compat, as an ordinary extension against CPython 3.14+;
- *   - in cpython-proto, as a core module (Py_BUILD_CORE), where the
+ *   - in cpython-grail, as a core module (Py_BUILD_CORE), where the
  *     internal fast paths below are used instead.
  */
 #ifndef GRAIL_COMPAT_H
