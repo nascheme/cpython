@@ -2315,6 +2315,8 @@ static _PyBinaryOpSpecializationDescr binaryop_extend_descrs[] = {
        that can return one of the operands, so the result is not guaranteed
        to be a freshly allocated object. */
     {NB_ADD, NULL, _PyTuple_Concat, &PyTuple_Type, 0, &PyTuple_Type, &PyTuple_Type},
+    /* Tuples have no in-place add, so += concatenates too. */
+    {NB_INPLACE_ADD, NULL, _PyTuple_Concat, &PyTuple_Type, 0, &PyTuple_Type, &PyTuple_Type},
 
     /* str * int / int * str: call unicode_repeat directly.
        unicode_repeat returns the original when n == 1. */
