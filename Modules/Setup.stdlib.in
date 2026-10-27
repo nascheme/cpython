@@ -40,6 +40,7 @@ _grail_numvec _grail_numvec.c
 # sources in _grail/ are copied from grail-compat (tools/sync_to_cpython_grail.py).
 *static*
 _grail_pds _grail/pds.c _grail/grail_hamt.c -DPy_BUILD_CORE
+_grail_pool _grail_pool.c
 *@MODULE_BUILDTYPE@*
 @MODULE_ARRAY_TRUE@array arraymodule.c
 @MODULE__BISECT_TRUE@_bisect _bisectmodule.c

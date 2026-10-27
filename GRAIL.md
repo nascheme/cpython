@@ -37,6 +37,9 @@ The `grail` module provides:
 - **Numeric vectors**: `FloatVector` and `IntVector`, flat unboxed storage.
 - **Atom**: a synchronized cell holding a value, with `swap`, `reset`,
   compare-and-set and an exact-int `add`.
+- **Pool**: `grail.Pool` and the shared `grail.pool()`, a C thread pool
+  whose `map` has low per-task overhead (API from Quansight's
+  spinningjenny).
 - Introspection: `record_fields`, `record_values`, `is_value_record`,
   `substitutable`.
 
@@ -76,6 +79,7 @@ The `grail` module provides:
 | Shared-value lifetime | `Objects/object.c`, `Include/internal/pycore_cell.h`, `Include/internal/pycore_object_deferred.h` |
 | Collections | `Modules/_grail/` (`PMap`, `PSet`, HAMT), `Modules/_grail_vector.c`, `Modules/_grail_numvec.c` |
 | Atom | `Modules/_grail_atom.c` |
+| Pool | `Modules/_grail_pool.c` |
 | Copy | `Lib/copy.py` |
 | Tests | `Lib/test/test_grail*.py` |
 
@@ -89,7 +93,7 @@ mkdir build && cd build
 ../configure --disable-gil
 make -j8
 ./python -X gil=0 -m test test_grail test_grail_atom test_grail_pds \
-    test_grail_vector test_grail_numvec test_grail_hamt test_grail_native \
+    test_grail_pool test_grail_vector test_grail_numvec test_grail_hamt test_grail_native \
     test_grail_specialization test_grail_call_specialization \
     test_grail_arithmetic_specialization test_grail_jit
 ```

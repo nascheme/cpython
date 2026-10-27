@@ -2,10 +2,12 @@
 
 Native boxed records with copy/pickle support, MRO/ABC generic dispatch,
 and numeric record operators. Native persistent PMap/PSet/PVector, unboxed
-FloatVector/IntVector and synchronized Atom cells live in separate modules. No record field/call fast paths.
+FloatVector/IntVector, synchronized Atom cells and the thread Pool live in
+separate modules. No record field/call fast paths.
 Inherited dispatch uses a bounded guarded native resolution cache.
 """
 
+import _thread
 import annotationlib as _annotationlib
 import builtins as _builtins
 import inspect as _inspect
@@ -19,11 +21,13 @@ from _grail_pds import PMap, PSet
 from _grail_atom import Atom
 from _grail_vector import PVector
 from _grail_numvec import FloatVector, IntVector
+from _grail_pool import Pool
 
 backend = _core.backend
 __all__ = ["record", "field", "replace", "generic", "ops", "repr", "eq", "hash",
            "record_fields", "record_values", "is_value_record", "substitutable",
-           "PMap", "PSet", "PVector", "FloatVector", "IntVector", "Atom"]
+           "PMap", "PSet", "PVector", "FloatVector", "IntVector", "Atom",
+           "Pool", "pool"]
 
 _MISSING = object()
 _Field = _namedtuple("_Field", "default factory")
@@ -317,3 +321,30 @@ ops = _Ops(*(_core.Generic(getattr(_operator, name), "a", pair=True)
            _core.Generic(_builtins.abs, "obj"))
 _core._configure(repr, eq, hash,
                  (ops.add, ops.sub, ops.mul, ops.truediv, ops.neg, ops.abs))
+
+
+_pool = None
+_pool_lock = _thread.allocate_lock()
+
+
+def pool():
+    """Return the shared Pool, started on first use with one worker per CPU.
+
+    It is shut down at exit. A child process made by fork() starts its own.
+    """
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            import atexit
+            import os
+            _pool = Pool(os.process_cpu_count() or 1)
+            atexit.register(_pool.shutdown)
+            if hasattr(os, "register_at_fork"):
+                os.register_at_fork(after_in_child=_forget_pool)
+        return _pool
+
+
+def _forget_pool():
+    global _pool, _pool_lock
+    _pool = None
+    _pool_lock = _thread.allocate_lock()
