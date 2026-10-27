@@ -78,5 +78,29 @@ class FloatIntConstCompareTests(unittest.TestCase):
             self.assertIn("_COMPARE_OP_FLOAT_INT_CONST", executor_uops(count))
 
 
+class TupleTruthTests(unittest.TestCase):
+    def test_tuple_truth(self):
+        ns = {}
+        exec("""if 1:
+            def count(xs):
+                t = 0
+                for x in xs:
+                    if x:
+                        t += 1
+                    if not x:
+                        t += 10
+                return t
+            """, ns)
+        count = ns["count"]
+        tuples = [(), (1,), (None,), (0, 0)] * 25
+        for _ in range(REPEAT):
+            self.assertEqual(count(tuples), 75 + 250)
+        if tier2_enabled():
+            self.assertIn("_TO_BOOL_TUPLE", executor_uops(count))
+        mixed = [(), [], [0], 0, 1, "", "a", None, (1,)] * 10
+        for _ in range(REPEAT):
+            self.assertEqual(count(mixed), 40 + 500)
+
+
 if __name__ == "__main__":
     unittest.main()

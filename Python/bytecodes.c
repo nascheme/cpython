@@ -509,7 +509,16 @@ dummy_func(
             res = err ? PyStackRef_True : PyStackRef_False;
         }
 
-        macro(TO_BOOL) = _SPECIALIZE_TO_BOOL + unused/2 + _TO_BOOL;
+        macro(TO_BOOL) = _SPECIALIZE_TO_BOOL + _RECORD_TOS_TYPE + unused/2 + _TO_BOOL;
+
+        /* Tier 2, for a value the optimizer knows is an exact tuple. */
+        tier2 op(_TO_BOOL_TUPLE, (value -- res, v)) {
+            PyObject *value_o = PyStackRef_AsPyObjectBorrow(value);
+            assert(PyTuple_CheckExact(value_o));
+            res = PyTuple_GET_SIZE(value_o) ? PyStackRef_True : PyStackRef_False;
+            v = value;
+            DEAD(value);
+        }
 
         inst(TO_BOOL_BOOL, (unused/1, unused/2, value -- value)) {
             EXIT_IF(!PyStackRef_BoolCheck(value));

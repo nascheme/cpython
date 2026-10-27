@@ -88,6 +88,7 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_UNARY_NEGATIVE_FLOAT_INPLACE] = 0,
     [_UNARY_NOT] = 0,
     [_TO_BOOL] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
+    [_TO_BOOL_TUPLE] = 0,
     [_TO_BOOL_BOOL] = HAS_EXIT_FLAG,
     [_TO_BOOL_INT] = 0,
     [_GUARD_NOS_LIST] = HAS_EXIT_FLAG,
@@ -926,6 +927,15 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
             { 1, 1, _TO_BOOL_r11 },
             { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
+    [_TO_BOOL_TUPLE] = {
+        .best = { 0, 1, 2, 2 },
+        .entries = {
+            { 2, 0, _TO_BOOL_TUPLE_r02 },
+            { 2, 1, _TO_BOOL_TUPLE_r12 },
+            { 3, 2, _TO_BOOL_TUPLE_r23 },
             { -1, -1, -1 },
         },
     },
@@ -4122,6 +4132,9 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_UNARY_NOT_r22] = _UNARY_NOT,
     [_UNARY_NOT_r33] = _UNARY_NOT,
     [_TO_BOOL_r11] = _TO_BOOL,
+    [_TO_BOOL_TUPLE_r02] = _TO_BOOL_TUPLE,
+    [_TO_BOOL_TUPLE_r12] = _TO_BOOL_TUPLE,
+    [_TO_BOOL_TUPLE_r23] = _TO_BOOL_TUPLE,
     [_TO_BOOL_BOOL_r01] = _TO_BOOL_BOOL,
     [_TO_BOOL_BOOL_r11] = _TO_BOOL_BOOL,
     [_TO_BOOL_BOOL_r22] = _TO_BOOL_BOOL,
@@ -6229,6 +6242,10 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_TO_BOOL_STR_r02] = "_TO_BOOL_STR_r02",
     [_TO_BOOL_STR_r12] = "_TO_BOOL_STR_r12",
     [_TO_BOOL_STR_r23] = "_TO_BOOL_STR_r23",
+    [_TO_BOOL_TUPLE] = "_TO_BOOL_TUPLE",
+    [_TO_BOOL_TUPLE_r02] = "_TO_BOOL_TUPLE_r02",
+    [_TO_BOOL_TUPLE_r12] = "_TO_BOOL_TUPLE_r12",
+    [_TO_BOOL_TUPLE_r23] = "_TO_BOOL_TUPLE_r23",
     [_UNARY_INVERT] = "_UNARY_INVERT",
     [_UNARY_INVERT_r12] = "_UNARY_INVERT_r12",
     [_UNARY_NEGATIVE] = "_UNARY_NEGATIVE",
@@ -6374,6 +6391,8 @@ int _PyUop_num_popped(int opcode, int oparg)
         case _UNARY_NOT:
             return 1;
         case _TO_BOOL:
+            return 1;
+        case _TO_BOOL_TUPLE:
             return 1;
         case _TO_BOOL_BOOL:
             return 0;

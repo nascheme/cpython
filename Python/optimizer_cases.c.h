@@ -327,9 +327,32 @@
             int already_bool = optimize_to_bool(this_instr, ctx, value, &res,
                 _POP_TOP, _NOP);
             if (!already_bool) {
+                if (!sym_matches_type(value, &PyTuple_Type) &&
+                    !sym_has_type(value) &&
+                    sym_get_probable_type(value) == &PyTuple_Type) {
+                    ADD_OP(_GUARD_TOS_TUPLE, 0, 0);
+                    sym_set_type(value, &PyTuple_Type);
+                }
+                if (sym_matches_type(value, &PyTuple_Type)) {
+                    ADD_OP(_TO_BOOL_TUPLE, 0, 0);
+                    ADD_OP(_POP_TOP, 0, 0);
+                }
                 res = sym_new_truthiness(ctx, value, true);
             }
             stack_pointer[-1] = res;
+            break;
+        }
+
+        case _TO_BOOL_TUPLE: {
+            JitOptRef res;
+            JitOptRef v;
+            res = sym_new_not_null(ctx);
+            v = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-1] = res;
+            stack_pointer[0] = v;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
             break;
         }
 
