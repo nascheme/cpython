@@ -52,7 +52,7 @@ _PyGrail_IsPositionalRecordCall(PyObject *callable, int nargs)
 
 /* Type of records parked on the per-thread freelist: their own type may
  * already be gone, and the free-threaded GC reads the type of every block. */
-extern PyTypeObject _PyGrail_FreeRecord_Type;
+PyAPI_DATA(PyTypeObject) _PyGrail_FreeRecord_Type;
 
 /* True for a record type: its private schema is installed before
  * publication (and only a cleared, dying type loses it). */
@@ -127,22 +127,18 @@ int _PyGrail_MatchRecord(PyObject *subject, PyObject *type, Py_ssize_t nargs,
 /* grail.mutate drafts (Modules/_grail_draft.c). The layout of a record
  * draft is shared so LOAD_ATTR_RECORD_DRAFT and STORE_ATTR_RECORD_DRAFT can
  * read and write its field slots. A draft is used only by the thread that
- * created its root, while the root is open. */
+ * created its root, while the root is open. The root draft holds the
+ * mutate() call's state; it is its own root (not a reference), and every
+ * child draft holds a reference to it. */
 struct _PyGrailDraftState;
-typedef struct {
+typedef struct _PyGrailDraft {
     PyObject_HEAD
-    struct _PyGrailDraftState *st;
-    PyThreadState *owner;
-    int state;                   /* 0 while open */
-    PyObject *draft;             /* borrowed: the root draft, for identity */
-    PyObject *result;
-} _PyGrailDraftRoot;
-
-typedef struct {
-    PyObject_HEAD
-    _PyGrailDraftRoot *root;
+    struct _PyGrailDraft *root;
     PyObject *base;              /* the value the draft was made from */
-    PyObject *built;
+    PyObject *built;             /* finish() result for this draft */
+    struct _PyGrailDraftState *st;
+    PyThreadState *owner;        /* root only: the creating thread */
+    int state;                   /* root only: 0 while open */
     int building;
 } _PyGrailDraft;
 
@@ -159,6 +155,17 @@ typedef PyObject *(*_PyGrailDraftLoad)(PyObject *draft, Py_ssize_t index);
 PyAPI_FUNC(void) _PyGrail_RegisterRecordDraft(getattrofunc getattro,
                                               destructor dealloc,
                                               _PyGrailDraftLoad load);
+
+/* PVector operations for drafts, registered by _grail_vector: borrow and set
+ * take an index already in range; set and append return a new vector. */
+typedef struct {
+    lenfunc length;
+    PyObject *(*borrow)(PyObject *vector, Py_ssize_t index);
+    PyObject *(*set)(PyObject *vector, Py_ssize_t index, PyObject *value);
+    PyObject *(*append)(PyObject *vector, PyObject *value);
+} _PyGrailVectorOps;
+PyAPI_FUNC(void) _PyGrail_RegisterVectorOps(const _PyGrailVectorOps *ops);
+PyAPI_FUNC(const _PyGrailVectorOps *) _PyGrail_GetVectorOps(void);
 PyAPI_DATA(getattrofunc) _PyGrail_record_draft_getattro;
 PyAPI_DATA(destructor) _PyGrail_draft_dealloc;
 PyAPI_DATA(_PyGrailDraftLoad) _PyGrail_record_draft_load;
@@ -198,6 +205,9 @@ _PyGrail_IsStaticPair(PyTypeObject *left, PyTypeObject *right)
 
 #endif
 
+/* The same for PVector drafts (grail.mutate). */
+PyAPI_FUNC(void) _PyGrail_RegisterDraftSubscript(binaryfunc subscript,
+                                                 ssizeargfunc item);
 /* Exact-pair arithmetic only: 1 with the final result (NULL on error), or 0
  * on a miss. */
 int _PyGrail_BinaryOp(PyObject *, PyObject *, int, PyObject **);

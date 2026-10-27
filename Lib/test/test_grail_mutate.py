@@ -101,6 +101,25 @@ class MutateRecordTest(unittest.TestCase):
             d.origin = Point(9, 9)
         self.assertEqual(finish(d).origin, Point(9, 9))
 
+    def test_finish_frees_drafts(self):
+        # Child drafts refer to their root; finish() must not leave cycles.
+        import gc
+        s = make_state()
+        gc.collect()
+        gc.disable()
+        try:
+            for _ in range(100):
+                with mutate(s) as d:
+                    t = d.tasks[1]
+                    t.queue += (2,)
+                    d.index["c"] = d.origin
+                    d.origin.x = 1
+                finish(d)
+            del d, t
+            self.assertEqual(gc.collect(), 0)
+        finally:
+            gc.enable()
+
     def test_draft_contains_itself(self):
         @grail.record
         class Box:

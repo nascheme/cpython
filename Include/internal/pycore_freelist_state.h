@@ -35,6 +35,7 @@ extern "C" {
 #  define Py_pymethodobjects_MAXFREELIST 20
 #  define Py_grail_records_MAXSAVESIZE 10   // Largest record (fields) to save
 #  define Py_grail_records_MAXFREELIST 100  // Records of each size to save
+#  define Py_grail_drafts_MAXFREELIST 16    // grail.mutate drafts of each kind
 
 // A generic freelist of either PyObjects or other data structures.
 struct _Py_freelist {
@@ -74,6 +75,10 @@ struct _Py_freelists {
     struct _Py_freelist pymethodobjects;
     // Indexed by field count; entries have type _PyGrail_FreeRecord_Type.
     struct _Py_freelist grail_records[Py_grail_records_MAXSAVESIZE + 1];
+    // grail.mutate drafts (Modules/_grail_draft.c): record drafts indexed by
+    // field count, then PVector drafts. Entries have type
+    // _PyGrail_FreeRecord_Type.
+    struct _Py_freelist grail_drafts[Py_grail_records_MAXSAVESIZE + 2];
 };
 
 #ifdef __cplusplus

@@ -2722,6 +2722,34 @@ bytearray_int_subscript(PyObject *lhs, PyObject *rhs)
 }
 #endif
 
+/* The same for PVector drafts (grail.mutate); item also checks that the
+ * draft is open and owned by the calling thread. */
+static binaryfunc registered_draft_subscript;
+static ssizeargfunc registered_draft_item;
+
+void
+_PyGrail_RegisterDraftSubscript(binaryfunc subscript, ssizeargfunc item)
+{
+    _Py_atomic_store_ptr(&registered_draft_item, (void *)item);
+    _Py_atomic_store_ptr_release(&registered_draft_subscript, (void *)subscript);
+}
+
+static int
+draft_int_subscript_guard(PyObject *lhs, PyObject *rhs)
+{
+    binaryfunc subscript = (binaryfunc)_Py_atomic_load_ptr_acquire(&registered_draft_subscript);
+    PyMappingMethods *mapping = Py_TYPE(lhs)->tp_as_mapping;
+    return subscript != NULL && mapping != NULL &&
+           mapping->mp_subscript == subscript && _PyLong_CheckExactAndCompact(rhs);
+}
+
+static PyObject *
+draft_int_subscript(PyObject *lhs, PyObject *rhs)
+{
+    ssizeargfunc item = (ssizeargfunc)_Py_atomic_load_ptr(&registered_draft_item);
+    return item(lhs, _PyLong_CompactValue((PyLongObject *)rhs));
+}
+
 static _PyBinaryOpSpecializationDescr binaryop_extend_descrs[] = {
     /* long-long arithmetic: guards also check _PyLong_IsCompact, so
        type alone is not sufficient to eliminate the guard. */
@@ -2781,6 +2809,8 @@ static _PyBinaryOpSpecializationDescr binaryop_extend_descrs[] = {
 
     /* Registered sequences (array.array) [int] */
     {NB_SUBSCR, registered_int_subscript_guard, registered_int_subscript, NULL, 0, NULL, NULL},
+    /* grail.mutate PVector draft[int] */
+    {NB_SUBSCR, draft_int_subscript_guard, draft_int_subscript, NULL, 0, NULL, NULL},
     /* bytes[int], bytearray[int] */
     {NB_SUBSCR, bytes_int_subscript_guard, bytes_int_subscript, &PyLong_Type, 0, NULL, NULL},
 #ifndef Py_GIL_DISABLED

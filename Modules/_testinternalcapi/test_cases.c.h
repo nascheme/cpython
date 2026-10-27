@@ -9760,7 +9760,7 @@
                     assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
                     JUMP_TO_PREDICTED(LOAD_ATTR);
                 }
-                _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+                _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
                 if (root->state != 0 || root->owner != tstate) {
                     UPDATE_MISS_STATS(LOAD_ATTR);
                     assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
@@ -12493,7 +12493,7 @@
                     assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
                     JUMP_TO_PREDICTED(STORE_ATTR);
                 }
-                _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+                _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
                 if (root->state != 0 || root->owner != tstate) {
                     UPDATE_MISS_STATS(STORE_ATTR);
                     assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));

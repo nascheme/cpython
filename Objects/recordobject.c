@@ -1896,6 +1896,20 @@ getattrofunc _PyGrail_record_draft_getattro;
 destructor _PyGrail_draft_dealloc;
 _PyGrailDraftLoad _PyGrail_record_draft_load;
 
+static const _PyGrailVectorOps *vector_ops;
+
+void
+_PyGrail_RegisterVectorOps(const _PyGrailVectorOps *ops)
+{
+    _Py_atomic_store_ptr_release(&vector_ops, (void *)ops);
+}
+
+const _PyGrailVectorOps *
+_PyGrail_GetVectorOps(void)
+{
+    return _Py_atomic_load_ptr_acquire(&vector_ops);
+}
+
 void
 _PyGrail_RegisterRecordDraft(getattrofunc getattro, destructor dealloc,
                              _PyGrailDraftLoad load)

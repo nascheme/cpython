@@ -14091,7 +14091,7 @@
                 SET_CURRENT_CACHED_VALUES(0);
                 JUMP_TO_JUMP_TARGET();
             }
-            _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+            _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
             if (root->state != 0 || root->owner != tstate) {
                 UOP_STAT_INC(uopcode, miss);
                 SET_CURRENT_CACHED_VALUES(0);
@@ -14132,7 +14132,7 @@
                 SET_CURRENT_CACHED_VALUES(1);
                 JUMP_TO_JUMP_TARGET();
             }
-            _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+            _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
             if (root->state != 0 || root->owner != tstate) {
                 UOP_STAT_INC(uopcode, miss);
                 _tos_cache0 = owner;
@@ -14176,7 +14176,7 @@
                 SET_CURRENT_CACHED_VALUES(2);
                 JUMP_TO_JUMP_TARGET();
             }
-            _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+            _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
             if (root->state != 0 || root->owner != tstate) {
                 UOP_STAT_INC(uopcode, miss);
                 _tos_cache1 = owner;
@@ -14226,7 +14226,7 @@
                 SET_CURRENT_CACHED_VALUES(3);
                 JUMP_TO_JUMP_TARGET();
             }
-            _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+            _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
             if (root->state != 0 || root->owner != tstate) {
                 UOP_STAT_INC(uopcode, miss);
                 _tos_cache2 = owner;

@@ -3461,7 +3461,7 @@ dummy_func(
             PyObject *base = ((_PyGrailDraft *)owner_o)->base;
             EXIT_IF(base == NULL);
             EXIT_IF(FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version);
-            _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+            _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
             EXIT_IF(root->state != 0 || root->owner != tstate);
         }
 

@@ -308,5 +308,30 @@ class RecordDraftAttrTests(unittest.TestCase):
         self.assertEqual(p.obj, 9)
 
 
+@requires_specialization
+class VectorDraftSubscriptTests(unittest.TestCase):
+    def test_int_subscript(self):
+        ns = {}
+        exec("def get(d, i):\n    return d[i]\n", ns)  # fresh code object
+        get = ns["get"]
+        v = grail.PVector(range(40))
+        for _ in range(1000):
+            with grail.mutate(v) as d:
+                get(d, 3)
+        self.assertIn("BINARY_OP_EXTEND",
+                      {i.opname for i in dis.get_instructions(get, adaptive=True)})
+        d = grail.mutate(v)
+        d.append(40)
+        self.assertEqual([get(d, i) for i in (0, 39, 40, -1, -41)], [0, 39, 40, 40, 0])
+        for i in (41, -42):
+            with self.assertRaises(IndexError):
+                get(d, i)
+        grail.finish(d)
+        with self.assertRaises(RuntimeError):
+            get(d, 0)
+        self.assertEqual(get(v, 5), 5)
+        self.assertEqual(get((5, 6), 1), 6)
+
+
 if __name__ == "__main__":
     unittest.main()

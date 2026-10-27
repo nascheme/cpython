@@ -8,6 +8,7 @@
 
 #include "Python.h"
 #include "internal/pycore_code.h"    // _PySpecialize_RegisterIntSubscript()
+#include "internal/pycore_grail.h"   // _PyGrail_RegisterVectorOps()
 #include "internal/pycore_long.h"    // _PyLong_IsCompact()
 #include "internal/pycore_modsupport.h"  // _PyArg_CheckPositional()
 #include "internal/pycore_object.h"  // _Py_DECREF_TYPE()
@@ -177,6 +178,14 @@ vector_item(PyObject *op, Py_ssize_t index)
     return Py_NewRef(vector_borrow(self, index));
 }
 
+/* Item 0 <= index < count, borrowed (grail.mutate drafts). */
+static PyObject *
+vector_borrow_item(PyObject *op, Py_ssize_t index)
+{
+    assert(0 <= index && index < ((Vector *)op)->count);
+    return vector_borrow((Vector *)op, index);
+}
+
 /* v[i] for a small exact int i (BINARY_OP_EXTEND). */
 static PyObject *
 vector_item_normalized(PyObject *op, Py_ssize_t index)
@@ -290,18 +299,12 @@ set_path(PyObject *node, unsigned int shift, Py_ssize_t index, PyObject *value)
     return result;
 }
 
+/* A vector with existing index 0 <= index < count replaced. */
 static PyObject *
-vector_set(PyObject *op, PyObject *const *args, Py_ssize_t nargs)
+vector_set_index(PyObject *op, Py_ssize_t index, PyObject *value)
 {
     Vector *self = (Vector *)op;
-    if (!_PyArg_CheckPositional("set", nargs, 2, 2)) {
-        return NULL;
-    }
-    PyObject *key = args[0], *value = args[1];
-    Py_ssize_t index;
-    if (normalize_index(self, key, &index) < 0) {
-        return NULL;
-    }
+    assert(0 <= index && index < self->count);
     if (index >= self->count - PyTuple_GET_SIZE(self->tail)) {
         return vector_wrap(Py_TYPE(op), Py_XNewRef(self->root),
                            copy_node(self->tail, index & MASK, value), self->count, self->shift);
@@ -311,6 +314,19 @@ vector_set(PyObject *op, PyObject *const *args, Py_ssize_t nargs)
         return NULL;
     }
     return vector_wrap(Py_TYPE(op), root, Py_NewRef(self->tail), self->count, self->shift);
+}
+
+static PyObject *
+vector_set(PyObject *op, PyObject *const *args, Py_ssize_t nargs)
+{
+    if (!_PyArg_CheckPositional("set", nargs, 2, 2)) {
+        return NULL;
+    }
+    Py_ssize_t index;
+    if (normalize_index((Vector *)op, args[0], &index) < 0) {
+        return NULL;
+    }
+    return vector_set_index(op, index, args[1]);
 }
 
 static PyObject *
@@ -1456,6 +1472,13 @@ module_exec(PyObject *module)
     }
     Py_DECREF(registered);
     _PySpecialize_RegisterIntSubscript(vector_subscript, vector_item_normalized);
+    static const _PyGrailVectorOps ops = {
+        .length = vector_len,
+        .borrow = vector_borrow_item,
+        .set = vector_set_index,
+        .append = vector_append,
+    };
+    _PyGrail_RegisterVectorOps(&ops);
     return PyModule_AddObjectRef(module, "PVector", (PyObject *)state->vector_type);
 }
 
