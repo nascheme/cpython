@@ -8,6 +8,7 @@
 
 #include "Python.h"
 #include "internal/pycore_long.h"    // _PyLong_IsCompact()
+#include "internal/pycore_modsupport.h"  // _PyArg_CheckPositional()
 #include "internal/pycore_object.h"  // _Py_DECREF_TYPE()
 #include "internal/pycore_pyatomic_ft_wrappers.h"
 #include "internal/pycore_tuple.h"   // _PyTuple_HASH_XXPRIME_1
@@ -279,13 +280,13 @@ set_path(PyObject *node, unsigned int shift, Py_ssize_t index, PyObject *value)
 }
 
 static PyObject *
-vector_set(PyObject *op, PyObject *args)
+vector_set(PyObject *op, PyObject *const *args, Py_ssize_t nargs)
 {
     Vector *self = (Vector *)op;
-    PyObject *key, *value;
-    if (!PyArg_UnpackTuple(args, "set", 2, 2, &key, &value)) {
+    if (!_PyArg_CheckPositional("set", nargs, 2, 2)) {
         return NULL;
     }
+    PyObject *key = args[0], *value = args[1];
     Py_ssize_t index;
     if (normalize_index(self, key, &index) < 0) {
         return NULL;
@@ -1339,7 +1340,7 @@ vector_reduce(PyObject *op, PyObject *Py_UNUSED(ignored))
 }
 
 static PyMethodDef vector_methods[] = {
-    {"set", vector_set, METH_VARARGS, "Return a vector with an existing index replaced."},
+    {"set", _PyCFunction_CAST(vector_set), METH_FASTCALL, "Return a vector with an existing index replaced."},
     {"append", vector_append, METH_O, "Return a vector with one appended element."},
     {"pop", vector_pop, METH_NOARGS, "Return the vector without its last element."},
     {"mutate", vector_mutate, METH_NOARGS, "Return a transient builder starting from this vector."},
