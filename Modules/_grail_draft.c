@@ -26,6 +26,7 @@
 #include "Python.h"
 #include "internal/pycore_grail.h"   // RecordObject, _PyGrail_RecordWithValues()
 #include "internal/pycore_freelist.h" // _Py_FREELIST_POP_MEM()
+#include "internal/pycore_moduleobject.h" // _PyModule_GetState()
 #include "internal/pycore_object.h"  // _PyObject_Init()
 #include "internal/pycore_pystate.h" // _PyThreadState_GET()
 
@@ -152,7 +153,9 @@ new_draft(DraftState *st, RootObject *root, PyObject *base, int kind)
             }
         }
         r->n = n;
-        memset(r->values, 0, n * sizeof(PyObject *));
+        for (Py_ssize_t i = 0; i < n; i++) {
+            r->values[i] = NULL;
+        }
         d = &r->head;
     }
     else if (kind == KIND_VECTOR) {
@@ -1188,7 +1191,7 @@ build(PyObject *value)
 static inline DraftState *
 get_state(PyObject *module)
 {
-    return (DraftState *)PyModule_GetState(module);
+    return (DraftState *)_PyModule_GetState(module);
 }
 
 static PyObject *
