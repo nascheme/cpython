@@ -219,5 +219,40 @@ class IntDivisionTests(unittest.TestCase):
                          [(2**70 // 3, 2**70 % 3, 2**70 // 3), (3.0, 1.5, 3.0)])
 
 
+class ShiftAndFormatTests(unittest.TestCase):
+    def test_shifts(self):
+        ns = {}
+        exec("""if 1:
+            def run(pairs):
+                return [(a << b, a >> b) for a, b in pairs]
+            """, ns)
+        from operator import lshift, rshift
+        vals = [0, 1, -1, 5, -5, 2**29, -2**29, 2**30 - 1, -(2**30 - 1)]
+        pairs = [(a, b) for a in vals for b in (0, 1, 3, 31, 32, 33, 63, 64, 100)]
+        expected = [(lshift(a, b), rshift(a, b)) for a, b in pairs]
+        for _ in range(REPEAT):
+            self.assertEqual(ns["run"](pairs), expected)
+        with self.assertRaises(ValueError):
+            ns["run"]([(1, 2), (1, -1)])
+
+    def test_str_format(self):
+        ns = {}
+        exec("""if 1:
+            def fmt(items):
+                return [f % arg for f, arg in items]
+            """, ns)
+
+        class S(str):
+            def __rmod__(self, other):
+                return "R"
+
+        items = [("%s-%d", ("x", 5)), ("a%%", ()), ("%(k)s", {"k": 1}),
+                 ("%r", "q"), ("%s", S("z"))] * 20
+        for _ in range(REPEAT):
+            self.assertEqual(ns["fmt"](items)[:5], ["x-5", "a%", "1", "'q'", "R"])
+        with self.assertRaises(TypeError):
+            ns["fmt"]([("%d", "x")])
+
+
 if __name__ == "__main__":
     unittest.main()

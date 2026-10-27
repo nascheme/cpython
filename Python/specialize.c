@@ -2209,6 +2209,47 @@ BITWISE_LONGS_ACTION(compactlongs_and, &)
 BITWISE_LONGS_ACTION(compactlongs_xor, ^)
 #undef BITWISE_LONGS_ACTION
 
+/* << and >> of compact ints. A negative or (for <<) large count takes the
+ * generic function, which raises or builds a big int. */
+static PyObject *
+compactlongs_lshift(PyObject *lhs, PyObject *rhs)
+{
+    Py_ssize_t a = _PyLong_CompactValue((PyLongObject *)lhs);
+    Py_ssize_t b = _PyLong_CompactValue((PyLongObject *)rhs);
+    if (b < 0 || b > 32) {
+        return PyNumber_Lshift(lhs, rhs);
+    }
+    /* |a| < 2**30, so a * 2**b fits in 63 bits. */
+    return PyLong_FromLongLong((long long)a * ((long long)1 << b));
+}
+
+static PyObject *
+compactlongs_rshift(PyObject *lhs, PyObject *rhs)
+{
+    Py_ssize_t a = _PyLong_CompactValue((PyLongObject *)lhs);
+    Py_ssize_t b = _PyLong_CompactValue((PyLongObject *)rhs);
+    if (b < 0) {
+        return PyNumber_Rshift(lhs, rhs);
+    }
+    /* Arithmetic shift rounds toward negative infinity, as int >> does. */
+    return PyLong_FromSsize_t(b >= 63 ? (a < 0 ? -1 : 0) : a >> b);
+}
+
+/* str % x: unicode_mod, unless x is a str subclass instance (whose own
+ * __rmod__ would be tried first). */
+static int
+str_format_guard(PyObject *lhs, PyObject *rhs)
+{
+    return PyUnicode_CheckExact(lhs) &&
+           (PyUnicode_CheckExact(rhs) || !PyUnicode_Check(rhs));
+}
+
+static PyObject *
+str_format(PyObject *lhs, PyObject *rhs)
+{
+    return PyUnicode_Format(lhs, rhs);
+}
+
 /* % and // of compact ints with a nonzero divisor (a zero divisor keeps
  * the generic path and its ZeroDivisionError), rounding toward negative
  * infinity as long_mod and long_div do. */
@@ -2363,6 +2404,12 @@ bytearray_int_subscript(PyObject *lhs, PyObject *rhs)
 static _PyBinaryOpSpecializationDescr binaryop_extend_descrs[] = {
     /* long-long arithmetic: guards also check _PyLong_IsCompact, so
        type alone is not sufficient to eliminate the guard. */
+    {NB_LSHIFT, compactlongs_guard, compactlongs_lshift, &PyLong_Type, 1, NULL, NULL},
+    {NB_INPLACE_LSHIFT, compactlongs_guard, compactlongs_lshift, &PyLong_Type, 1, NULL, NULL},
+    {NB_RSHIFT, compactlongs_guard, compactlongs_rshift, &PyLong_Type, 1, NULL, NULL},
+    {NB_INPLACE_RSHIFT, compactlongs_guard, compactlongs_rshift, &PyLong_Type, 1, NULL, NULL},
+    {NB_REMAINDER, str_format_guard, str_format, &PyUnicode_Type, 0, NULL, NULL},
+    {NB_INPLACE_REMAINDER, str_format_guard, str_format, &PyUnicode_Type, 0, NULL, NULL},
     {NB_REMAINDER, compactlongs_nonzero_divisor_guard, compactlongs_remainder, &PyLong_Type, 1, NULL, NULL},
     {NB_INPLACE_REMAINDER, compactlongs_nonzero_divisor_guard, compactlongs_remainder, &PyLong_Type, 1, NULL, NULL},
     {NB_FLOOR_DIVIDE, compactlongs_nonzero_divisor_guard, compactlongs_floor_divide, &PyLong_Type, 1, NULL, NULL},
