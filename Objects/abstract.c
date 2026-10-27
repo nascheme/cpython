@@ -2143,6 +2143,10 @@ PySequence_List(PyObject *v)
         return null_error();
     }
 
+    if (PyList_CheckExact(v)) {
+        return PyList_GetSlice(v, 0, PY_SSIZE_T_MAX);
+    }
+
     result = PyList_New(0);
     if (result == NULL)
         return NULL;

@@ -2783,6 +2783,16 @@ builtin_sorted(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyObject
     if (newlist == NULL)
         return NULL;
 
+    /* No key or reverse: list.sort() itself, not looked up by name (the
+       new list is exact, so its sort method is list.sort). */
+    if (nargs == 1 && kwnames == NULL) {
+        if (PyList_Sort(newlist) < 0) {
+            Py_DECREF(newlist);
+            return NULL;
+        }
+        return newlist;
+    }
+
     callable = PyObject_GetAttr(newlist, &_Py_ID(sort));
     if (callable == NULL) {
         Py_DECREF(newlist);
