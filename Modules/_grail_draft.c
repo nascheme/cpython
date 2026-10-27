@@ -67,8 +67,14 @@ typedef struct {
     Py_ssize_t capacity;
     VectorChange *changes;
     VectorChange small[4];
+    /* Once there are more changes than small holds: changes[slot[i] - 1] is
+     * the change at index i, slot[i] == 0 for none (base_len entries). */
+    uint32_t *slot;
     PyObject *tail;              /* list of appended items, or NULL */
 } VectorDraft;
+
+/* finish() applies this many changes or more through a transient. */
+#define VECTOR_DRAFT_TRANSIENT 4
 
 typedef struct {
     DraftObject head;
@@ -169,6 +175,7 @@ new_draft(DraftState *st, RootObject *root, PyObject *base, int kind)
         v->nchanges = 0;
         v->capacity = Py_ARRAY_LENGTH(v->small);
         v->changes = v->small;
+        v->slot = NULL;
         v->tail = NULL;
         d = &v->head;
     }
@@ -533,6 +540,8 @@ vector_draft_clear(PyObject *op)
         v->changes = v->small;
         v->capacity = Py_ARRAY_LENGTH(v->small);
     }
+    PyMem_Free(v->slot);
+    v->slot = NULL;
     Py_CLEAR(v->tail);
     head_clear(&v->head);
     return 0;
@@ -570,6 +579,10 @@ vector_draft_index(VectorDraft *v, PyObject *key)
 static VectorChange *
 vector_draft_find(VectorDraft *v, Py_ssize_t i)
 {
+    if (v->slot != NULL) {
+        uint32_t k = v->slot[i];
+        return k ? &v->changes[k - 1] : NULL;
+    }
     for (Py_ssize_t k = 0; k < v->nchanges; k++) {
         if (v->changes[k].index == i) {
             return &v->changes[k];
@@ -588,6 +601,16 @@ vector_draft_put(VectorDraft *v, Py_ssize_t i, PyObject *value)
         return 0;
     }
     if (v->nchanges == v->capacity) {
+        if (v->slot == NULL && v->base_len <= UINT32_MAX) {
+            v->slot = PyMem_Calloc(v->base_len, sizeof(uint32_t));
+            if (v->slot == NULL) {
+                PyErr_NoMemory();
+                return -1;
+            }
+            for (Py_ssize_t k = 0; k < v->nchanges; k++) {
+                v->slot[v->changes[k].index] = (uint32_t)(k + 1);
+            }
+        }
         Py_ssize_t cap = v->capacity * 2;
         VectorChange *grown = PyMem_Malloc(cap * sizeof(VectorChange));
         if (grown == NULL) {
@@ -604,6 +627,9 @@ vector_draft_put(VectorDraft *v, Py_ssize_t i, PyObject *value)
     v->changes[v->nchanges].index = i;
     v->changes[v->nchanges].value = Py_NewRef(value);
     v->nchanges++;
+    if (v->slot != NULL) {
+        v->slot[i] = (uint32_t)v->nchanges;
+    }
     return 0;
 }
 
@@ -759,43 +785,81 @@ vector_draft_extend(PyObject *self, PyObject *iterable)
     Py_RETURN_NONE;
 }
 
+/* Few changes are applied with set and append; more through a transient,
+ * which copies each trie path once. */
 static PyObject *
 vector_draft_build(VectorDraft *v)
 {
     DraftState *st = v->head.root->st;
+    const _PyGrailVectorOps *ops = st->vops;
     PyObject *base = v->head.base;
-    PyObject *result = Py_NewRef(base);
+    Py_ssize_t ntail = v->tail ? PyList_GET_SIZE(v->tail) : 0;
+    if (v->nchanges + ntail < VECTOR_DRAFT_TRANSIENT) {
+        PyObject *result = Py_NewRef(base);
+        for (Py_ssize_t k = 0; k < v->nchanges; k++) {
+            PyObject *value = build(v->changes[k].value);
+            if (value == NULL) {
+                goto error;
+            }
+            Py_ssize_t index = v->changes[k].index;
+            if (value == ops->borrow(base, index)) {
+                continue;
+            }
+            Py_SETREF(result, ops->set(result, index, value));
+            if (result == NULL) {
+                return NULL;
+            }
+        }
+        for (Py_ssize_t k = 0; k < ntail; k++) {
+            PyObject *value = build(PyList_GET_ITEM(v->tail, k));
+            if (value == NULL) {
+                goto error;
+            }
+            Py_SETREF(result, ops->append(result, value));
+            if (result == NULL) {
+                return NULL;
+            }
+        }
+        return result;
+    error:
+        Py_DECREF(result);
+        return NULL;
+    }
+    PyObject *builder = NULL, *result = NULL;
+    int changed = ntail > 0;
     for (Py_ssize_t k = 0; k < v->nchanges; k++) {
         PyObject *value = build(v->changes[k].value);
         if (value == NULL) {
-            goto error;
+            goto done;
         }
         Py_ssize_t index = v->changes[k].index;
-        if (value == st->vops->borrow(base, index)) {
+        if (value == ops->borrow(base, index)) {
             continue;
         }
-        PyObject *updated = st->vops->set(result, index, value);
-        if (updated == NULL) {
-            goto error;
+        if (builder == NULL && (builder = ops->builder(base)) == NULL) {
+            goto done;
         }
-        Py_SETREF(result, updated);
+        if (ops->builder_set(builder, index, value) < 0) {
+            goto done;
+        }
+        changed = 1;
     }
-    Py_ssize_t ntail = v->tail ? PyList_GET_SIZE(v->tail) : 0;
+    if (!changed) {
+        return Py_NewRef(base);  /* every change was its own value */
+    }
+    if (builder == NULL && (builder = ops->builder(base)) == NULL) {
+        goto done;
+    }
     for (Py_ssize_t k = 0; k < ntail; k++) {
         PyObject *value = build(PyList_GET_ITEM(v->tail, k));
-        if (value == NULL) {
-            goto error;
+        if (value == NULL || ops->builder_append(builder, value) < 0) {
+            goto done;
         }
-        PyObject *updated = st->vops->append(result, value);
-        if (updated == NULL) {
-            goto error;
-        }
-        Py_SETREF(result, updated);
     }
+    result = ops->builder_finish(builder);
+done:
+    Py_XDECREF(builder);
     return result;
-error:
-    Py_DECREF(result);
-    return NULL;
 }
 
 static PyMethodDef vector_draft_methods[] = {
@@ -1146,6 +1210,8 @@ drop_edits(DraftObject *root)
         for (Py_ssize_t i = 0; i < n; i++) {
             Py_DECREF(v->changes[i].value);
         }
+        PyMem_Free(v->slot);
+        v->slot = NULL;
         Py_CLEAR(v->tail);
     }
     else {

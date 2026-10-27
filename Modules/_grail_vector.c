@@ -727,6 +727,46 @@ vector_mutate(PyObject *op, PyObject *Py_UNUSED(ignored))
 }
 
 /* Publish the builder's contents as a vector and empty the builder. */
+/* Operations on a private builder for grail.mutate drafts: no ownership or
+ * state checks (the draft owns the builder) and an index already in range. */
+static PyObject *
+draft_builder_new(PyObject *vector)
+{
+    return (PyObject *)builder_new((Vector *)vector);
+}
+
+static int
+draft_builder_set(PyObject *op, Py_ssize_t index, PyObject *value)
+{
+    Builder *self = (Builder *)op;
+    assert(0 <= index && index < self->count);
+    Py_ssize_t trunk = self->count - self->tail_len;
+    if (index >= trunk) {
+        Py_SETREF(self->tail[index - trunk], Py_NewRef(value));
+        return 0;
+    }
+    return builder_set_path(&self->root, self->shift, index, value);
+}
+
+static int
+draft_builder_append(PyObject *op, PyObject *value)
+{
+    return builder_append_item((Builder *)op, value);
+}
+
+static PyObject *builder_publish(Builder *self);
+
+static PyObject *
+draft_builder_finish(PyObject *op)
+{
+    Builder *self = (Builder *)op;
+    PyObject *result = builder_publish(self);
+    if (result != NULL) {
+        self->status = FINISHED;
+    }
+    return result;
+}
+
 static PyObject *
 builder_publish(Builder *self)
 {
@@ -1477,6 +1517,10 @@ module_exec(PyObject *module)
         .borrow = vector_borrow_item,
         .set = vector_set_index,
         .append = vector_append,
+        .builder = draft_builder_new,
+        .builder_set = draft_builder_set,
+        .builder_append = draft_builder_append,
+        .builder_finish = draft_builder_finish,
     };
     _PyGrail_RegisterVectorOps(&ops);
     return PyModule_AddObjectRef(module, "PVector", (PyObject *)state->vector_type);

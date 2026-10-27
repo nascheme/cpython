@@ -181,6 +181,27 @@ class MutateCollectionTest(unittest.TestCase):
         self.assertEqual(finish(d), PVector([Point(1, 0), 1, 20, Point(5, 6), 7, 8]))
         self.assertEqual(v, PVector([Point(0, 0), 1, 2]))
 
+    def test_vector_many_changes(self):
+        v = PVector([Point(i, 0) for i in range(100)] + list(range(100)))
+        with mutate(v) as d:
+            for i in range(0, 100, 2):
+                d[i].y = i              # element drafts
+            for i in range(100, 200, 3):
+                d[i] = -i               # assignments
+            d[4].y = 40                 # an existing change, after many
+            d[1] = d[1]                 # its own draft: no change
+            d.append(Point(7, 7))
+            d[-1].x = 8
+        r = finish(d)
+        expected = ([Point(i, i if i % 2 == 0 else 0) for i in range(100)]
+                    + [-i if (i - 100) % 3 == 0 else i - 100 for i in range(100, 200)]
+                    + [Point(8, 7)])
+        expected[4] = Point(4, 40)
+        self.assertEqual(list(r), expected)
+        for i in range(1, 100, 2):
+            self.assertIs(r[i], v[i])
+        self.assertEqual(v[0], Point(0, 0))
+
     def test_map(self):
         m = PMap({"a": Point(0, 0), "b": 1})
         with mutate(m) as d:

@@ -163,6 +163,12 @@ typedef struct {
     PyObject *(*borrow)(PyObject *vector, Py_ssize_t index);
     PyObject *(*set)(PyObject *vector, Py_ssize_t index, PyObject *value);
     PyObject *(*append)(PyObject *vector, PyObject *value);
+    /* A private transient of a vector, edited without ownership checks and
+     * finished once (then only released). */
+    PyObject *(*builder)(PyObject *vector);
+    int (*builder_set)(PyObject *builder, Py_ssize_t index, PyObject *value);
+    int (*builder_append)(PyObject *builder, PyObject *value);
+    PyObject *(*builder_finish)(PyObject *builder);
 } _PyGrailVectorOps;
 PyAPI_FUNC(void) _PyGrail_RegisterVectorOps(const _PyGrailVectorOps *ops);
 PyAPI_FUNC(const _PyGrailVectorOps *) _PyGrail_GetVectorOps(void);
