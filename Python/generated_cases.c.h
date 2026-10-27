@@ -11971,35 +11971,62 @@
                 start = stack_pointer[-2];
                 container = stack_pointer[-3];
                 v = stack_pointer[-4];
-                _PyFrame_SetStackPointer(frame, stack_pointer);
-                PyObject *slice = _PyBuildSlice_ConsumeRefs(PyStackRef_AsPyObjectSteal(start),
-                    PyStackRef_AsPyObjectSteal(stop));
-                stack_pointer = _PyFrame_GetStackPointer(frame);
+                PyObject *container_o = PyStackRef_AsPyObjectBorrow(container);
                 int err;
-                if (slice == NULL) {
-                    err = 1;
+                if (PyList_CheckExact(container_o)) {
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    err = _PyList_StoreSlice(container_o,
+                        PyStackRef_AsPyObjectBorrow(start),
+                        PyStackRef_AsPyObjectBorrow(stop),
+                        PyStackRef_AsPyObjectBorrow(v));
+                    _PyStackRef tmp = stop;
+                    stop = PyStackRef_NULL;
+                    stack_pointer[-1] = stop;
+                    PyStackRef_CLOSE(tmp);
+                    tmp = start;
+                    start = PyStackRef_NULL;
+                    stack_pointer[-2] = start;
+                    PyStackRef_CLOSE(tmp);
+                    tmp = container;
+                    container = PyStackRef_NULL;
+                    stack_pointer[-3] = container;
+                    PyStackRef_CLOSE(tmp);
+                    tmp = v;
+                    v = PyStackRef_NULL;
+                    stack_pointer[-4] = v;
+                    PyStackRef_CLOSE(tmp);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                    stack_pointer += -4;
+                    ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
                 }
                 else {
-                    stack_pointer += -2;
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    PyObject *slice = _PyBuildSlice_ConsumeRefs(PyStackRef_AsPyObjectSteal(start),
+                        PyStackRef_AsPyObjectSteal(stop));
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                    if (slice == NULL) {
+                        err = 1;
+                    }
+                    else {
+                        stack_pointer += -2;
+                        ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                        _PyFrame_SetStackPointer(frame, stack_pointer);
+                        err = PyObject_SetItem(container_o, slice, PyStackRef_AsPyObjectBorrow(v));
+                        Py_DECREF(slice);
+                        stack_pointer = _PyFrame_GetStackPointer(frame);
+                        stack_pointer += 2;
+                    }
+                    stack_pointer += -3;
                     ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
                     _PyFrame_SetStackPointer(frame, stack_pointer);
-                    err = PyObject_SetItem(PyStackRef_AsPyObjectBorrow(container), slice, PyStackRef_AsPyObjectBorrow(v));
-                    Py_DECREF(slice);
+                    PyStackRef_CLOSE(container);
                     stack_pointer = _PyFrame_GetStackPointer(frame);
-                    stack_pointer += 2;
+                    stack_pointer += -1;
+                    ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    PyStackRef_CLOSE(v);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
                 }
-                _PyFrame_SetStackPointer(frame, stack_pointer);
-                _PyStackRef tmp = container;
-                container = PyStackRef_NULL;
-                stack_pointer[-3] = container;
-                PyStackRef_CLOSE(tmp);
-                tmp = v;
-                v = PyStackRef_NULL;
-                stack_pointer[-4] = v;
-                PyStackRef_CLOSE(tmp);
-                stack_pointer = _PyFrame_GetStackPointer(frame);
-                stack_pointer += -4;
-                ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
                 if (err) {
                     JUMP_TO_LABEL(error);
                 }

@@ -761,6 +761,28 @@ _PyList_BinarySlice(PyObject *container, PyObject *start, PyObject *stop)
     return ret;
 }
 
+static int list_ass_slice(PyListObject *a, Py_ssize_t ilow, Py_ssize_t ihigh,
+                          PyObject *v);
+
+/* container[start:stop] = value for an exact list, as list_ass_subscript
+ * does for a slice with no step, without building the slice object. */
+int
+_PyList_StoreSlice(PyObject *container, PyObject *start, PyObject *stop,
+                   PyObject *value)
+{
+    assert(PyList_CheckExact(container));
+    Py_ssize_t istart = 0;
+    Py_ssize_t istop = PY_SSIZE_T_MAX;
+    if (!_PyEval_SliceIndex(start, &istart)) {
+        return -1;
+    }
+    if (!_PyEval_SliceIndex(stop, &istop)) {
+        return -1;
+    }
+    PySlice_AdjustIndices(Py_SIZE(container), &istart, &istop, 1);
+    return list_ass_slice((PyListObject *)container, istart, istop, value);
+}
+
 PyObject *
 PyList_GetSlice(PyObject *a, Py_ssize_t ilow, Py_ssize_t ihigh)
 {
