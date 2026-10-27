@@ -3433,6 +3433,43 @@ dummy_func(
             INPUTS_DEAD();
         }
 
+        /* Tier 2, for a container known to be an exact list: list_contains
+         * (an item's __eq__ may change the list, so the size is reread and
+         * the item held), comparing exact compact ints and strs inline. */
+        tier2 op(_CONTAINS_OP_LIST, (left, right -- b, l, r)) {
+            PyObject *el = PyStackRef_AsPyObjectBorrow(left);
+            PyObject *lst = PyStackRef_AsPyObjectBorrow(right);
+            assert(PyList_CheckExact(lst));
+            PyTypeObject *et = Py_TYPE(el);
+            int res = 0;
+            for (Py_ssize_t i = 0; res == 0 && i < PyList_GET_SIZE(lst); i++) {
+                PyObject *item = PyList_GET_ITEM(lst, i);
+                if (item == el) {
+                    res = 1;
+                }
+                else if (Py_TYPE(item) == et && et == &PyLong_Type &&
+                         _PyLong_BothAreCompact((PyLongObject *)item, (PyLongObject *)el)) {
+                    res = _PyLong_CompactValue((PyLongObject *)item) ==
+                          _PyLong_CompactValue((PyLongObject *)el);
+                }
+                else if (Py_TYPE(item) == et && et == &PyUnicode_Type) {
+                    res = _PyUnicode_Equal(item, el);
+                }
+                else {
+                    Py_INCREF(item);
+                    res = PyObject_RichCompareBool(item, el, Py_EQ);
+                    Py_DECREF(item);
+                }
+            }
+            if (res < 0) {
+                ERROR_NO_POP();
+            }
+            b = (res ^ oparg) ? PyStackRef_True : PyStackRef_False;
+            l = left;
+            r = right;
+            INPUTS_DEAD();
+        }
+
         /* Tier 2, for a container known to be an exact str. */
         tier2 op(_CONTAINS_OP_STR, (left, right -- b, l, r)) {
             int res = PyUnicode_Contains(PyStackRef_AsPyObjectBorrow(right),
@@ -3458,7 +3495,7 @@ dummy_func(
             #endif  /* ENABLE_SPECIALIZATION */
         }
 
-        macro(CONTAINS_OP) = _SPECIALIZE_CONTAINS_OP + _CONTAINS_OP + POP_TOP + POP_TOP;
+        macro(CONTAINS_OP) = _SPECIALIZE_CONTAINS_OP + _RECORD_TOS_TYPE + _CONTAINS_OP + POP_TOP + POP_TOP;
 
         op(_GUARD_TOS_ANY_SET, (tos -- tos)) {
             PyObject *o = PyStackRef_AsPyObjectBorrow(tos);

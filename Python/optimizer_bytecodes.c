@@ -865,8 +865,27 @@ dummy_func(void) {
         l = left;
         r = right;
         REPLACE_OPCODE_IF_EVALUATES_PURE(left, right, b);
+        if (!sym_has_type(right)) {
+            // Speculate on the container type recorded while tracing.
+            PyTypeObject *probable = sym_get_probable_type(right);
+            if (probable == &PyTuple_Type) {
+                ADD_OP(_GUARD_TOS_TUPLE, 0, 0);
+                sym_set_type(right, &PyTuple_Type);
+            }
+            else if (probable == &PyList_Type) {
+                ADD_OP(_GUARD_TOS_LIST, 0, 0);
+                sym_set_type(right, &PyList_Type);
+            }
+            else if (probable == &PyUnicode_Type) {
+                ADD_OP(_GUARD_TOS_UNICODE, 0, 0);
+                sym_set_type(right, &PyUnicode_Type);
+            }
+        }
         if (sym_matches_type(right, &PyTuple_Type)) {
             ADD_OP(_CONTAINS_OP_TUPLE, oparg, 0);
+        }
+        else if (sym_matches_type(right, &PyList_Type)) {
+            ADD_OP(_CONTAINS_OP_LIST, oparg, 0);
         }
         else if (sym_matches_type(right, &PyUnicode_Type)) {
             ADD_OP(_CONTAINS_OP_STR, oparg, 0);

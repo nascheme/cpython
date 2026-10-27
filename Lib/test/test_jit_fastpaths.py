@@ -286,5 +286,35 @@ class ContainsTests(unittest.TestCase):
             ns["chars"](["a", 1])
 
 
+    def test_recorded_containers(self):
+        ns = {}
+        exec("""if 1:
+            def run(x, containers):
+                return [x in c for c in containers]
+            """, ns)
+        run = ns["run"]
+        cs = [[1, 2, 3], (3, 4), "abc", {3}, [], [3.0]]
+        for _ in range(REPEAT):
+            self.assertEqual(run(3, cs[:2] * 30)[:2], [True, True])
+            self.assertEqual(run("b", ["abc"] * 30)[0], True)
+        self.assertEqual(run(3, cs[:2] + [[], [3.0], {3}]),
+                         [True, True, False, True, True])
+
+        class Shrink:
+            def __init__(self, lst):
+                self.lst = lst
+            def __eq__(self, other):
+                self.lst.clear()
+                return False
+            __hash__ = None
+
+        for _ in range(REPEAT):
+            lst = [1, 2, 3]
+            s = Shrink(lst)
+            lst[0] = s
+            self.assertFalse(run(99, [lst])[0])
+            self.assertEqual(lst, [])
+
+
 if __name__ == "__main__":
     unittest.main()

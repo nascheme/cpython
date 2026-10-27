@@ -2885,7 +2885,8 @@ class TestUopsOptimization(unittest.TestCase):
         self.assertEqual(res, TIER2_THRESHOLD)
         self.assertIsNotNone(ex)
         uops = get_opnames(ex)
-        self.assertIn("_CONTAINS_OP", uops)
+        # The list recorded while tracing: _CONTAINS_OP_LIST.
+        self.assertIn("_CONTAINS_OP_LIST", uops)
         self.assertIn("_POP_TOP_NOP", uops)
         self.assertLessEqual(count_ops(ex, "_POP_TOP"), 2)
 
