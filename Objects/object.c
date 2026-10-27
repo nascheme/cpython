@@ -1281,6 +1281,64 @@ _Py_COMP_DIAG_POP
     return result;
 }
 
+/* AttributeError("'T' object has no attribute 'name'"), as PyErr_Format()
+ * with "'%.100s' object has no attribute '%U'" would set it, without the
+ * general formatter when the type name is short ASCII. */
+static void
+set_no_attribute_error(PyTypeObject *tp, PyObject *name)
+{
+    const char *tp_name = tp->tp_name;
+    size_t n = 0;
+    while (n <= 100 && tp_name[n] != '\0' && (unsigned char)tp_name[n] < 128) {
+        n++;
+    }
+    if (n > 100 || tp_name[n] != '\0' || !PyUnicode_Check(name)) {
+        PyErr_Format(PyExc_AttributeError,
+                     "'%.100s' object has no attribute '%U'",
+                     tp_name, name);
+        return;
+    }
+    PyThreadState *tstate = _PyThreadState_GET();
+    _PyErr_Clear(tstate);
+    static const char middle[] = "' object has no attribute '";
+    const size_t middle_len = sizeof(middle) - 1;
+    if (PyUnicode_IS_ASCII(name)) {
+        Py_ssize_t name_len = PyUnicode_GET_LENGTH(name);
+        PyObject *msg = PyUnicode_New(n + middle_len + name_len + 2, 127);
+        if (msg == NULL) {
+            return;
+        }
+        char *q = (char *)PyUnicode_1BYTE_DATA(msg);
+        *q++ = '\'';
+        memcpy(q, tp_name, n);
+        q += n;
+        memcpy(q, middle, middle_len);
+        q += middle_len;
+        memcpy(q, PyUnicode_1BYTE_DATA(name), name_len);
+        q += name_len;
+        *q = '\'';
+        _PyErr_SetObject(tstate, PyExc_AttributeError, msg);
+        Py_DECREF(msg);
+        return;
+    }
+    _PyUnicodeWriter writer;
+    _PyUnicodeWriter_Init(&writer);
+    writer.overallocate = 1;
+    if (_PyUnicodeWriter_WriteASCIIString(&writer, "'", 1) < 0 ||
+        _PyUnicodeWriter_WriteASCIIString(&writer, tp_name, n) < 0 ||
+        _PyUnicodeWriter_WriteASCIIString(&writer, middle, middle_len) < 0 ||
+        _PyUnicodeWriter_WriteStr(&writer, name) < 0 ||
+        _PyUnicodeWriter_WriteASCIIString(&writer, "'", 1) < 0) {
+        _PyUnicodeWriter_Dealloc(&writer);
+        return;
+    }
+    PyObject *msg = _PyUnicodeWriter_Finish(&writer);
+    if (msg != NULL) {
+        _PyErr_SetObject(tstate, PyExc_AttributeError, msg);
+        Py_DECREF(msg);
+    }
+}
+
 int
 _PyObject_SetAttributeErrorContext(PyObject* v, PyObject* name)
 {
@@ -1298,7 +1356,13 @@ _PyObject_SetAttributeErrorContext(PyObject* v, PyObject* name)
     if (the_exc->name || the_exc->obj) {
         goto restore;
     }
-    // Augment the exception with the name and object
+    // Augment the exception with the name and object: directly for an
+    // exact AttributeError, whose name and obj are plain members.
+    if (Py_IS_TYPE(exc, (PyTypeObject *)PyExc_AttributeError)) {
+        the_exc->name = Py_NewRef(name);
+        the_exc->obj = Py_NewRef(v);
+        goto restore;
+    }
     if (PyObject_SetAttr(exc, &_Py_ID(name), name) ||
         PyObject_SetAttr(exc, &_Py_ID(obj), v)) {
         Py_DECREF(exc);
@@ -1739,9 +1803,7 @@ _PyObject_GetMethod(PyObject *obj, PyObject *name, PyObject **method)
         return 0;
     }
 
-    PyErr_Format(PyExc_AttributeError,
-                 "'%.100s' object has no attribute '%U'",
-                 tp->tp_name, name);
+    set_no_attribute_error(tp, name);
 
     _PyObject_SetAttributeErrorContext(obj, name);
     return 0;
@@ -1873,9 +1935,7 @@ _PyObject_GetMethodStackRef(PyThreadState *ts, _PyStackRef *self,
         return 0;
     }
 
-    PyErr_Format(PyExc_AttributeError,
-                 "'%.100s' object has no attribute '%U'",
-                 tp->tp_name, name);
+    set_no_attribute_error(tp, name);
 
     _PyObject_SetAttributeErrorContext(obj, name);
     assert(PyStackRef_IsNull(*method));
@@ -1997,9 +2057,7 @@ _PyObject_GenericGetAttrWithDict(PyObject *obj, PyObject *name,
     }
 
     if (!suppress) {
-        PyErr_Format(PyExc_AttributeError,
-                     "'%.100s' object has no attribute '%U'",
-                     tp->tp_name, name);
+        set_no_attribute_error(tp, name);
 
         _PyObject_SetAttributeErrorContext(obj, name);
     }
