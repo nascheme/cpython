@@ -191,6 +191,33 @@ plan_conforms_nested(const PlanNode *nodes, const PlanNode *p, PyObject *value)
             }
         }
     }
+    else if (p->kind == PLAN_VARTUPLE && p->height == 1) {
+        /* tuple[T, ...] of a leaf: the common long case, without the
+         * per-item switch. */
+        if (PyTuple_CheckExact(value)) {
+            const PlanNode *item = children;
+            PyObject **items = ((PyTupleObject *)value)->ob_item;
+            Py_ssize_t n = PyTuple_GET_SIZE(value);
+            result = 1;
+            if (item->kind == PLAN_EXACT) {
+                PyTypeObject *type = item->type;
+                for (Py_ssize_t i = 0; i < n; i++) {
+                    if (Py_TYPE(items[i]) != type) {
+                        result = 0;
+                        break;
+                    }
+                }
+            }
+            else {
+                for (Py_ssize_t i = 0; i < n; i++) {
+                    if (!plan_conforms_leaf(item, items[i])) {
+                        result = 0;
+                        break;
+                    }
+                }
+            }
+        }
+    }
     else if (PyTuple_CheckExact(value) &&
              (p->kind == PLAN_VARTUPLE || PyTuple_GET_SIZE(value) == p->n)) {
         int var = p->kind == PLAN_VARTUPLE;
