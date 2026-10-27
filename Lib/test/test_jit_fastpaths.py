@@ -168,5 +168,30 @@ class MakeFunctionTests(unittest.TestCase):
             self.assertIn("_MAKE_FUNCTION_ENV", executor_uops(ns["make"]))
 
 
+class BytesSubscriptTests(unittest.TestCase):
+    def test_bytes_and_bytearray(self):
+        ns = {}
+        exec("""if 1:
+            def total(b, idx, change=None):
+                t = 0
+                for k, i in enumerate(idx):
+                    if k == 50 and change is not None:
+                        change()
+                    t += b[i]
+                return t
+            """, ns)
+        total = ns["total"]
+        data = bytes(range(100))
+        idx = list(range(-100, 100))
+        for _ in range(REPEAT):
+            self.assertEqual(total(data, idx), 2 * sum(range(100)))
+            self.assertEqual(total(bytearray(data), idx), 2 * sum(range(100)))
+        with self.assertRaises(IndexError):
+            total(data, [0, 100])
+        ba = bytearray(data)
+        with self.assertRaises(IndexError):
+            total(ba, list(range(99, -1, -1)) + [99], ba.clear)
+
+
 if __name__ == "__main__":
     unittest.main()

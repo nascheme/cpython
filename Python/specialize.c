@@ -2279,6 +2279,53 @@ LONG_FLOAT_ACTION(compactlong_float_multiply, *)
 LONG_FLOAT_ACTION(compactlong_float_true_div, /)
 #undef LONG_FLOAT_ACTION
 
+/* bytes[int] and bytearray[int] (GIL build: a bytearray may be resized
+ * concurrently otherwise): the byte as an int, with bytes_subscript's and
+ * bytearray_subscript's index handling and errors. */
+static int
+bytes_int_subscript_guard(PyObject *lhs, PyObject *rhs)
+{
+    return PyBytes_CheckExact(lhs) && _PyLong_CheckExactAndCompact(rhs);
+}
+
+static PyObject *
+bytes_int_subscript(PyObject *lhs, PyObject *rhs)
+{
+    Py_ssize_t i = _PyLong_CompactValue((PyLongObject *)rhs);
+    Py_ssize_t n = PyBytes_GET_SIZE(lhs);
+    if (i < 0) {
+        i += n;
+    }
+    if (i < 0 || i >= n) {
+        PyErr_SetString(PyExc_IndexError, "index out of range");
+        return NULL;
+    }
+    return _PyLong_FromUnsignedChar((unsigned char)PyBytes_AS_STRING(lhs)[i]);
+}
+
+#ifndef Py_GIL_DISABLED
+static int
+bytearray_int_subscript_guard(PyObject *lhs, PyObject *rhs)
+{
+    return PyByteArray_CheckExact(lhs) && _PyLong_CheckExactAndCompact(rhs);
+}
+
+static PyObject *
+bytearray_int_subscript(PyObject *lhs, PyObject *rhs)
+{
+    Py_ssize_t i = _PyLong_CompactValue((PyLongObject *)rhs);
+    Py_ssize_t n = PyByteArray_GET_SIZE(lhs);
+    if (i < 0) {
+        i += n;
+    }
+    if (i < 0 || i >= n) {
+        PyErr_SetString(PyExc_IndexError, "bytearray index out of range");
+        return NULL;
+    }
+    return _PyLong_FromUnsignedChar((unsigned char)PyByteArray_AS_STRING(lhs)[i]);
+}
+#endif
+
 static _PyBinaryOpSpecializationDescr binaryop_extend_descrs[] = {
     /* long-long arithmetic: guards also check _PyLong_IsCompact, so
        type alone is not sufficient to eliminate the guard. */
@@ -2318,6 +2365,11 @@ static _PyBinaryOpSpecializationDescr binaryop_extend_descrs[] = {
     /* Tuples have no in-place add, so += concatenates too. */
     {NB_INPLACE_ADD, NULL, _PyTuple_Concat, &PyTuple_Type, 0, &PyTuple_Type, &PyTuple_Type},
 
+    /* bytes[int], bytearray[int] */
+    {NB_SUBSCR, bytes_int_subscript_guard, bytes_int_subscript, &PyLong_Type, 0, NULL, NULL},
+#ifndef Py_GIL_DISABLED
+    {NB_SUBSCR, bytearray_int_subscript_guard, bytearray_int_subscript, &PyLong_Type, 0, NULL, NULL},
+#endif
     /* str * int / int * str: call unicode_repeat directly.
        unicode_repeat returns the original when n == 1. */
     {NB_MULTIPLY, NULL, str_int_multiply, &PyUnicode_Type, 0, &PyUnicode_Type, &PyLong_Type},
