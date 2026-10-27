@@ -1223,6 +1223,31 @@ set_update_iterable_lock_held(PySetObject *so, PyObject *other)
 {
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(so);
 
+    /* An exact tuple or (with the GIL) list: its items without an
+       iterator. For a list, as for its iterator, the size is read again
+       before each item, since adding a key can run arbitrary code. */
+    if (PyTuple_CheckExact(other)) {
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(other); i++) {
+            if (set_add_key(so, PyTuple_GET_ITEM(other, i))) {
+                return -1;
+            }
+        }
+        return 0;
+    }
+#ifndef Py_GIL_DISABLED
+    if (PyList_CheckExact(other)) {
+        for (Py_ssize_t i = 0; i < PyList_GET_SIZE(other); i++) {
+            PyObject *key = Py_NewRef(PyList_GET_ITEM(other, i));
+            int rv = set_add_key(so, key);
+            Py_DECREF(key);
+            if (rv) {
+                return -1;
+            }
+        }
+        return 0;
+    }
+#endif
+
     PyObject *it = PyObject_GetIter(other);
     if (it == NULL) {
         return -1;
