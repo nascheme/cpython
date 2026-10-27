@@ -158,6 +158,20 @@ class TestTranforms(BytecodeTestCase):
                 self.assertNotInBytecode(code, 'UNPACK_SEQUENCE')
                 self.check_lnotab(code)
 
+    def test_constant_folding_slices(self):
+        # A slice bound folded in the CFG (-1) still gives a constant slice.
+        for line, expected in (("x[::-1]", slice(None, None, -1)),
+                               ("x[5::-1]", slice(5, None, -1)),
+                               ("x[-2:-1:-1]", slice(-2, -1, -1))):
+            with self.subTest(line=line):
+                code = compile(line, '', 'single')
+                self.assertInBytecode(code, 'LOAD_CONST', expected)
+                self.assertNotInBytecode(code, 'BUILD_SLICE')
+                self.check_lnotab(code)
+        x = list(range(10))
+        self.assertEqual(eval("x[::-1]"), x[::-1])
+        self.assertEqual(eval("x[5::-1]"), [5, 4, 3, 2, 1, 0])
+
     def test_constant_folding_tuples_of_constants(self):
         for line, elem in (
             ('a = 1,2,3', (1, 2, 3)),

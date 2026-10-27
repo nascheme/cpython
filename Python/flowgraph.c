@@ -1567,6 +1567,43 @@ fold_tuple_of_constants(basicblock *bb, int i, PyObject *consts,
     return instr_make_load_const(instr, const_tuple, consts, const_cache, consts_index);
 }
 
+/* Replace LOAD_CONST a, LOAD_CONST b, [LOAD_CONST c,] BUILD_SLICE with
+   LOAD_CONST slice(a, b, c). Codegen already makes a constant slice of
+   constant bounds, but a bound folded here, such as -1 in x[::-1],
+   reaches BUILD_SLICE only as a constant load. */
+static int
+fold_constant_slice(basicblock *bb, int i, PyObject *consts,
+                    PyObject *const_cache, _Py_hashtable_t *consts_index)
+{
+    cfg_instr *instr = &bb->b_instr[i];
+    assert(instr->i_opcode == BUILD_SLICE);
+    int n = instr->i_oparg;
+    assert(n == 2 || n == 3);
+    cfg_instr *const_instrs[3];
+    if (!get_const_loading_instrs(bb, i-1, const_instrs, n)) {
+        return SUCCESS;
+    }
+    PyObject *values[3] = {NULL, NULL, NULL};
+    for (int k = 0; k < n; k++) {
+        cfg_instr *inst = const_instrs[k];
+        values[k] = get_const_value(inst->i_opcode, inst->i_oparg, consts);
+        if (values[k] == NULL) {
+            Py_XDECREF(values[0]);
+            Py_XDECREF(values[1]);
+            return ERROR;
+        }
+    }
+    PyObject *slice = PySlice_New(values[0], values[1], values[2]);
+    Py_DECREF(values[0]);
+    Py_DECREF(values[1]);
+    Py_XDECREF(values[2]);
+    if (slice == NULL) {
+        return ERROR;
+    }
+    nop_out(const_instrs, n);
+    return instr_make_load_const(instr, slice, consts, const_cache, consts_index);
+}
+
 /* Replace:
     BUILD_LIST/BUILD_SET 0
     LOAD_CONST c1
@@ -2441,6 +2478,9 @@ optimize_basic_block(PyObject *const_cache, basicblock *bb, PyObject *consts,
         int nextop = i+1 < bb->b_iused ? bb->b_instr[i+1].i_opcode : 0;
         assert(!IS_ASSEMBLER_OPCODE(opcode));
         switch (opcode) {
+            case BUILD_SLICE:
+                RETURN_IF_ERROR(fold_constant_slice(bb, i, consts, const_cache, consts_index));
+                break;
             /* Try to fold tuples of constants.
                Skip over BUILD_TUPLE(1) UNPACK_SEQUENCE(1).
                Replace BUILD_TUPLE(2) UNPACK_SEQUENCE(2) with SWAP(2).
