@@ -335,12 +335,72 @@ _Py_convert_int_to_double(PyObject **v, double *dbl)
     return 0;
 }
 
+#if _PY_SHORT_FLOAT_REPR == 1
+/* repr() of x without dtoa when it has at most 6 decimals and
+ * 1e-4 <= |x| < 1e9 (fixed notation). d6 = rint(x * 1e6) is then exact:
+ * x is within half an ulp of the shortest decimal d * 10**-k, so x * 1e6
+ * is within 0.3 of an integer. With trailing zeros stripped, d / 10**k
+ * is checked to be x (a single, correctly rounded division gives the
+ * double nearest to the decimal); being under 10**15, d is the only
+ * k-decimal candidate in x's rounding interval, so it is the string dtoa
+ * would produce. Writes the digits to the end of buf (32 bytes) and
+ * returns where they start, or NULL if not applicable. */
+static char *
+float_repr_short(double x, char *end)
+{
+    static const double pow10[] = {1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6};
+    double ax = fabs(x);
+    if (!(ax >= 1e-4 && ax < 1e9)) {
+        return NULL;
+    }
+    double d6 = rint(ax * 1e6);
+    int64_t d = (int64_t)d6;
+    int k = 6;
+    while (k > 0 && d % 10 == 0) {
+        d /= 10;
+        k--;
+    }
+    if ((double)d / pow10[k] != ax) {
+        return NULL;
+    }
+    char *q = end;
+    if (k == 0) {
+        *--q = '0';
+        *--q = '.';
+    }
+    for (int i = 0; i < k; i++) {
+        *--q = (char)('0' + d % 10);
+        d /= 10;
+    }
+    if (k > 0) {
+        *--q = '.';
+    }
+    do {
+        *--q = (char)('0' + d % 10);
+        d /= 10;
+    } while (d != 0);
+    if (x < 0) {
+        *--q = '-';
+    }
+    return q;
+}
+#endif
+
 static PyObject *
 float_repr(PyObject *op)
 {
     PyFloatObject *v = _PyFloat_CAST(op);
     PyObject *result;
     char *buf;
+
+#if _PY_SHORT_FLOAT_REPR == 1
+    char short_buf[32];
+    char *end = short_buf + sizeof(short_buf);
+    char *start = float_repr_short(PyFloat_AS_DOUBLE(v), end);
+    if (start != NULL) {
+        return _PyUnicode_FromASCII(start, end - start);
+    }
+#endif
 
     buf = PyOS_double_to_string(PyFloat_AS_DOUBLE(v),
                                 'r', 0,
