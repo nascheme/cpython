@@ -1011,6 +1011,37 @@ specialize_instance_load_attr(PyObject* owner, _Py_CODEUNIT* instr, PyObject* na
     return result;
 }
 
+/* A field of a grail.mutate record draft (LOAD_ATTR_RECORD_DRAFT and
+ * STORE_ATTR_RECORD_DRAFT): the cache holds the field index and the version
+ * of the record type the draft was made from. Record types are immutable,
+ * so the version names one field layout. Returns 0 on success. */
+static int
+specialize_record_draft_attr(PyObject *owner, _Py_CODEUNIT *instr,
+                             PyObject *name, int family, int opcode)
+{
+    PyObject *base = ((_PyGrailDraft *)owner)->base;
+    if (base == NULL) {
+        SPECIALIZATION_FAIL(family, SPEC_FAIL_OTHER);
+        return -1;
+    }
+    PyTypeObject *type = Py_TYPE(base);
+    Py_ssize_t index = _PyGrail_FieldIndex(type, name);
+    if (index < 0) {
+        PyErr_Clear();
+        SPECIALIZATION_FAIL(family, SPEC_FAIL_OTHER);
+        return -1;
+    }
+    if (index != (uint16_t)index || !PyUnstable_Type_AssignVersionTag(type)) {
+        SPECIALIZATION_FAIL(family, SPEC_FAIL_OUT_OF_RANGE);
+        return -1;
+    }
+    _PyAttrCache *cache = (_PyAttrCache *)(instr + 1);
+    cache->index = (uint16_t)index;
+    write_u32(cache->version, FT_ATOMIC_LOAD_UINT_RELAXED(type->tp_version_tag));
+    specialize(instr, opcode);
+    return 0;
+}
+
 Py_NO_INLINE void
 _Py_Specialize_LoadAttr(_PyStackRef owner_st, _Py_CODEUNIT *instr, PyObject *name)
 {
@@ -1032,6 +1063,10 @@ _Py_Specialize_LoadAttr(_PyStackRef owner_st, _Py_CODEUNIT *instr, PyObject *nam
     }
     else if (PyType_Check(owner)) {
         fail = specialize_class_load_attr(owner, instr, name);
+    }
+    else if (_PyGrail_IsRecordDraft(owner)) {
+        fail = specialize_record_draft_attr(owner, instr, name, LOAD_ATTR,
+                                            LOAD_ATTR_RECORD_DRAFT);
     }
     else {
         fail = specialize_instance_load_attr(owner, instr, name);
@@ -1062,6 +1097,13 @@ _Py_Specialize_StoreAttr(_PyStackRef owner_st, _Py_CODEUNIT *instr, PyObject *na
     if (PyModule_CheckExact(owner)) {
         SPECIALIZATION_FAIL(STORE_ATTR, SPEC_FAIL_OVERRIDDEN);
         goto fail;
+    }
+    if (_PyGrail_IsRecordDraft(owner)) {
+        if (specialize_record_draft_attr(owner, instr, name, STORE_ATTR,
+                                         STORE_ATTR_RECORD_DRAFT) < 0) {
+            goto fail;
+        }
+        goto success;
     }
     unsigned int tp_version = 0;
     DescriptorClassification kind = analyze_descriptor_store(type, name, &descr, &tp_version);

@@ -593,6 +593,8 @@ NON_ESCAPING_FUNCTIONS = (
     "_PyFrame_PushTrampolineUnchecked",
     "_PyGrail_IsPositionalRecordCall",
     "_PyGrail_IsRecordTypeFast",
+    "_PyGrail_IsRecordDraft",
+    "_PyGrail_IsDraft",
     "_PyFrame_SetStackPointer",
     "_PyFrame_StackPush",
     "_PyFunction_SetVersion",

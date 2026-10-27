@@ -3300,6 +3300,17 @@
             break;
         }
 
+        case _GUARD_RECORD_DRAFT: {
+            break;
+        }
+
+        case _LOAD_ATTR_RECORD_DRAFT: {
+            JitOptRef attr;
+            attr = sym_new_not_null(ctx);
+            stack_pointer[-1] = attr;
+            break;
+        }
+
         case _CHECK_ATTR_CLASS: {
             JitOptRef owner;
             owner = stack_pointer[-1];
@@ -3437,6 +3448,16 @@
             (void)index;
             (void)value;
             o = owner;
+            CHECK_STACK_BOUNDS(-1);
+            stack_pointer[-2] = o;
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _STORE_ATTR_RECORD_DRAFT: {
+            JitOptRef o;
+            o = sym_new_not_null(ctx);
             CHECK_STACK_BOUNDS(-1);
             stack_pointer[-2] = o;
             stack_pointer += -1;

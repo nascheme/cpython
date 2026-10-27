@@ -253,6 +253,8 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_LOAD_ATTR_RECORD_TYPED] = HAS_EXIT_FLAG,
     [_LOAD_ATTR_RECORD_BORROW] = 0,
     [_LOAD_ATTR_RECORD_TYPED_BORROW] = HAS_EXIT_FLAG,
+    [_GUARD_RECORD_DRAFT] = HAS_EXIT_FLAG,
+    [_LOAD_ATTR_RECORD_DRAFT] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_CHECK_ATTR_CLASS] = HAS_EXIT_FLAG,
     [_LOAD_ATTR_CLASS] = HAS_ESCAPES_FLAG,
     [_LOAD_ATTR_PROPERTY_FRAME] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
@@ -262,6 +264,7 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_LOCK_OBJECT] = HAS_DEOPT_FLAG,
     [_STORE_ATTR_WITH_HINT] = HAS_ARG_FLAG | HAS_NAME_FLAG | HAS_DEOPT_FLAG | HAS_ESCAPES_FLAG,
     [_STORE_ATTR_SLOT] = HAS_DEOPT_FLAG | HAS_ESCAPES_FLAG,
+    [_STORE_ATTR_RECORD_DRAFT] = HAS_DEOPT_FLAG | HAS_ESCAPES_FLAG,
     [_COMPARE_OP] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_COMPARE_OP_FLOAT] = HAS_ARG_FLAG,
     [_COMPARE_OP_FLOAT_INT_CONST] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
@@ -2450,6 +2453,24 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_GUARD_RECORD_DRAFT] = {
+        .best = { 0, 1, 2, 3 },
+        .entries = {
+            { 1, 0, _GUARD_RECORD_DRAFT_r01 },
+            { 1, 1, _GUARD_RECORD_DRAFT_r11 },
+            { 2, 2, _GUARD_RECORD_DRAFT_r22 },
+            { 3, 3, _GUARD_RECORD_DRAFT_r33 },
+        },
+    },
+    [_LOAD_ATTR_RECORD_DRAFT] = {
+        .best = { 1, 1, 1, 1 },
+        .entries = {
+            { -1, -1, -1 },
+            { 1, 1, _LOAD_ATTR_RECORD_DRAFT_r11 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
     [_CHECK_ATTR_CLASS] = {
         .best = { 0, 1, 2, 3 },
         .entries = {
@@ -2528,6 +2549,15 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
             { -1, -1, -1 },
             { 1, 2, _STORE_ATTR_SLOT_r21 },
+            { -1, -1, -1 },
+        },
+    },
+    [_STORE_ATTR_RECORD_DRAFT] = {
+        .best = { 2, 2, 2, 2 },
+        .entries = {
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { 1, 2, _STORE_ATTR_RECORD_DRAFT_r21 },
             { -1, -1, -1 },
         },
     },
@@ -4843,6 +4873,11 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_LOAD_ATTR_RECORD_TYPED_BORROW_r02] = _LOAD_ATTR_RECORD_TYPED_BORROW,
     [_LOAD_ATTR_RECORD_TYPED_BORROW_r12] = _LOAD_ATTR_RECORD_TYPED_BORROW,
     [_LOAD_ATTR_RECORD_TYPED_BORROW_r23] = _LOAD_ATTR_RECORD_TYPED_BORROW,
+    [_GUARD_RECORD_DRAFT_r01] = _GUARD_RECORD_DRAFT,
+    [_GUARD_RECORD_DRAFT_r11] = _GUARD_RECORD_DRAFT,
+    [_GUARD_RECORD_DRAFT_r22] = _GUARD_RECORD_DRAFT,
+    [_GUARD_RECORD_DRAFT_r33] = _GUARD_RECORD_DRAFT,
+    [_LOAD_ATTR_RECORD_DRAFT_r11] = _LOAD_ATTR_RECORD_DRAFT,
     [_CHECK_ATTR_CLASS_r01] = _CHECK_ATTR_CLASS,
     [_CHECK_ATTR_CLASS_r11] = _CHECK_ATTR_CLASS,
     [_CHECK_ATTR_CLASS_r22] = _CHECK_ATTR_CLASS,
@@ -4864,6 +4899,7 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_LOCK_OBJECT_r33] = _LOCK_OBJECT,
     [_STORE_ATTR_WITH_HINT_r21] = _STORE_ATTR_WITH_HINT,
     [_STORE_ATTR_SLOT_r21] = _STORE_ATTR_SLOT,
+    [_STORE_ATTR_RECORD_DRAFT_r21] = _STORE_ATTR_RECORD_DRAFT,
     [_COMPARE_OP_r21] = _COMPARE_OP,
     [_COMPARE_OP_FLOAT_r03] = _COMPARE_OP_FLOAT,
     [_COMPARE_OP_FLOAT_r13] = _COMPARE_OP_FLOAT,
@@ -6079,6 +6115,11 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_GUARD_NOT_EXHAUSTED_TUPLE_r12] = "_GUARD_NOT_EXHAUSTED_TUPLE_r12",
     [_GUARD_NOT_EXHAUSTED_TUPLE_r22] = "_GUARD_NOT_EXHAUSTED_TUPLE_r22",
     [_GUARD_NOT_EXHAUSTED_TUPLE_r33] = "_GUARD_NOT_EXHAUSTED_TUPLE_r33",
+    [_GUARD_RECORD_DRAFT] = "_GUARD_RECORD_DRAFT",
+    [_GUARD_RECORD_DRAFT_r01] = "_GUARD_RECORD_DRAFT_r01",
+    [_GUARD_RECORD_DRAFT_r11] = "_GUARD_RECORD_DRAFT_r11",
+    [_GUARD_RECORD_DRAFT_r22] = "_GUARD_RECORD_DRAFT_r22",
+    [_GUARD_RECORD_DRAFT_r33] = "_GUARD_RECORD_DRAFT_r33",
     [_GUARD_THIRD_NULL] = "_GUARD_THIRD_NULL",
     [_GUARD_THIRD_NULL_r03] = "_GUARD_THIRD_NULL_r03",
     [_GUARD_THIRD_NULL_r13] = "_GUARD_THIRD_NULL_r13",
@@ -6295,6 +6336,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_LOAD_ATTR_RECORD_BORROW_r02] = "_LOAD_ATTR_RECORD_BORROW_r02",
     [_LOAD_ATTR_RECORD_BORROW_r12] = "_LOAD_ATTR_RECORD_BORROW_r12",
     [_LOAD_ATTR_RECORD_BORROW_r23] = "_LOAD_ATTR_RECORD_BORROW_r23",
+    [_LOAD_ATTR_RECORD_DRAFT] = "_LOAD_ATTR_RECORD_DRAFT",
+    [_LOAD_ATTR_RECORD_DRAFT_r11] = "_LOAD_ATTR_RECORD_DRAFT_r11",
     [_LOAD_ATTR_RECORD_TYPED] = "_LOAD_ATTR_RECORD_TYPED",
     [_LOAD_ATTR_RECORD_TYPED_r02] = "_LOAD_ATTR_RECORD_TYPED_r02",
     [_LOAD_ATTR_RECORD_TYPED_r12] = "_LOAD_ATTR_RECORD_TYPED_r12",
@@ -6628,6 +6671,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_STORE_ATTR_r20] = "_STORE_ATTR_r20",
     [_STORE_ATTR_INSTANCE_VALUE] = "_STORE_ATTR_INSTANCE_VALUE",
     [_STORE_ATTR_INSTANCE_VALUE_r21] = "_STORE_ATTR_INSTANCE_VALUE_r21",
+    [_STORE_ATTR_RECORD_DRAFT] = "_STORE_ATTR_RECORD_DRAFT",
+    [_STORE_ATTR_RECORD_DRAFT_r21] = "_STORE_ATTR_RECORD_DRAFT_r21",
     [_STORE_ATTR_SLOT] = "_STORE_ATTR_SLOT",
     [_STORE_ATTR_SLOT_r21] = "_STORE_ATTR_SLOT_r21",
     [_STORE_ATTR_WITH_HINT] = "_STORE_ATTR_WITH_HINT",
@@ -7218,6 +7263,10 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 1;
         case _LOAD_ATTR_RECORD_TYPED_BORROW:
             return 1;
+        case _GUARD_RECORD_DRAFT:
+            return 0;
+        case _LOAD_ATTR_RECORD_DRAFT:
+            return 1;
         case _CHECK_ATTR_CLASS:
             return 0;
         case _LOAD_ATTR_CLASS:
@@ -7235,6 +7284,8 @@ int _PyUop_num_popped(int opcode, int oparg)
         case _STORE_ATTR_WITH_HINT:
             return 2;
         case _STORE_ATTR_SLOT:
+            return 2;
+        case _STORE_ATTR_RECORD_DRAFT:
             return 2;
         case _COMPARE_OP:
             return 2;

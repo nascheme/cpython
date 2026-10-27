@@ -1890,6 +1890,21 @@ _PyGrail_FieldIndex(PyTypeObject *type, PyObject *name)
     return -1;
 }
 
+/* Written once per process, with the same values, by each _grail_draft
+ * module instance before it can create a draft. */
+getattrofunc _PyGrail_record_draft_getattro;
+destructor _PyGrail_draft_dealloc;
+_PyGrailDraftLoad _PyGrail_record_draft_load;
+
+void
+_PyGrail_RegisterRecordDraft(getattrofunc getattro, destructor dealloc,
+                             _PyGrailDraftLoad load)
+{
+    _Py_atomic_store_ptr(&_PyGrail_record_draft_load, (void *)load);
+    _Py_atomic_store_ptr(&_PyGrail_draft_dealloc, (void *)dealloc);
+    _Py_atomic_store_ptr_release(&_PyGrail_record_draft_getattro, (void *)getattro);
+}
+
 /* Lib/copy.py uses _grail.replace, which reports module "copy", when present.
  * PYTHON_GRAIL_COPY_REPLACE=0 leaves it out, so copy.replace stays Python. */
 int

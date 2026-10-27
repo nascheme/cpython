@@ -124,6 +124,61 @@ PyAPI_FUNC(PyObject *) _PyGrail_RecordFromStackRefsCheckedStealOnSuccess(
 int _PyGrail_MatchRecord(PyObject *subject, PyObject *type, Py_ssize_t nargs,
                          PyObject *kwargs, PyObject **result);
 
+/* grail.mutate drafts (Modules/_grail_draft.c). The layout of a record
+ * draft is shared so LOAD_ATTR_RECORD_DRAFT and STORE_ATTR_RECORD_DRAFT can
+ * read and write its field slots. A draft is used only by the thread that
+ * created its root, while the root is open. */
+struct _PyGrailDraftState;
+typedef struct {
+    PyObject_HEAD
+    struct _PyGrailDraftState *st;
+    PyThreadState *owner;
+    int state;                   /* 0 while open */
+    PyObject *draft;             /* borrowed: the root draft, for identity */
+    PyObject *result;
+} _PyGrailDraftRoot;
+
+typedef struct {
+    PyObject_HEAD
+    _PyGrailDraftRoot *root;
+    PyObject *base;              /* the value the draft was made from */
+    PyObject *built;
+    int building;
+} _PyGrailDraft;
+
+typedef struct {
+    _PyGrailDraft head;
+    Py_ssize_t n;
+    PyObject *values[];          /* NULL: unchanged and not yet drafted */
+} _PyGrailRecordDraft;
+
+/* Registered once by _grail_draft: a record draft's type has getattro; every
+ * draft's type has dealloc; load(draft, i) is field i of an open draft as
+ * the generic lookup would return it, or NULL with an exception. */
+typedef PyObject *(*_PyGrailDraftLoad)(PyObject *draft, Py_ssize_t index);
+PyAPI_FUNC(void) _PyGrail_RegisterRecordDraft(getattrofunc getattro,
+                                              destructor dealloc,
+                                              _PyGrailDraftLoad load);
+PyAPI_DATA(getattrofunc) _PyGrail_record_draft_getattro;
+PyAPI_DATA(destructor) _PyGrail_draft_dealloc;
+PyAPI_DATA(_PyGrailDraftLoad) _PyGrail_record_draft_load;
+
+static inline int
+_PyGrail_IsRecordDraft(PyObject *op)
+{
+    getattrofunc getattro = (getattrofunc)_Py_atomic_load_ptr_relaxed(
+        &_PyGrail_record_draft_getattro);
+    return getattro != NULL && Py_TYPE(op)->tp_getattro == getattro;
+}
+
+static inline int
+_PyGrail_IsDraft(PyObject *op)
+{
+    destructor dealloc = (destructor)_Py_atomic_load_ptr_relaxed(
+        &_PyGrail_draft_dealloc);
+    return dealloc != NULL && Py_TYPE(op)->tp_dealloc == dealloc;
+}
+
 static inline int
 _PyGrail_OperatorsActive(void)
 {

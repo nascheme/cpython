@@ -14068,6 +14068,233 @@
             break;
         }
 
+        case _GUARD_RECORD_DRAFT_r01: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            owner = stack_pointer[-1];
+            uint32_t type_version = (uint32_t)CURRENT_OPERAND0_32();
+            PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            if (!_PyGrail_IsRecordDraft(owner_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            PyObject *base = ((_PyGrailDraft *)owner_o)->base;
+            if (base == NULL) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+            if (root->state != 0 || root->owner != tstate) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache0 = owner;
+            SET_CURRENT_CACHED_VALUES(1);
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _GUARD_RECORD_DRAFT_r11: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            owner = _stack_item_0;
+            uint32_t type_version = (uint32_t)CURRENT_OPERAND0_32();
+            PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            if (!_PyGrail_IsRecordDraft(owner_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache0 = owner;
+                SET_CURRENT_CACHED_VALUES(1);
+                JUMP_TO_JUMP_TARGET();
+            }
+            PyObject *base = ((_PyGrailDraft *)owner_o)->base;
+            if (base == NULL) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache0 = owner;
+                SET_CURRENT_CACHED_VALUES(1);
+                JUMP_TO_JUMP_TARGET();
+            }
+            if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache0 = owner;
+                SET_CURRENT_CACHED_VALUES(1);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+            if (root->state != 0 || root->owner != tstate) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache0 = owner;
+                SET_CURRENT_CACHED_VALUES(1);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache0 = owner;
+            SET_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _GUARD_RECORD_DRAFT_r22: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            owner = _stack_item_1;
+            uint32_t type_version = (uint32_t)CURRENT_OPERAND0_32();
+            PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            if (!_PyGrail_IsRecordDraft(owner_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = owner;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            PyObject *base = ((_PyGrailDraft *)owner_o)->base;
+            if (base == NULL) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = owner;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = owner;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+            if (root->state != 0 || root->owner != tstate) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = owner;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache1 = owner;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _GUARD_RECORD_DRAFT_r33: {
+            CHECK_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            _PyStackRef _stack_item_2 = _tos_cache2;
+            owner = _stack_item_2;
+            uint32_t type_version = (uint32_t)CURRENT_OPERAND0_32();
+            PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            if (!_PyGrail_IsRecordDraft(owner_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = owner;
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            PyObject *base = ((_PyGrailDraft *)owner_o)->base;
+            if (base == NULL) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = owner;
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = owner;
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+            if (root->state != 0 || root->owner != tstate) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = owner;
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache2 = owner;
+            _tos_cache1 = _stack_item_1;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _LOAD_ATTR_RECORD_DRAFT_r11: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef attr;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            owner = _stack_item_0;
+            uint16_t index = (uint16_t)CURRENT_OPERAND0_16();
+            _PyGrailRecordDraft *draft =
+            (_PyGrailRecordDraft *)PyStackRef_AsPyObjectBorrow(owner);
+            PyObject *attr_o = draft->values[index];
+            if (attr_o != NULL) {
+                Py_INCREF(attr_o);
+            }
+            else {
+                attr_o = ((RecordObject *)draft->head.base)->fields[index];
+                PyTypeObject *tp = Py_TYPE(attr_o);
+                if (tp == &PyLong_Type || tp == &PyFloat_Type ||
+                    tp == &PyUnicode_Type || tp == &PyBool_Type ||
+                    tp == &PyTuple_Type || attr_o == Py_None) {
+                    Py_INCREF(attr_o);
+                }
+                else {
+                    stack_pointer[0] = owner;
+                    stack_pointer += 1;
+                    ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    attr_o = _PyGrail_record_draft_load((PyObject *)draft, index);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                    stack_pointer += -1;
+                }
+            }
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            _PyStackRef tmp = owner;
+            owner = PyStackRef_NULL;
+            stack_pointer[0] = owner;
+            PyStackRef_CLOSE(tmp);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            if (attr_o == NULL) {
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_ERROR();
+            }
+            STAT_INC(LOAD_ATTR, hit);
+            attr = PyStackRef_FromPyObjectSteal(attr_o);
+            _tos_cache0 = attr;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _CHECK_ATTR_CLASS_r01: {
             CHECK_CURRENT_CACHED_VALUES(0);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
@@ -14760,6 +14987,48 @@
             PyObject *old_value = *(PyObject **)addr;
             FT_ATOMIC_STORE_PTR_RELEASE(*(PyObject **)addr, PyStackRef_AsPyObjectSteal(value));
             UNLOCK_OBJECT(owner_o);
+            o = owner;
+            stack_pointer[0] = o;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            Py_XDECREF(old_value);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            _tos_cache0 = o;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(1);
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _STORE_ATTR_RECORD_DRAFT_r21: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef value;
+            _PyStackRef o;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            owner = _stack_item_1;
+            value = _stack_item_0;
+            uint16_t index = (uint16_t)CURRENT_OPERAND0_16();
+            _PyGrailRecordDraft *draft =
+            (_PyGrailRecordDraft *)PyStackRef_AsPyObjectBorrow(owner);
+            PyObject *value_o = PyStackRef_AsPyObjectBorrow(value);
+            if (_PyGrail_IsDraft(value_o) &&
+                     ((_PyGrailDraft *)value_o)->root != draft->head.root) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = owner;
+                _tos_cache0 = value;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            STAT_INC(STORE_ATTR, hit);
+            PyObject *old_value = draft->values[index];
+            draft->values[index] = PyStackRef_AsPyObjectSteal(value);
             o = owner;
             stack_pointer[0] = o;
             stack_pointer += 1;

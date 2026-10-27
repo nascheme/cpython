@@ -9723,6 +9723,100 @@
             DISPATCH();
         }
 
+        TARGET(LOAD_ATTR_RECORD_DRAFT) {
+            #if _Py_TAIL_CALL_INTERP
+            int opcode = LOAD_ATTR_RECORD_DRAFT;
+            (void)(opcode);
+            #endif
+            _Py_CODEUNIT* const this_instr = next_instr;
+            (void)this_instr;
+            frame->instr_ptr = next_instr;
+            next_instr += 10;
+            INSTRUCTION_STATS(LOAD_ATTR_RECORD_DRAFT);
+            static_assert(INLINE_CACHE_ENTRIES_LOAD_ATTR == 9, "incorrect cache size");
+            _PyStackRef owner;
+            _PyStackRef attr;
+            _PyStackRef *null;
+            /* Skip 1 cache entry */
+            // _GUARD_RECORD_DRAFT
+            {
+                owner = stack_pointer[-1];
+                uint32_t type_version = read_u32(&this_instr[2].cache);
+                PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+                if (!_PyGrail_IsRecordDraft(owner_o)) {
+                    UPDATE_MISS_STATS(LOAD_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
+                    JUMP_TO_PREDICTED(LOAD_ATTR);
+                }
+                PyObject *base = ((_PyGrailDraft *)owner_o)->base;
+                if (base == NULL) {
+                    UPDATE_MISS_STATS(LOAD_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
+                    JUMP_TO_PREDICTED(LOAD_ATTR);
+                }
+                if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version) {
+                    UPDATE_MISS_STATS(LOAD_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
+                    JUMP_TO_PREDICTED(LOAD_ATTR);
+                }
+                _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+                if (root->state != 0 || root->owner != tstate) {
+                    UPDATE_MISS_STATS(LOAD_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
+                    JUMP_TO_PREDICTED(LOAD_ATTR);
+                }
+            }
+            // _LOAD_ATTR_RECORD_DRAFT
+            {
+                uint16_t index = read_u16(&this_instr[4].cache);
+                _PyGrailRecordDraft *draft =
+                (_PyGrailRecordDraft *)PyStackRef_AsPyObjectBorrow(owner);
+                PyObject *attr_o = draft->values[index];
+                if (attr_o != NULL) {
+                    Py_INCREF(attr_o);
+                }
+                else {
+                    attr_o = ((RecordObject *)draft->head.base)->fields[index];
+                    PyTypeObject *tp = Py_TYPE(attr_o);
+                    if (tp == &PyLong_Type || tp == &PyFloat_Type ||
+                        tp == &PyUnicode_Type || tp == &PyBool_Type ||
+                        tp == &PyTuple_Type || attr_o == Py_None) {
+                        Py_INCREF(attr_o);
+                    }
+                    else {
+                        _PyFrame_SetStackPointer(frame, stack_pointer);
+                        attr_o = _PyGrail_record_draft_load((PyObject *)draft, index);
+                        stack_pointer = _PyFrame_GetStackPointer(frame);
+                    }
+                }
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                _PyStackRef tmp = owner;
+                owner = PyStackRef_NULL;
+                stack_pointer[-1] = owner;
+                PyStackRef_CLOSE(tmp);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+                stack_pointer += -1;
+                ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                if (attr_o == NULL) {
+                    JUMP_TO_LABEL(error);
+                }
+                STAT_INC(LOAD_ATTR, hit);
+                attr = PyStackRef_FromPyObjectSteal(attr_o);
+            }
+            /* Skip 5 cache entries */
+            // _PUSH_NULL_CONDITIONAL
+            {
+                null = &stack_pointer[1];
+                if (oparg & 1) {
+                    null[0] = PyStackRef_NULL;
+                }
+            }
+            stack_pointer[0] = attr;
+            stack_pointer += 1 + (oparg & 1);
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            DISPATCH();
+        }
+
         TARGET(LOAD_ATTR_SLOT) {
             #if _Py_TAIL_CALL_INTERP
             int opcode = LOAD_ATTR_SLOT;
@@ -12340,6 +12434,85 @@
                     _PyDictValues_AddToInsertionOrder(values, index);
                 }
                 UNLOCK_OBJECT(owner_o);
+                o = owner;
+                stack_pointer[-2] = o;
+                stack_pointer += -1;
+                ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                Py_XDECREF(old_value);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+            }
+            // _POP_TOP
+            {
+                value = o;
+                stack_pointer += -1;
+                ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                PyStackRef_XCLOSE(value);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+            }
+            DISPATCH();
+        }
+
+        TARGET(STORE_ATTR_RECORD_DRAFT) {
+            #if _Py_TAIL_CALL_INTERP
+            int opcode = STORE_ATTR_RECORD_DRAFT;
+            (void)(opcode);
+            #endif
+            _Py_CODEUNIT* const this_instr = next_instr;
+            (void)this_instr;
+            frame->instr_ptr = next_instr;
+            next_instr += 5;
+            INSTRUCTION_STATS(STORE_ATTR_RECORD_DRAFT);
+            static_assert(INLINE_CACHE_ENTRIES_STORE_ATTR == 4, "incorrect cache size");
+            _PyStackRef owner;
+            _PyStackRef value;
+            _PyStackRef o;
+            /* Skip 1 cache entry */
+            // _GUARD_RECORD_DRAFT
+            {
+                owner = stack_pointer[-1];
+                uint32_t type_version = read_u32(&this_instr[2].cache);
+                PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+                if (!_PyGrail_IsRecordDraft(owner_o)) {
+                    UPDATE_MISS_STATS(STORE_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
+                    JUMP_TO_PREDICTED(STORE_ATTR);
+                }
+                PyObject *base = ((_PyGrailDraft *)owner_o)->base;
+                if (base == NULL) {
+                    UPDATE_MISS_STATS(STORE_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
+                    JUMP_TO_PREDICTED(STORE_ATTR);
+                }
+                if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version) {
+                    UPDATE_MISS_STATS(STORE_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
+                    JUMP_TO_PREDICTED(STORE_ATTR);
+                }
+                _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+                if (root->state != 0 || root->owner != tstate) {
+                    UPDATE_MISS_STATS(STORE_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
+                    JUMP_TO_PREDICTED(STORE_ATTR);
+                }
+            }
+            // _STORE_ATTR_RECORD_DRAFT
+            {
+                value = stack_pointer[-2];
+                uint16_t index = read_u16(&this_instr[4].cache);
+                _PyGrailRecordDraft *draft =
+                (_PyGrailRecordDraft *)PyStackRef_AsPyObjectBorrow(owner);
+                PyObject *value_o = PyStackRef_AsPyObjectBorrow(value);
+                if (_PyGrail_IsDraft(value_o) &&
+                    ((_PyGrailDraft *)value_o)->root != draft->head.root) {
+                    UPDATE_MISS_STATS(STORE_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
+                    JUMP_TO_PREDICTED(STORE_ATTR);
+                }
+                STAT_INC(STORE_ATTR, hit);
+                PyObject *old_value = draft->values[index];
+                draft->values[index] = PyStackRef_AsPyObjectSteal(value);
                 o = owner;
                 stack_pointer[-2] = o;
                 stack_pointer += -1;

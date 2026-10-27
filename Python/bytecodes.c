@@ -2522,6 +2522,7 @@ dummy_func(
             STORE_ATTR_INSTANCE_VALUE,
             STORE_ATTR_SLOT,
             STORE_ATTR_WITH_HINT,
+            STORE_ATTR_RECORD_DRAFT,
         };
 
         specializing op(_SPECIALIZE_STORE_ATTR, (counter/1, owner -- owner)) {
@@ -3181,6 +3182,7 @@ dummy_func(
             LOAD_ATTR_WITH_HINT,
             LOAD_ATTR_SLOT,
             LOAD_ATTR_RECORD,
+            LOAD_ATTR_RECORD_DRAFT,
             LOAD_ATTR_CLASS,
             LOAD_ATTR_CLASS_WITH_METACLASS_CHECK,
             LOAD_ATTR_PROPERTY,
@@ -3448,6 +3450,55 @@ dummy_func(
             unused/5 +
             _PUSH_NULL_CONDITIONAL;
 
+        /* A field of a grail.mutate record draft (see pycore_grail.h): the
+         * draft's type is recognized by its registered getattro and the
+         * version is that of the record type the draft was made from. A
+         * draft whose root is closed or owned by another thread deopts, and
+         * the generic lookup raises. */
+        op(_GUARD_RECORD_DRAFT, (type_version/2, owner -- owner)) {
+            PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            EXIT_IF(!_PyGrail_IsRecordDraft(owner_o));
+            PyObject *base = ((_PyGrailDraft *)owner_o)->base;
+            EXIT_IF(base == NULL);
+            EXIT_IF(FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version);
+            _PyGrailDraftRoot *root = ((_PyGrailDraft *)owner_o)->root;
+            EXIT_IF(root->state != 0 || root->owner != tstate);
+        }
+
+        op(_LOAD_ATTR_RECORD_DRAFT, (index/1, owner -- attr)) {
+            _PyGrailRecordDraft *draft =
+                (_PyGrailRecordDraft *)PyStackRef_AsPyObjectBorrow(owner);
+            PyObject *attr_o = draft->values[index];
+            if (attr_o != NULL) {
+                Py_INCREF(attr_o);
+            }
+            else {
+                /* An unassigned scalar field is the record's own value. */
+                attr_o = ((RecordObject *)draft->head.base)->fields[index];
+                PyTypeObject *tp = Py_TYPE(attr_o);
+                if (tp == &PyLong_Type || tp == &PyFloat_Type ||
+                    tp == &PyUnicode_Type || tp == &PyBool_Type ||
+                    tp == &PyTuple_Type || attr_o == Py_None) {
+                    Py_INCREF(attr_o);
+                }
+                else {
+                    attr_o = _PyGrail_record_draft_load((PyObject *)draft, index);
+                }
+            }
+            DECREF_INPUTS();
+            ERROR_IF(attr_o == NULL);
+            STAT_INC(LOAD_ATTR, hit);
+            attr = PyStackRef_FromPyObjectSteal(attr_o);
+        }
+
+        macro(LOAD_ATTR_RECORD_DRAFT) =
+            unused/1 +
+            _RECORD_TOS_TYPE +
+            _GUARD_RECORD_DRAFT +
+            _LOAD_ATTR_RECORD_DRAFT +
+            unused/5 +
+            _PUSH_NULL_CONDITIONAL;
+
         op(_CHECK_ATTR_CLASS, (type_version/2, owner -- owner)) {
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
 
@@ -3635,6 +3686,29 @@ dummy_func(
             _RECORD_TOS_TYPE +
             _GUARD_TYPE_VERSION +
             _STORE_ATTR_SLOT +
+            POP_TOP;
+
+        /* Assigning a field of an open record draft. A draft from another
+         * root deopts, and the generic store raises ValueError. */
+        op(_STORE_ATTR_RECORD_DRAFT, (index/1, value, owner -- o)) {
+            _PyGrailRecordDraft *draft =
+                (_PyGrailRecordDraft *)PyStackRef_AsPyObjectBorrow(owner);
+            PyObject *value_o = PyStackRef_AsPyObjectBorrow(value);
+            DEOPT_IF(_PyGrail_IsDraft(value_o) &&
+                     ((_PyGrailDraft *)value_o)->root != draft->head.root);
+            STAT_INC(STORE_ATTR, hit);
+            PyObject *old_value = draft->values[index];
+            draft->values[index] = PyStackRef_AsPyObjectSteal(value);
+            INPUTS_DEAD();
+            o = owner;
+            Py_XDECREF(old_value);
+        }
+
+        macro(STORE_ATTR_RECORD_DRAFT) =
+            unused/1 +
+            _RECORD_TOS_TYPE +
+            _GUARD_RECORD_DRAFT +
+            _STORE_ATTR_RECORD_DRAFT +
             POP_TOP;
 
         family(COMPARE_OP, INLINE_CACHE_ENTRIES_COMPARE_OP) = {

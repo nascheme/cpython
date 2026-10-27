@@ -24,7 +24,7 @@
 enum { ROOT_OPEN, ROOT_SEALED, ROOT_DONE };
 enum { KIND_NONE, KIND_RECORD, KIND_VECTOR, KIND_MAP };
 
-typedef struct {
+typedef struct _PyGrailDraftState {
     PyTypeObject *root_type;
     PyTypeObject *record_draft_type;
     PyTypeObject *vector_draft_type;
@@ -38,29 +38,13 @@ typedef struct {
     PyObject *str_finish;
 } DraftState;
 
-typedef struct {
-    PyObject_HEAD
-    DraftState *st;              /* the module outlives its types' objects */
-    PyThreadState *owner;
-    int state;
-    PyObject *draft;             /* borrowed: the root draft, for identity */
-    PyObject *result;
-} RootObject;
-
-/* Common head of the three draft types. */
-typedef struct {
-    PyObject_HEAD
-    RootObject *root;
-    PyObject *base;
-    PyObject *built;             /* finish() result for this draft */
-    int building;
-} DraftObject;
-
-typedef struct {
-    DraftObject head;
-    Py_ssize_t n;
-    PyObject *values[];          /* NULL: unchanged and not yet drafted */
-} RecordDraft;
+/* The root, the common head of the three draft types (built caches the
+ * finish() result) and record drafts are laid out in pycore_grail.h, for
+ * the specialized record draft attribute instructions. The root's st
+ * points into the module, which outlives its types' objects. */
+typedef _PyGrailDraftRoot RootObject;
+typedef _PyGrailDraft DraftObject;
+typedef _PyGrailRecordDraft RecordDraft;
 
 typedef struct {
     Py_ssize_t index;
@@ -350,6 +334,29 @@ no_field(PyObject *base, PyObject *name)
     return -1;
 }
 
+/* Field i of an open record draft, creating the child draft of a
+ * draftable field on first use (LOAD_ATTR_RECORD_DRAFT's slow path). */
+static PyObject *
+record_draft_load(PyObject *self, Py_ssize_t i)
+{
+    RecordDraft *r = (RecordDraft *)self;
+    RootObject *root = r->head.root;
+    PyObject *value = r->values[i];
+    if (value != NULL) {
+        return Py_NewRef(value);
+    }
+    PyObject *field = ((RecordObject *)r->head.base)->fields[i];
+    int kind = draft_kind(root->st, field);
+    if (!kind) {
+        return Py_NewRef(field);
+    }
+    value = new_draft(root, field, kind);
+    if (value != NULL) {
+        r->values[i] = Py_NewRef(value);
+    }
+    return value;
+}
+
 static PyObject *
 record_draft_getattro(PyObject *self, PyObject *name)
 {
@@ -375,24 +382,10 @@ record_draft_getattro(PyObject *self, PyObject *name)
         no_field(base, name);
         return NULL;
     }
-    RootObject *root = r->head.root;
-    if (check(root) < 0) {
+    if (check(r->head.root) < 0) {
         return NULL;
     }
-    PyObject *value = r->values[i];
-    if (value != NULL) {
-        return Py_NewRef(value);
-    }
-    PyObject *field = ((RecordObject *)base)->fields[i];
-    int kind = draft_kind(root->st, field);
-    if (!kind) {
-        return Py_NewRef(field);
-    }
-    value = new_draft(root, field, kind);
-    if (value != NULL) {
-        r->values[i] = Py_NewRef(value);
-    }
-    return value;
+    return record_draft_load(self, i);
 }
 
 static int
@@ -1242,6 +1235,8 @@ draft_exec(PyObject *module)
         (st->str_finish = PyUnicode_InternFromString("finish")) == NULL) {
         return -1;
     }
+    _PyGrail_RegisterRecordDraft(record_draft_getattro, draft_dealloc,
+                                 record_draft_load);
     return 0;
 }
 

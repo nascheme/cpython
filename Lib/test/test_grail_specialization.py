@@ -4,6 +4,7 @@ import dis
 import gc
 import os
 import sysconfig
+import threading
 import unittest
 import weakref
 
@@ -215,6 +216,96 @@ class VectorSubscriptTests(unittest.TestCase):
         self.assertEqual(get(grail.PVector(), slice(None)), grail.PVector())
         with self.assertRaises(IndexError):
             get(grail.PVector(), 0)
+
+
+@requires_specialization
+class RecordDraftAttrTests(unittest.TestCase):
+    def make(self):
+        @grail.record
+        class Inner:
+            v: int
+
+        @grail.record
+        class R:
+            x: int
+            inner: Inner
+            obj: object
+        return Inner, R
+
+    def functions(self):
+        # Fresh code objects, so that repeated runs (-R) start unspecialized.
+        ns = {}
+        exec("def bump(d):\n    d.x += 1\n    return d.x\n"
+             "def inner(d):\n    return d.inner\n"
+             "def put(d, value):\n    d.obj = value\n", ns)
+        return ns["bump"], ns["inner"], ns["put"]
+
+    def test_specialized(self):
+        Inner, R = self.make()
+        bump, inner, put = self.functions()
+        r = R(1, Inner(2), [])
+        for _ in range(1000):
+            d = grail.mutate(r)
+            self.assertEqual(bump(d), 2)
+            child = inner(d)
+            self.assertIs(inner(d), child)
+            child.v = 5
+            put(d, "s")
+            self.assertEqual(grail.finish(d), R(2, Inner(5), "s"))
+        names = set()
+        for func in (bump, inner, put):
+            names |= {i.opname for i in dis.get_instructions(func, adaptive=True)}
+        self.assertIn("LOAD_ATTR_RECORD_DRAFT", names)
+        self.assertIn("STORE_ATTR_RECORD_DRAFT", names)
+        self.assertEqual(r, R(1, Inner(2), []))
+
+        # Specialized sites still check the draft's state, owner and type.
+        d = grail.mutate(r)
+        with d:
+            pass
+        with self.assertRaises(RuntimeError):
+            bump(d)
+        with self.assertRaises(RuntimeError):
+            put(d, 1)
+        d = grail.mutate(r)
+        other = grail.mutate(r)
+        with self.assertRaises(ValueError):
+            put(d, other.inner)
+        errors = []
+
+        def use():
+            for f in (lambda: bump(d), lambda: put(d, 1)):
+                try:
+                    f()
+                except RuntimeError:
+                    errors.append(True)
+
+        t = threading.Thread(target=use)
+        t.start()
+        t.join()
+        self.assertEqual(errors, [True, True])
+        self.assertEqual(grail.finish(d), r)
+
+        # Another record type with the same field names, and non-drafts.
+        @grail.record
+        class S:
+            obj: object
+            x: int
+            inner: object
+        d = grail.mutate(S(None, 10, 3))
+        self.assertEqual(bump(d), 11)
+        self.assertEqual(inner(d), 3)
+        put(d, 4)
+        self.assertEqual(grail.finish(d), S(4, 11, 3))
+
+        class Plain:
+            pass
+        p = Plain()
+        p.x, p.inner = 7, 8
+        self.assertEqual(bump(p), 8)
+        self.assertEqual(inner(p), 8)
+        put(p, 9)
+        self.assertEqual(p.obj, 9)
 
 
 if __name__ == "__main__":
