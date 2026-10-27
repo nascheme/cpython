@@ -2632,19 +2632,6 @@ registered_int_subscript(PyObject *lhs, PyObject *rhs)
     return item(lhs, _PyLong_CompactValue((PyLongObject *)rhs));
 }
 
-/* For the tier-2 optimizer: the item function a registered [int]
- * subscript descriptor calls for a container of type tp, or NULL if d is
- * not one or tp is not its container type. */
-ssizeargfunc
-_PySpecialize_SubscriptItemFor(const _PyBinaryOpSpecializationDescr *d,
-                               PyTypeObject *tp)
-{
-    if (d->guard == registered_int_subscript_guard) {
-        return registered_item_for(tp);
-    }
-    return NULL;
-}
-
 static struct {
     objobjargproc ass_subscript;
     _PyAssItemFunc ass_item;
@@ -2761,6 +2748,27 @@ draft_int_subscript(PyObject *lhs, PyObject *rhs)
 {
     ssizeargfunc item = (ssizeargfunc)_Py_atomic_load_ptr(&registered_draft_item);
     return item(lhs, _PyLong_CompactValue((PyLongObject *)rhs));
+}
+
+/* For the tier-2 optimizer: the item function a registered [int]
+ * subscript descriptor calls for a container of type tp, or NULL if d is
+ * not one or tp is not its container type. */
+ssizeargfunc
+_PySpecialize_SubscriptItemFor(const _PyBinaryOpSpecializationDescr *d,
+                               PyTypeObject *tp)
+{
+    if (d->guard == registered_int_subscript_guard) {
+        return registered_item_for(tp);
+    }
+    if (d->guard == draft_int_subscript_guard) {
+        binaryfunc subscript = _Py_atomic_load_ptr_acquire(&registered_draft_subscript);
+        if (subscript == NULL || tp->tp_as_mapping == NULL ||
+            tp->tp_as_mapping->mp_subscript != subscript) {
+            return NULL;
+        }
+        return _Py_atomic_load_ptr(&registered_draft_item);
+    }
+    return NULL;
 }
 
 static _PyBinaryOpSpecializationDescr binaryop_extend_descrs[] = {

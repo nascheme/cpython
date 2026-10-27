@@ -1091,6 +1091,39 @@ class MatchFoldTests(unittest.TestCase):
         for _ in range(REPEAT):
             self.assertEqual(total(bs), 9900)
 
+class SubscriptTests(unittest.TestCase):
+    """PVector and PVector draft [int] subscripts in traces call the item
+    function directly once the container type is guarded."""
+
+    def test_vector_and_draft(self):
+        ns = {}
+        exec("""if 1:
+            def total(v, idx):
+                t = 0
+                for i in idx:
+                    t += v[i]
+                return t
+            """, ns)
+        total = ns["total"]
+        v = grail.PVector(range(100))
+        idx = list(range(-100, 100))
+        for _ in range(REPEAT):
+            self.assertEqual(total(v, idx), 2 * sum(range(100)))
+        if tier2_enabled():
+            self.assertIn("_BINARY_OP_SUBSCR_SSIZE_ITEM", executor_uops(total))
+        with self.assertRaises(IndexError):
+            total(v, [0, 100])
+        with grail.mutate(v) as d:
+            for _ in range(REPEAT):
+                self.assertEqual(total(d, idx), 2 * sum(range(100)))
+            with self.assertRaises(IndexError):
+                total(d, [5, -101])
+        with self.assertRaises(RuntimeError):
+            total(d, [0])
+        self.assertEqual(total(list(range(100)), idx), 2 * sum(range(100)))
+        self.assertEqual(total(v, [True, 2]), 3)
+
+
 def sum_repeat(value, n):
     t = 0.0
     for _ in range(n):
