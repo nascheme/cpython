@@ -1896,6 +1896,16 @@ getattrofunc _PyGrail_record_draft_getattro;
 destructor _PyGrail_draft_dealloc;
 _PyGrailDraftLoad _PyGrail_record_draft_load;
 
+PyCFunction _PyGrail_draft_enter;
+void *_PyGrail_draft_exit;
+
+void
+_PyGrail_RegisterDraftWith(PyCFunction enter, void *exit)
+{
+    _Py_atomic_store_ptr(&_PyGrail_draft_exit, exit);
+    _Py_atomic_store_ptr_release(&_PyGrail_draft_enter, (void *)enter);
+}
+
 static const _PyGrailVectorOps *vector_ops;
 
 void

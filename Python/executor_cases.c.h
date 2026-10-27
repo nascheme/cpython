@@ -21231,6 +21231,406 @@
             break;
         }
 
+        case _GUARD_CALLABLE_DRAFT_ENTER_r02: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef callable;
+            callable = stack_pointer[-2];
+            if (!_PyGrail_IsDraftWithMethod(PyStackRef_AsPyObjectBorrow(callable), 0)) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache1 = stack_pointer[-1];
+            _tos_cache0 = callable;
+            SET_CURRENT_CACHED_VALUES(2);
+            stack_pointer += -2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _GUARD_CALLABLE_DRAFT_ENTER_r12: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef callable;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            callable = stack_pointer[-1];
+            if (!_PyGrail_IsDraftWithMethod(PyStackRef_AsPyObjectBorrow(callable), 0)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(1);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache1 = _stack_item_0;
+            _tos_cache0 = callable;
+            SET_CURRENT_CACHED_VALUES(2);
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _GUARD_CALLABLE_DRAFT_ENTER_r22: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef callable;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            callable = _stack_item_0;
+            if (!_PyGrail_IsDraftWithMethod(PyStackRef_AsPyObjectBorrow(callable), 0)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = callable;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache1 = _stack_item_1;
+            _tos_cache0 = callable;
+            SET_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _GUARD_CALLABLE_DRAFT_ENTER_r33: {
+            CHECK_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef callable;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            _PyStackRef _stack_item_2 = _tos_cache2;
+            callable = _stack_item_1;
+            if (!_PyGrail_IsDraftWithMethod(PyStackRef_AsPyObjectBorrow(callable), 0)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = _stack_item_2;
+                _tos_cache1 = callable;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache2 = _stack_item_2;
+            _tos_cache1 = callable;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _CALL_DRAFT_ENTER_r02: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef self;
+            _PyStackRef callable;
+            _PyStackRef res;
+            _PyStackRef c;
+            self = stack_pointer[-1];
+            callable = stack_pointer[-2];
+            PyObject *self_o = PyStackRef_AsPyObjectBorrow(self);
+            if (!_PyGrail_IsDraft(self_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _PyGrailDraft *draft = (_PyGrailDraft *)self_o;
+            if (draft->root != draft || draft->state != _PyGrail_DRAFT_OPEN ||
+                    draft->owner != tstate) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            STAT_INC(CALL, hit);
+            res = self;
+            c = callable;
+            _tos_cache1 = c;
+            _tos_cache0 = res;
+            SET_CURRENT_CACHED_VALUES(2);
+            stack_pointer += -2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _CALL_DRAFT_ENTER_r12: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef self;
+            _PyStackRef callable;
+            _PyStackRef res;
+            _PyStackRef c;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            self = _stack_item_0;
+            callable = stack_pointer[-1];
+            PyObject *self_o = PyStackRef_AsPyObjectBorrow(self);
+            if (!_PyGrail_IsDraft(self_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache0 = self;
+                SET_CURRENT_CACHED_VALUES(1);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _PyGrailDraft *draft = (_PyGrailDraft *)self_o;
+            if (draft->root != draft || draft->state != _PyGrail_DRAFT_OPEN ||
+                    draft->owner != tstate) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache0 = self;
+                SET_CURRENT_CACHED_VALUES(1);
+                JUMP_TO_JUMP_TARGET();
+            }
+            STAT_INC(CALL, hit);
+            res = self;
+            c = callable;
+            _tos_cache1 = c;
+            _tos_cache0 = res;
+            SET_CURRENT_CACHED_VALUES(2);
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _CALL_DRAFT_ENTER_r22: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef self;
+            _PyStackRef callable;
+            _PyStackRef res;
+            _PyStackRef c;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            self = _stack_item_1;
+            callable = _stack_item_0;
+            PyObject *self_o = PyStackRef_AsPyObjectBorrow(self);
+            if (!_PyGrail_IsDraft(self_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = self;
+                _tos_cache0 = callable;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _PyGrailDraft *draft = (_PyGrailDraft *)self_o;
+            if (draft->root != draft || draft->state != _PyGrail_DRAFT_OPEN ||
+                    draft->owner != tstate) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = self;
+                _tos_cache0 = callable;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            STAT_INC(CALL, hit);
+            res = self;
+            c = callable;
+            _tos_cache1 = c;
+            _tos_cache0 = res;
+            SET_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _CALL_DRAFT_ENTER_r33: {
+            CHECK_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef self;
+            _PyStackRef callable;
+            _PyStackRef res;
+            _PyStackRef c;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            _PyStackRef _stack_item_2 = _tos_cache2;
+            self = _stack_item_2;
+            callable = _stack_item_1;
+            PyObject *self_o = PyStackRef_AsPyObjectBorrow(self);
+            if (!_PyGrail_IsDraft(self_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = self;
+                _tos_cache1 = callable;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _PyGrailDraft *draft = (_PyGrailDraft *)self_o;
+            if (draft->root != draft || draft->state != _PyGrail_DRAFT_OPEN ||
+                    draft->owner != tstate) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = self;
+                _tos_cache1 = callable;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            STAT_INC(CALL, hit);
+            res = self;
+            c = callable;
+            _tos_cache2 = c;
+            _tos_cache1 = res;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _GUARD_CALLABLE_DRAFT_EXIT_r03: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef callable;
+            callable = stack_pointer[-5];
+            if (!_PyGrail_IsDraftWithMethod(PyStackRef_AsPyObjectBorrow(callable), 1)) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache2 = stack_pointer[-1];
+            _tos_cache1 = stack_pointer[-2];
+            _tos_cache0 = stack_pointer[-3];
+            SET_CURRENT_CACHED_VALUES(3);
+            stack_pointer += -3;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _GUARD_CALLABLE_DRAFT_EXIT_r13: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef callable;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            callable = stack_pointer[-4];
+            if (!_PyGrail_IsDraftWithMethod(PyStackRef_AsPyObjectBorrow(callable), 1)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(1);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache2 = _stack_item_0;
+            _tos_cache1 = stack_pointer[-1];
+            _tos_cache0 = stack_pointer[-2];
+            SET_CURRENT_CACHED_VALUES(3);
+            stack_pointer += -2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _GUARD_CALLABLE_DRAFT_EXIT_r23: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef callable;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            callable = stack_pointer[-3];
+            if (!_PyGrail_IsDraftWithMethod(PyStackRef_AsPyObjectBorrow(callable), 1)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache2 = _stack_item_1;
+            _tos_cache1 = _stack_item_0;
+            _tos_cache0 = stack_pointer[-1];
+            SET_CURRENT_CACHED_VALUES(3);
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _GUARD_CALLABLE_DRAFT_EXIT_r33: {
+            CHECK_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef callable;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            _PyStackRef _stack_item_2 = _tos_cache2;
+            callable = stack_pointer[-2];
+            if (!_PyGrail_IsDraftWithMethod(PyStackRef_AsPyObjectBorrow(callable), 1)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = _stack_item_2;
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache2 = _stack_item_2;
+            _tos_cache1 = _stack_item_1;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _CALL_DRAFT_EXIT_r31: {
+            CHECK_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef tb;
+            _PyStackRef val;
+            _PyStackRef exc;
+            _PyStackRef self;
+            _PyStackRef callable;
+            _PyStackRef res;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            _PyStackRef _stack_item_2 = _tos_cache2;
+            tb = _stack_item_2;
+            val = _stack_item_1;
+            exc = _stack_item_0;
+            self = stack_pointer[-1];
+            callable = stack_pointer[-2];
+            PyObject *self_o = PyStackRef_AsPyObjectBorrow(self);
+            if (!_PyGrail_IsDraft(self_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = tb;
+                _tos_cache1 = val;
+                _tos_cache0 = exc;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            if (!PyStackRef_IsNone(exc)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = tb;
+                _tos_cache1 = val;
+                _tos_cache0 = exc;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _PyGrailDraft *root = ((_PyGrailDraft *)self_o)->root;
+            if (root != NULL && root->state == _PyGrail_DRAFT_OPEN) {
+                root->state = _PyGrail_DRAFT_SEALED;
+            }
+            STAT_INC(CALL, hit);
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            _PyStackRef tmp = tb;
+            tb = PyStackRef_NULL;
+            stack_pointer[0] = exc;
+            stack_pointer[1] = val;
+            stack_pointer[2] = tb;
+            PyStackRef_CLOSE(tmp);
+            tmp = val;
+            val = PyStackRef_NULL;
+            stack_pointer[1] = val;
+            PyStackRef_CLOSE(tmp);
+            tmp = exc;
+            exc = PyStackRef_NULL;
+            stack_pointer[0] = exc;
+            PyStackRef_CLOSE(tmp);
+            tmp = self;
+            self = PyStackRef_NULL;
+            stack_pointer[-1] = self;
+            PyStackRef_CLOSE(tmp);
+            tmp = callable;
+            callable = PyStackRef_NULL;
+            stack_pointer[-2] = callable;
+            PyStackRef_CLOSE(tmp);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            stack_pointer += -2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            res = PyStackRef_False;
+            _tos_cache0 = res;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _GUARD_CALLABLE_LEN_r03: {
             CHECK_CURRENT_CACHED_VALUES(0);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());

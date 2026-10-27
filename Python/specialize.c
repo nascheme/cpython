@@ -1779,6 +1779,19 @@ static int
 specialize_method_descriptor(PyMethodDescrObject *descr, PyObject *self_or_null,
                              _Py_CODEUNIT *instr, int nargs)
 {
+    /* `with` on a grail.mutate draft: CALL 0 of __enter__ and CALL 3 of
+     * __exit__ with self (from LOAD_SPECIAL). */
+    if (self_or_null != NULL && _PyGrail_IsDraft(self_or_null)) {
+        int oparg = instr->op.arg;
+        if (oparg == 0 && _PyGrail_IsDraftWithMethod((PyObject *)descr, 0)) {
+            specialize(instr, CALL_DRAFT_ENTER);
+            return 0;
+        }
+        if (oparg == 3 && _PyGrail_IsDraftWithMethod((PyObject *)descr, 1)) {
+            specialize(instr, CALL_DRAFT_EXIT);
+            return 0;
+        }
+    }
     switch (descr->d_method->ml_flags &
         (METH_VARARGS | METH_FASTCALL | METH_NOARGS | METH_O |
         METH_KEYWORDS | METH_METHOD)) {

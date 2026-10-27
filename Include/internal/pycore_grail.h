@@ -166,6 +166,29 @@ typedef struct {
 } _PyGrailVectorOps;
 PyAPI_FUNC(void) _PyGrail_RegisterVectorOps(const _PyGrailVectorOps *ops);
 PyAPI_FUNC(const _PyGrailVectorOps *) _PyGrail_GetVectorOps(void);
+/* A root's state; the specialized `with` calls set SEALED. */
+#define _PyGrail_DRAFT_OPEN 0
+#define _PyGrail_DRAFT_SEALED 1
+/* Registered by _grail_draft: the C functions of its __enter__ (METH_NOARGS)
+ * and __exit__ (METH_FASTCALL), for CALL_DRAFT_ENTER and CALL_DRAFT_EXIT. */
+PyAPI_FUNC(void) _PyGrail_RegisterDraftWith(PyCFunction enter, void *exit);
+PyAPI_DATA(PyCFunction) _PyGrail_draft_enter;
+PyAPI_DATA(void *) _PyGrail_draft_exit;
+
+/* 1 if callable is the method descriptor of the registered draft __enter__
+ * (which 0) or __exit__ (which 1). */
+static inline int
+_PyGrail_IsDraftWithMethod(PyObject *callable, int which)
+{
+    if (!Py_IS_TYPE(callable, &PyMethodDescr_Type)) {
+        return 0;
+    }
+    void *meth = (void *)((PyMethodDescrObject *)callable)->d_method->ml_meth;
+    void *expected = which ? _Py_atomic_load_ptr_relaxed(&_PyGrail_draft_exit)
+                           : _Py_atomic_load_ptr_relaxed(&_PyGrail_draft_enter);
+    return expected != NULL && meth == expected;
+}
+
 PyAPI_DATA(getattrofunc) _PyGrail_record_draft_getattro;
 PyAPI_DATA(destructor) _PyGrail_draft_dealloc;
 PyAPI_DATA(_PyGrailDraftLoad) _PyGrail_record_draft_load;

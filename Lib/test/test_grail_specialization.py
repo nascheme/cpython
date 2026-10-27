@@ -333,5 +333,68 @@ class VectorDraftSubscriptTests(unittest.TestCase):
         self.assertEqual(get((5, 6), 1), 6)
 
 
+@requires_specialization
+class DraftWithTests(unittest.TestCase):
+    def test_enter_exit(self):
+        @grail.record
+        class P:
+            x: int
+            q: grail.PVector
+
+        ns = {"grail": grail}
+        exec("def edit(p):\n"
+             "    with grail.mutate(p) as d:\n"
+             "        d.x += 1\n"
+             "    return grail.finish(d)\n"
+             "def enter(d):\n"
+             "    with d as e:\n"
+             "        return e\n", ns)  # fresh code objects
+        edit, enter = ns["edit"], ns["enter"]
+        p = P(1, grail.PVector([P(0, grail.PVector())]))
+        for _ in range(1000):
+            self.assertEqual(edit(p), P(2, p.q))
+            d = grail.mutate(p)
+            self.assertIs(enter(d), d)
+            self.assertIs(grail.finish(d), p)
+        names = {i.opname for f in (edit, enter)
+                 for i in dis.get_instructions(f, adaptive=True)}
+        self.assertIn("CALL_DRAFT_ENTER", names)
+        self.assertIn("CALL_DRAFT_EXIT", names)
+
+        # The specialized sites still reject what the methods reject.
+        d = grail.mutate(p)
+        with self.assertRaises(RuntimeError):
+            enter(d.q[0])                    # a child draft
+        enter(d)                             # seals d
+        with self.assertRaises(RuntimeError):
+            enter(d)
+        self.assertIs(grail.finish(d), p)
+        d = grail.mutate(p)
+        errors = []
+
+        def other():
+            try:
+                enter(d)
+            except RuntimeError:
+                errors.append(True)
+
+        t = threading.Thread(target=other)
+        t.start()
+        t.join()
+        self.assertEqual(errors, [True])
+        d.x = 5
+        self.assertEqual(enter(d), d)
+        self.assertEqual(grail.finish(d), P(5, p.q))
+
+        # An exception still aborts the draft.
+        ns2 = {"grail": grail}
+        exec("def fail(p):\n"
+             "    with grail.mutate(p) as d:\n"
+             "        raise KeyError\n", ns2)
+        for _ in range(3):
+            with self.assertRaises(KeyError):
+                ns2["fail"](p)
+
+
 if __name__ == "__main__":
     unittest.main()

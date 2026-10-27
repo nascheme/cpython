@@ -29,7 +29,8 @@
 #include "internal/pycore_object.h"  // _PyObject_Init()
 #include "internal/pycore_pystate.h" // _PyThreadState_GET()
 
-enum { ROOT_OPEN, ROOT_SEALED, ROOT_DONE };
+enum { ROOT_OPEN = _PyGrail_DRAFT_OPEN, ROOT_SEALED = _PyGrail_DRAFT_SEALED,
+       ROOT_DONE };
 enum { KIND_NONE, KIND_RECORD, KIND_VECTOR, KIND_MAP };
 
 typedef struct _PyGrailDraftState {
@@ -1287,6 +1288,7 @@ draft_exec(PyObject *module)
     _PyGrail_RegisterRecordDraft(record_draft_getattro, draft_dealloc,
                                  record_draft_load);
     _PyGrail_RegisterDraftSubscript(vector_draft_subscript, vector_draft_item);
+    _PyGrail_RegisterDraftWith(draft_enter, (void *)draft_exit);
     return 0;
 }
 

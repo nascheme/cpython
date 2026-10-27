@@ -2958,6 +2958,148 @@
             DISPATCH();
         }
 
+        TARGET(CALL_DRAFT_ENTER) {
+            #if _Py_TAIL_CALL_INTERP
+            int opcode = CALL_DRAFT_ENTER;
+            (void)(opcode);
+            #endif
+            _Py_CODEUNIT* const this_instr = next_instr;
+            (void)this_instr;
+            frame->instr_ptr = next_instr;
+            next_instr += 4;
+            INSTRUCTION_STATS(CALL_DRAFT_ENTER);
+            static_assert(INLINE_CACHE_ENTRIES_CALL == 3, "incorrect cache size");
+            _PyStackRef callable;
+            _PyStackRef self;
+            _PyStackRef res;
+            _PyStackRef c;
+            _PyStackRef value;
+            /* Skip 1 cache entry */
+            /* Skip 2 cache entries */
+            // _GUARD_CALLABLE_DRAFT_ENTER
+            {
+                callable = stack_pointer[-2];
+                if (!_PyGrail_IsDraftWithMethod(PyStackRef_AsPyObjectBorrow(callable), 0)) {
+                    UPDATE_MISS_STATS(CALL);
+                    assert(_PyOpcode_Deopt[opcode] == (CALL));
+                    JUMP_TO_PREDICTED(CALL);
+                }
+            }
+            // _CALL_DRAFT_ENTER
+            {
+                self = stack_pointer[-1];
+                PyObject *self_o = PyStackRef_AsPyObjectBorrow(self);
+                if (!_PyGrail_IsDraft(self_o)) {
+                    UPDATE_MISS_STATS(CALL);
+                    assert(_PyOpcode_Deopt[opcode] == (CALL));
+                    JUMP_TO_PREDICTED(CALL);
+                }
+                _PyGrailDraft *draft = (_PyGrailDraft *)self_o;
+                if (draft->root != draft || draft->state != _PyGrail_DRAFT_OPEN ||
+                    draft->owner != tstate) {
+                    UPDATE_MISS_STATS(CALL);
+                    assert(_PyOpcode_Deopt[opcode] == (CALL));
+                    JUMP_TO_PREDICTED(CALL);
+                }
+                STAT_INC(CALL, hit);
+                res = self;
+                c = callable;
+            }
+            // _POP_TOP
+            {
+                value = c;
+                stack_pointer[-2] = res;
+                stack_pointer += -1;
+                ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                PyStackRef_XCLOSE(value);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+            }
+            DISPATCH();
+        }
+
+        TARGET(CALL_DRAFT_EXIT) {
+            #if _Py_TAIL_CALL_INTERP
+            int opcode = CALL_DRAFT_EXIT;
+            (void)(opcode);
+            #endif
+            _Py_CODEUNIT* const this_instr = next_instr;
+            (void)this_instr;
+            frame->instr_ptr = next_instr;
+            next_instr += 4;
+            INSTRUCTION_STATS(CALL_DRAFT_EXIT);
+            static_assert(INLINE_CACHE_ENTRIES_CALL == 3, "incorrect cache size");
+            _PyStackRef callable;
+            _PyStackRef self;
+            _PyStackRef exc;
+            _PyStackRef val;
+            _PyStackRef tb;
+            _PyStackRef res;
+            /* Skip 1 cache entry */
+            /* Skip 2 cache entries */
+            // _GUARD_CALLABLE_DRAFT_EXIT
+            {
+                callable = stack_pointer[-5];
+                if (!_PyGrail_IsDraftWithMethod(PyStackRef_AsPyObjectBorrow(callable), 1)) {
+                    UPDATE_MISS_STATS(CALL);
+                    assert(_PyOpcode_Deopt[opcode] == (CALL));
+                    JUMP_TO_PREDICTED(CALL);
+                }
+            }
+            // _CALL_DRAFT_EXIT
+            {
+                tb = stack_pointer[-1];
+                val = stack_pointer[-2];
+                exc = stack_pointer[-3];
+                self = stack_pointer[-4];
+                PyObject *self_o = PyStackRef_AsPyObjectBorrow(self);
+                if (!_PyGrail_IsDraft(self_o)) {
+                    UPDATE_MISS_STATS(CALL);
+                    assert(_PyOpcode_Deopt[opcode] == (CALL));
+                    JUMP_TO_PREDICTED(CALL);
+                }
+                if (!PyStackRef_IsNone(exc)) {
+                    UPDATE_MISS_STATS(CALL);
+                    assert(_PyOpcode_Deopt[opcode] == (CALL));
+                    JUMP_TO_PREDICTED(CALL);
+                }
+                _PyGrailDraft *root = ((_PyGrailDraft *)self_o)->root;
+                if (root != NULL && root->state == _PyGrail_DRAFT_OPEN) {
+                    root->state = _PyGrail_DRAFT_SEALED;
+                }
+                STAT_INC(CALL, hit);
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                _PyStackRef tmp = tb;
+                tb = PyStackRef_NULL;
+                stack_pointer[-1] = tb;
+                PyStackRef_CLOSE(tmp);
+                tmp = val;
+                val = PyStackRef_NULL;
+                stack_pointer[-2] = val;
+                PyStackRef_CLOSE(tmp);
+                tmp = exc;
+                exc = PyStackRef_NULL;
+                stack_pointer[-3] = exc;
+                PyStackRef_CLOSE(tmp);
+                tmp = self;
+                self = PyStackRef_NULL;
+                stack_pointer[-4] = self;
+                PyStackRef_CLOSE(tmp);
+                tmp = callable;
+                callable = PyStackRef_NULL;
+                stack_pointer[-5] = callable;
+                PyStackRef_CLOSE(tmp);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+                stack_pointer += -5;
+                ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                res = PyStackRef_False;
+            }
+            stack_pointer[0] = res;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            DISPATCH();
+        }
+
         TARGET(CALL_EX_NON_PY_GENERAL) {
             #if _Py_TAIL_CALL_INTERP
             int opcode = CALL_EX_NON_PY_GENERAL;

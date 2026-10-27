@@ -5484,6 +5484,34 @@
             break;
         }
 
+        case _GUARD_CALLABLE_DRAFT_ENTER: {
+            break;
+        }
+
+        case _CALL_DRAFT_ENTER: {
+            JitOptRef res;
+            JitOptRef c;
+            res = sym_new_not_null(ctx);
+            c = sym_new_not_null(ctx);
+            stack_pointer[-2] = res;
+            stack_pointer[-1] = c;
+            break;
+        }
+
+        case _GUARD_CALLABLE_DRAFT_EXIT: {
+            break;
+        }
+
+        case _CALL_DRAFT_EXIT: {
+            JitOptRef res;
+            res = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(-4);
+            stack_pointer[-5] = res;
+            stack_pointer += -4;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
         case _GUARD_CALLABLE_LEN: {
             JitOptRef callable;
             callable = stack_pointer[-3];

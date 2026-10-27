@@ -5030,6 +5030,8 @@ dummy_func(
             CALL_NON_PY_GENERAL,
             CALL_GENERIC,
             CALL_RECORD,
+            CALL_DRAFT_ENTER,
+            CALL_DRAFT_EXIT,
         };
 
         specializing op(_SPECIALIZE_CALL, (counter/1, callable, self_or_null, args[oparg] -- callable, self_or_null, args[oparg])) {
@@ -5893,6 +5895,55 @@ dummy_func(
             _CALL_LEN +
             POP_TOP +
             POP_TOP;
+
+        /* `with grail.mutate(x) as d:` (LOAD_SPECIAL then CALL): enter and
+         * a normal exit of a root draft, without calling the methods. Any
+         * other case deopts to the methods, which raise as needed. */
+        op(_GUARD_CALLABLE_DRAFT_ENTER, (callable, unused -- callable, unused)) {
+            EXIT_IF(!_PyGrail_IsDraftWithMethod(PyStackRef_AsPyObjectBorrow(callable), 0));
+        }
+
+        op(_CALL_DRAFT_ENTER, (callable, self -- res, c)) {
+            PyObject *self_o = PyStackRef_AsPyObjectBorrow(self);
+            EXIT_IF(!_PyGrail_IsDraft(self_o));
+            _PyGrailDraft *draft = (_PyGrailDraft *)self_o;
+            EXIT_IF(draft->root != draft || draft->state != _PyGrail_DRAFT_OPEN ||
+                    draft->owner != tstate);
+            STAT_INC(CALL, hit);
+            res = self;
+            c = callable;
+            INPUTS_DEAD();
+        }
+
+        macro(CALL_DRAFT_ENTER) =
+            unused/1 +
+            unused/2 +
+            _GUARD_CALLABLE_DRAFT_ENTER +
+            _CALL_DRAFT_ENTER +
+            POP_TOP;
+
+        op(_GUARD_CALLABLE_DRAFT_EXIT, (callable, unused, unused, unused, unused -- callable, unused, unused, unused, unused)) {
+            EXIT_IF(!_PyGrail_IsDraftWithMethod(PyStackRef_AsPyObjectBorrow(callable), 1));
+        }
+
+        op(_CALL_DRAFT_EXIT, (callable, self, exc, val, tb -- res)) {
+            PyObject *self_o = PyStackRef_AsPyObjectBorrow(self);
+            EXIT_IF(!_PyGrail_IsDraft(self_o));
+            EXIT_IF(!PyStackRef_IsNone(exc));
+            _PyGrailDraft *root = ((_PyGrailDraft *)self_o)->root;
+            if (root != NULL && root->state == _PyGrail_DRAFT_OPEN) {
+                root->state = _PyGrail_DRAFT_SEALED;
+            }
+            STAT_INC(CALL, hit);
+            DECREF_INPUTS();
+            res = PyStackRef_False;
+        }
+
+        macro(CALL_DRAFT_EXIT) =
+            unused/1 +
+            unused/2 +
+            _GUARD_CALLABLE_DRAFT_EXIT +
+            _CALL_DRAFT_EXIT;
 
         op(_GUARD_CALLABLE_LEN, (callable, unused, unused -- callable, unused, unused)){
             PyObject *callable_o = PyStackRef_AsPyObjectBorrow(callable);
