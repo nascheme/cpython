@@ -110,6 +110,10 @@ _PyGrail_RecordFieldCount(PyObject *record)
     return (Py_TYPE(record)->tp_basicsize - offsetof(RecordObject, fields)) /
            (Py_ssize_t)sizeof(PyObject *);
 }
+/* A record of obj's type with the given (borrowed) field values; only the
+ * fields that differ from obj's are rechecked when obj conforms. */
+PyAPI_FUNC(PyObject *) _PyGrail_RecordWithValues(PyObject *obj,
+                                                 PyObject *const *values);
 PyAPI_FUNC(Py_ssize_t) _PyGrail_FieldIndex(PyTypeObject *type, PyObject *name);
 PyAPI_FUNC(PyObject *) _PyGrail_RecordFromStackRefsStealOnSuccess(PyTypeObject *,
                                                                 _PyStackRef *, Py_ssize_t);

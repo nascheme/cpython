@@ -44,6 +44,10 @@ The `grail` module provides:
   spinningjenny), with scoped task spawning (`pool.scope()`,
   `Scope.spawn`, work stealing) and the `grail.pmap` and
   `grail.parallel_reduce` helpers (`Lib/grail/_parallel.py`).
+- **Drafts** (experimental: `grail.mutate`, `grail.finish`,
+  `grail.original`): edit a record, `PVector` or `PMap`, nested ones
+  included, through a thread-confined draft with ordinary assignments, then
+  build the new value; unchanged parts are shared.
 - Introspection: `record_fields`, `record_values`, `is_value_record`,
   `substitutable`.
 
@@ -84,6 +88,7 @@ The `grail` module provides:
 | Collections | `Modules/_grail/` (`PMap`, `PSet`, HAMT), `Modules/_grail_vector.c`, `Modules/_grail_numvec.c` |
 | Atom | `Modules/_grail_atom.c` |
 | Pool | `Modules/_grail_pool.c` |
+| Drafts | `Modules/_grail_draft.c` |
 | Copy | `Lib/copy.py` |
 | Tests | `Lib/test/test_grail*.py` |
 
@@ -97,7 +102,7 @@ mkdir build && cd build
 ../configure --disable-gil
 make -j8
 ./python -X gil=0 -m test test_grail test_grail_atom test_grail_pds \
-    test_grail_pool test_grail_vector test_grail_numvec test_grail_hamt test_grail_native \
+    test_grail_pool test_grail_mutate test_grail_vector test_grail_numvec test_grail_hamt test_grail_native \
     test_grail_specialization test_grail_call_specialization \
     test_grail_arithmetic_specialization test_grail_jit
 ```

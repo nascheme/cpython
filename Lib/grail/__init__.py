@@ -2,8 +2,8 @@
 
 Native boxed records with copy/pickle support, MRO/ABC generic dispatch,
 and numeric record operators. Native persistent PMap/PSet/PVector, unboxed
-FloatVector/IntVector, synchronized Atom cells and the thread Pool live in
-separate modules. No record field/call fast paths.
+FloatVector/IntVector, synchronized Atom cells, the thread Pool and the
+mutate/finish drafts live in separate modules. No record field/call fast paths.
 Inherited dispatch uses a bounded guarded native resolution cache.
 """
 
@@ -22,6 +22,7 @@ from _grail_atom import Atom
 from _grail_vector import PVector
 from _grail_numvec import FloatVector, IntVector
 from _grail_pool import Pool
+from _grail_draft import mutate, finish, original
 from ._parallel import pmap, parallel_reduce
 
 backend = _core.backend
@@ -342,6 +343,3 @@ def _forget_pool():
     global _shared_pool, _shared_pool_lock
     _shared_pool = None
     _shared_pool_lock = _thread.allocate_lock()
-
-
-from ._mutate import mutate, finish, original  # needs replace, PVector, PMap

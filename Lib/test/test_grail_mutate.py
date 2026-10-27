@@ -101,6 +101,19 @@ class MutateRecordTest(unittest.TestCase):
             d.origin = Point(9, 9)
         self.assertEqual(finish(d).origin, Point(9, 9))
 
+    def test_draft_contains_itself(self):
+        @grail.record
+        class Box:
+            item: object
+
+        d = mutate(Box(1))
+        d.item = d
+        with self.assertRaises(ValueError):
+            finish(d)
+        d = mutate(Box(1))
+        d.item = [d]               # not drafted: the list is stored as is
+        self.assertIs(type(finish(d).item[0]), type(d))
+
     def test_unknown_field(self):
         with mutate(Point(1, 2)) as d:
             with self.assertRaises(AttributeError):

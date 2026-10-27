@@ -1738,6 +1738,32 @@ done:
     return result;
 }
 
+/* grail.finish of a record draft: a record of obj's type holding values
+ * (borrowed; values[i] is obj's own field where it is unchanged). As in
+ * record_replace_impl, a conforming source rechecks only changed fields. */
+PyObject *
+_PyGrail_RecordWithValues(PyObject *obj, PyObject *const *values)
+{
+    PyTypeObject *type = Py_TYPE(obj);
+    RecordObject *src = (RecordObject *)obj;
+    if (!src->conforming || _PyInterpreterState_GET()->grail_replace_check_all) {
+        return record_finish(type, values);
+    }
+    const PlanNode *nodes = schema_nodes(type);
+    Py_ssize_t n = record_count(obj);
+    int conforming = 1;
+    for (Py_ssize_t i = 0; i < n && conforming; i++) {
+        if (values[i] != src->fields[i]) {
+            int ok = plan_conforms(nodes, &nodes[i], values[i]);
+            if (ok < 0) {
+                return NULL;
+            }
+            conforming = ok;
+        }
+    }
+    return record_build(type, values, conforming);
+}
+
 static PyObject *
 record_replace(PyObject *obj, PyObject *const *args, Py_ssize_t nargs,
                PyObject *kwnames)
