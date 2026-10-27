@@ -1837,6 +1837,33 @@ static PyMethodDef grail_replace_def = {
     grail_replace__doc__
 };
 
+/* Index of the field of record type `type` named `name` (an exact str), or
+ * -1 if there is none. For the tier-2 optimizer: compares by pointer, then
+ * by value, without errors. */
+Py_ssize_t
+_PyGrail_FieldIndex(PyTypeObject *type, PyObject *name)
+{
+    if (!_PyGrail_IsRecordTypeFast(type) || !PyUnicode_CheckExact(name)) {
+        return -1;
+    }
+    /* As in field_index, a pointer pass finds the usual interned names; the
+     * comparison pass covers other strings. */
+    PyObject *names = schema_part(type, 0);
+    Py_ssize_t n = PyTuple_GET_SIZE(names);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        if (PyTuple_GET_ITEM(names, i) == name) {
+            return i;
+        }
+    }
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *field = PyTuple_GET_ITEM(names, i);
+        if (PyUnicode_CheckExact(field) && PyUnicode_Compare(field, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 /* Lib/copy.py uses _grail.replace, which reports module "copy", when present.
  * PYTHON_GRAIL_COPY_REPLACE=0 leaves it out, so copy.replace stays Python. */
 int

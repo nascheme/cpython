@@ -110,6 +110,7 @@ _PyGrail_RecordFieldCount(PyObject *record)
     return (Py_TYPE(record)->tp_basicsize - offsetof(RecordObject, fields)) /
            (Py_ssize_t)sizeof(PyObject *);
 }
+PyAPI_FUNC(Py_ssize_t) _PyGrail_FieldIndex(PyTypeObject *type, PyObject *name);
 PyAPI_FUNC(PyObject *) _PyGrail_RecordFromStackRefsStealOnSuccess(PyTypeObject *,
                                                                 _PyStackRef *, Py_ssize_t);
 /* The same, checking only the fields whose bit is set in check (fields from
