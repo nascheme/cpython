@@ -174,6 +174,9 @@ PyAPI_FUNC(PyObject *) _PyType_BinaryOpDunder(PyTypeObject *tp, int nb_op);
    tp's slot calls the method by name. NULL if tp's slot is not the generic
    one. Borrowed (interned). */
 PyAPI_FUNC(PyObject *) _PyType_BinaryOpReflectedDunder(PyTypeObject *tp, int nb_op);
+/* For BINARY_OP_PY's NotImplemented case: w.__rOP__(v) (see typeobject.c). */
+PyAPI_FUNC(PyObject *) _PyType_BinaryOpCallReflected(PyObject *v, PyObject *w,
+                                                     int nb_op);
 
 /* For isinstance() and issubclass(); see typeobject.c. */
 extern int _PyType_HasDefaultClassAttr(PyTypeObject *tp);

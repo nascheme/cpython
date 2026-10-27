@@ -1086,7 +1086,7 @@ dummy_func(
 
         /* A Python class's operator method (__add__ etc.), entered directly.
          * The left operand's type and the method's code are guarded; the
-         * right operand is of the same type or an exact int or float, so the
+         * right operand is of the same type or not of a subtype, so the
          * slot would call the method first and nothing else (see
          * _PyType_BinaryOpDunder). A shim frame (_Py_BinaryOpCleanup)
          * completes the protocol if the method returns NotImplemented.
@@ -1107,7 +1107,10 @@ dummy_func(
             else {
                 owner = tp;
                 EXIT_IF(FT_ATOMIC_LOAD_UINT32_RELAXED(tp->tp_version_tag) != type_version);
-                EXIT_IF(rtp != tp && rtp != &PyLong_Type && rtp != &PyFloat_Type);
+                /* Another type than the left one's: not a subtype, whose
+                 * reflected method would come first. */
+                EXIT_IF(rtp != tp && rtp != &PyLong_Type && rtp != &PyFloat_Type &&
+                        PyType_IsSubtype(rtp, tp));
                 name = _PyType_BinaryOpDunder(tp, oparg);
             }
             EXIT_IF(name == NULL);

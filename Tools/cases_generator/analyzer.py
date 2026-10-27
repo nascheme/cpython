@@ -561,6 +561,7 @@ NON_ESCAPING_FUNCTIONS = (
     "PyTuple_GET_ITEM",
     "PyTuple_GET_SIZE",
     "PyType_HasFeature",
+    "PyType_IsSubtype",
     "PyUnicode_Concat",
     "PyUnicode_GET_LENGTH",
     "PyUnicode_READ_CHAR",

@@ -11075,6 +11075,19 @@ _PyType_BinaryOpReflectedDunder(PyTypeObject *tp, int nb_op)
     return binary_op_dunder(tp, nb_op, 1);
 }
 
+/* The end of a binary slot (SLOT1BINFULL) after the left operand's method
+   returned NotImplemented, when the right operand's type, not a subtype of
+   the left one's, has the same slot function: its reflected method. The
+   left operand's type is one _PyType_BinaryOpDunder accepts. */
+PyObject *
+_PyType_BinaryOpCallReflected(PyObject *v, PyObject *w, int nb_op)
+{
+    PyObject *name = binary_op_dunder(Py_TYPE(v), nb_op, 1);
+    assert(name != NULL);
+    PyObject *stack[2] = {w, v};
+    return vectorcall_maybe(_PyThreadState_GET(), name, stack, 2);
+}
+
 static PyObject *
 slot_tp_repr(PyObject *self)
 {

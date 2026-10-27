@@ -14,6 +14,7 @@
 #include "pycore_pyerrors.h"      // _PyErr_Occurred()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "pycore_tuple.h"         // _PyTuple_FromArraySteal()
+#include "pycore_typeobject.h"    // _PyType_BinaryOpCallReflected()
 #include "pycore_unionobject.h"   // _PyUnion_Check()
 
 #include <stddef.h>               // offsetof()
@@ -1008,6 +1009,9 @@ binop_type_error(PyObject *v, PyObject *w, const char *op_name)
     return NULL;
 }
 
+static PyObject *sequence_repeat(ssizeargfunc repeatfunc, PyObject *seq,
+                                 PyObject *n);
+
 PyObject *
 _PyNumber_BinaryOpAfterNotImplemented(PyObject *v, PyObject *w, int nb_op)
 {
@@ -1048,16 +1052,33 @@ _PyNumber_BinaryOpAfterNotImplemented(PyObject *v, PyObject *w, int nb_op)
         return binop_type_error(v, w, ops[nb_op].name);
     }
     /* As binary_op1 after slotv: the right operand cannot be a subtype of
-       the left one, so its slot comes second. */
+       the left one, so its slot comes second; if it is the same slot
+       function, the rest of that slot (SLOT1BINFULL) is the right operand's
+       reflected method. */
     if (!Py_IS_TYPE(w, Py_TYPE(v)) && Py_TYPE(w)->tp_as_number != NULL) {
         binaryfunc slotv = NB_BINOP(Py_TYPE(v)->tp_as_number, ops[nb_op].slot);
         binaryfunc slotw = NB_BINOP(Py_TYPE(w)->tp_as_number, ops[nb_op].slot);
+        PyObject *x = NULL;
         if (slotw != NULL && slotw != slotv) {
-            PyObject *x = slotw(v, w);
-            if (x != Py_NotImplemented) {
-                return x;
-            }
-            Py_DECREF(x);
+            x = slotw(v, w);
+        }
+        else if (slotw != NULL) {
+            x = _PyType_BinaryOpCallReflected(v, w, nb_op);
+        }
+        if (x != NULL && x != Py_NotImplemented) {
+            return x;
+        }
+        if (x == NULL && PyErr_Occurred()) {
+            return NULL;
+        }
+        Py_XDECREF(x);
+    }
+    /* The sequence fallback: the left operand's type has none (see
+       _PyType_BinaryOpDunder), the right one's only counts for "*". */
+    if (nb_op == NB_MULTIPLY || nb_op == NB_INPLACE_MULTIPLY) {
+        PySequenceMethods *mw = Py_TYPE(w)->tp_as_sequence;
+        if (mw != NULL && mw->sq_repeat) {
+            return sequence_repeat(mw->sq_repeat, w, v);
         }
     }
     return binop_type_error(v, w, ops[nb_op].name);

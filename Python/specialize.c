@@ -2720,10 +2720,10 @@ _Py_Specialize_BinaryOp(_PyStackRef lhs_st, _PyStackRef rhs_st, _Py_CODEUNIT *in
     if (((ltp->tp_flags & Py_TPFLAGS_HEAPTYPE) || reflected) &&
         _PyInterpreterState_IsSpecializationEnabled(_PyInterpreterState_GET())) {
         /* A Python class's operator method, entered directly. The right
-         * operand must be of the same type or an exact int or float: then
-         * the slot would call the method first and nothing else, and a
-         * NotImplemented result only needs the right operand's slot (see
-         * _PyNumber_BinaryOpAfterNotImplemented). Or, with an exact int
+         * operand must be of the same type or not of a subtype: then the
+         * slot would call the method first and nothing else, and a
+         * NotImplemented result only needs the right operand's slot or
+         * reflected method (see _PyNumber_BinaryOpAfterNotImplemented). Or, with an exact int
          * or float on the left (whose slot returns NotImplemented), the
          * right operand's reflected method, after which nothing is tried.
          */
@@ -2731,7 +2731,7 @@ _Py_Specialize_BinaryOp(_PyStackRef lhs_st, _PyStackRef rhs_st, _Py_CODEUNIT *in
         PyObject *name = reflected ? _PyType_BinaryOpReflectedDunder(tp, oparg)
                                    : _PyType_BinaryOpDunder(tp, oparg);
         if (name != NULL &&
-            (reflected || rtp == tp || rtp == &PyLong_Type || rtp == &PyFloat_Type)) {
+            (reflected || rtp == tp || !PyType_IsSubtype(rtp, tp))) {
             unsigned int tp_version;
             PyObject *descr = _PyType_LookupRefAndVersion(tp, name, &tp_version);
             if (descr != NULL && Py_TYPE(descr) == &PyFunction_Type && tp_version != 0) {

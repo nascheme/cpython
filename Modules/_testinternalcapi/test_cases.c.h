@@ -687,7 +687,8 @@
                         assert(_PyOpcode_Deopt[opcode] == (BINARY_OP));
                         JUMP_TO_PREDICTED(BINARY_OP);
                     }
-                    if (rtp != tp && rtp != &PyLong_Type && rtp != &PyFloat_Type) {
+                    if (rtp != tp && rtp != &PyLong_Type && rtp != &PyFloat_Type &&
+                        PyType_IsSubtype(rtp, tp)) {
                         UPDATE_MISS_STATS(BINARY_OP);
                         assert(_PyOpcode_Deopt[opcode] == (BINARY_OP));
                         JUMP_TO_PREDICTED(BINARY_OP);

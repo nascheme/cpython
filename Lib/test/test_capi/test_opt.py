@@ -4547,11 +4547,12 @@ class TestUopsOptimization(unittest.TestCase):
             def __add__(self, other):
                 return CustomAdder(self.val + other.val)
 
-        class Other:
-            val = 2
+        class Other(CustomAdder):
+            def __init__(self):
+                self.val = 2
 
         def testfunc(n):
-            # Operands of different Python classes are not BINARY_OP_PY.
+            # A right operand of a subclass is not BINARY_OP_PY.
             a = CustomAdder(1)
             b = Other()
             res = None
@@ -4595,6 +4596,67 @@ class TestUopsOptimization(unittest.TestCase):
         self.assertEqual(count_ops(ex, "_EXIT_BINARY_OP_CHECK"), 2)
         with self.assertRaisesRegex(TypeError, r"for \+: 'V' and 'str'"):
             V(1) + "x"
+
+    def test_binary_op_py_mixed_types(self):
+        class W:
+            def __init__(self, val):
+                self.val = val
+            def __rsub__(self, other):
+                return ("W", other.val - self.val)
+            def __rmul__(self, other):
+                return ("W*",)
+
+        class V:
+            def __init__(self, val):
+                self.val = val
+            def __sub__(self, other):
+                if not isinstance(other, V):
+                    return NotImplemented
+                return V(self.val - other.val)
+            def __mul__(self, other):
+                return NotImplemented
+
+        class Sub(V):
+            def __rsub__(self, other):
+                return ("Sub",)
+
+        class Seq(list):
+            pass
+
+        def testfunc(n):
+            a = V(5)
+            b = W(2)
+            c = V(1)
+            total = 0
+            for _ in range(n):
+                total += (a - c).val + (a - b)[1]
+            return total
+
+        res, ex = self._run_with_optimizer(testfunc, TIER2_THRESHOLD)
+        self.assertEqual(res, 7 * TIER2_THRESHOLD)
+        self.assertIsNotNone(ex)
+        uops = get_opnames(ex)
+        self.assertNotIn("_BINARY_OP", uops)
+        self.assertEqual(count_ops(ex, "_BINARY_OP_PY_INIT_CALL"), 2)
+        # The rest of the protocol after NotImplemented, in both tiers.
+        def other(n):
+            out = []
+            for _ in range(n):
+                out.append(V(1) - Sub(1))
+                out.append(V(1) * W(1))
+            return out
+        self.assertEqual(other(TIER2_THRESHOLD),
+                         [("Sub",), ("W*",)] * TIER2_THRESHOLD)
+        def seq(n):
+            for _ in range(n):
+                try:
+                    V(1) * Seq([0])
+                except TypeError as e:
+                    msg = str(e)
+            return msg
+        self.assertIn("can't multiply sequence", seq(TIER2_THRESHOLD))
+        with self.assertRaisesRegex(TypeError, r"for -: 'V' and 'object'"):
+            V(1) - object()
 
     def test_binary_op_py_reflected(self):
         class V:

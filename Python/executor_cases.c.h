@@ -6889,7 +6889,8 @@
                     SET_CURRENT_CACHED_VALUES(2);
                     JUMP_TO_JUMP_TARGET();
                 }
-                if (rtp != tp && rtp != &PyLong_Type && rtp != &PyFloat_Type) {
+                if (rtp != tp && rtp != &PyLong_Type && rtp != &PyFloat_Type &&
+                        PyType_IsSubtype(rtp, tp)) {
                     UOP_STAT_INC(uopcode, miss);
                     _tos_cache1 = right;
                     _tos_cache0 = left;

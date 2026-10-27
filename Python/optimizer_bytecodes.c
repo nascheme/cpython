@@ -588,7 +588,7 @@ dummy_func(void) {
         int reflected = tp == &PyLong_Type || tp == &PyFloat_Type;
         PyTypeObject *owner = reflected ? rtp : tp;
         if (tp != NULL && rtp != NULL && owner->tp_version_tag == type_version &&
-            (reflected || rtp == tp || rtp == &PyLong_Type || rtp == &PyFloat_Type) &&
+            (reflected || rtp == tp || !PyType_IsSubtype(rtp, tp)) &&
             (tp->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(tp)) &&
             (rtp->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(rtp))) {
             PyObject *name = reflected
