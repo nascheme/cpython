@@ -191,9 +191,10 @@ plan_conforms_nested(const PlanNode *nodes, const PlanNode *p, PyObject *value)
             }
         }
     }
-    else if (p->kind == PLAN_VARTUPLE && p->height == 1) {
-        /* tuple[T, ...] of a leaf: the common long case, without the
-         * per-item switch. */
+    else if (p->kind == PLAN_VARTUPLE && p->height <= 2 &&
+             (children->height == 0 || children->kind == PLAN_UNION)) {
+        /* tuple[T, ...] of a leaf or a union of leaves (`T | None`): the
+         * common long cases, without the per-item switch. */
         if (PyTuple_CheckExact(value)) {
             const PlanNode *item = children;
             PyObject **items = ((PyTupleObject *)value)->ob_item;
@@ -205,6 +206,18 @@ plan_conforms_nested(const PlanNode *nodes, const PlanNode *p, PyObject *value)
                     if (Py_TYPE(items[i]) != type) {
                         result = 0;
                         break;
+                    }
+                }
+            }
+            else if (item->kind == PLAN_UNION) {
+                const PlanNode *alts = nodes + item->first;
+                for (Py_ssize_t i = 0; i < n && result; i++) {
+                    result = 0;
+                    for (uint32_t j = 0; j < item->n; j++) {
+                        if (plan_conforms_leaf(&alts[j], items[i])) {
+                            result = 1;
+                            break;
+                        }
                     }
                 }
             }
