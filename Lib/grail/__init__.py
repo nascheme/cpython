@@ -28,7 +28,8 @@ backend = _core.backend
 __all__ = ["record", "field", "replace", "generic", "ops", "repr", "eq", "hash",
            "record_fields", "record_values", "is_value_record", "substitutable",
            "PMap", "PSet", "PVector", "FloatVector", "IntVector", "Atom",
-           "Pool", "pool", "pmap", "parallel_reduce"]
+           "Pool", "pool", "pmap", "parallel_reduce",
+           "mutate", "finish", "original"]
 
 _MISSING = object()
 _Field = _namedtuple("_Field", "default factory")
@@ -341,3 +342,6 @@ def _forget_pool():
     global _shared_pool, _shared_pool_lock
     _shared_pool = None
     _shared_pool_lock = _thread.allocate_lock()
+
+
+from ._mutate import mutate, finish, original  # needs replace, PVector, PMap
