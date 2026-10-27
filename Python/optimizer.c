@@ -38,6 +38,8 @@
 // We start with _START_EXECUTOR, _MAKE_WARM
 #define CODE_SIZE_EMPTY 2
 
+#define CODE_SIZE_SHORT_EXIT_TO_C 16
+
 #define _PyExecutorObject_CAST(op)  ((_PyExecutorObject *)(op))
 
 #ifndef Py_GIL_DISABLED
@@ -1200,6 +1202,7 @@ _PyJit_TryInitializeTracing(
     _PyJitTracerTranslatorState *ts = &tracer->translator_state;
     ts->fitness = tstate->interp->opt_config.fitness_initial;
     ts->frame_depth = 0;
+    ts->exits_to_c = 0;
     ADD_TO_TRACE(_START_EXECUTOR, 0, (uintptr_t)start_instr, INSTR_IP(start_instr, code));
     ADD_TO_TRACE(_MAKE_WARM, 0, 0, 0);
 
@@ -1699,6 +1702,14 @@ uop_optimize(
     int curr_stackentries = _tstate->jit_tracer_state->initial_state.stack_depth;
     int length = uop_buffer_length(&_tstate->jit_tracer_state->code_buffer);
     if (length <= CODE_SIZE_NO_PROGRESS) {
+        return 0;
+    }
+    /* A short trace that ends at a return or yield to C (a generator
+     * consumed by sum(), str.join() etc.) is entered and left again for
+     * every item; tier 1 runs those few instructions faster. */
+    if (_tstate->jit_tracer_state->translator_state.exits_to_c &&
+        length < CODE_SIZE_SHORT_EXIT_TO_C) {
+        OPT_STAT_INC(trace_too_short);
         return 0;
     }
     assert(length > 0);

@@ -6886,6 +6886,9 @@ dummy_func(
             _PyThreadStateImpl *_tstate = (_PyThreadStateImpl *)tstate;
             _PyJitTracerState *tracer = _tstate->jit_tracer_state;
             assert(tracer != NULL);
+            if (opcode == INTERPRETER_EXIT) {
+                tracer->translator_state.exits_to_c = 1;
+            }
             int full = !_PyJit_translate_single_bytecode_to_trace(tstate, frame, next_instr, stop_tracing ? _DEOPT : 0);
             if (full) {
                 LEAVE_TRACING();

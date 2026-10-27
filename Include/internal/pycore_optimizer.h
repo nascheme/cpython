@@ -149,6 +149,7 @@ typedef struct _PyJitTracerPreviousState {
 typedef struct _PyJitTracerTranslatorState {
     int32_t fitness;              // Current trace fitness, starts high, decrements
     int frame_depth;              // Current inline depth (0 = root frame)
+    int exits_to_c;               // Stopped at a return or yield to C
 } _PyJitTracerTranslatorState;
 
 typedef struct _PyJitTracerState {
