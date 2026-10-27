@@ -33,6 +33,7 @@ MAX_RECORDED_VALUES = 3
 _RECORD_TRANSFORM_HELPERS: dict[str, str] = {
     "_RECORD_TOS_TYPE": "record_trace_transform_to_type",
     "_RECORD_NOS_TYPE": "record_trace_transform_to_type",
+    "_RECORD_3OS_TYPE": "record_trace_transform_to_type",
     "_RECORD_NOS_GEN_FUNC": "record_trace_transform_gen_func",
     "_RECORD_3OS_GEN_FUNC": "record_trace_transform_gen_func",
     "_RECORD_BOUND_METHOD": "record_trace_transform_bound_method",

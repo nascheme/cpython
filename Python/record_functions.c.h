@@ -62,6 +62,13 @@ void _PyOpcode_RecordFunction_3OS_GEN_FUNC(_PyInterpreterFrame *frame, _PyStackR
     }
 }
 
+void _PyOpcode_RecordFunction_3OS_TYPE(_PyInterpreterFrame *frame, _PyStackRef *stack_pointer, int oparg, PyObject **recorded_value) {
+    _PyStackRef value;
+    value = stack_pointer[-3];
+    *recorded_value = (PyObject *)Py_TYPE(PyStackRef_AsPyObjectBorrow(value));
+    Py_INCREF(*recorded_value);
+}
+
 void _PyOpcode_RecordFunction_4OS(_PyInterpreterFrame *frame, _PyStackRef *stack_pointer, int oparg, PyObject **recorded_value) {
     _PyStackRef value;
     value = stack_pointer[-4];
@@ -120,10 +127,11 @@ void _PyOpcode_RecordFunction_CODE(_PyInterpreterFrame *frame, _PyStackRef *stac
 #define _RECORD_NOS_TYPE_INDEX 3
 #define _RECORD_3OS_GEN_FUNC_INDEX 4
 #define _RECORD_TOS_INDEX 5
-#define _RECORD_CALLABLE_INDEX 6
-#define _RECORD_GRAIL_GENERIC_IMPL_INDEX 7
-#define _RECORD_CALLABLE_KW_INDEX 8
-#define _RECORD_4OS_INDEX 9
+#define _RECORD_3OS_TYPE_INDEX 6
+#define _RECORD_CALLABLE_INDEX 7
+#define _RECORD_GRAIL_GENERIC_IMPL_INDEX 8
+#define _RECORD_CALLABLE_KW_INDEX 9
+#define _RECORD_4OS_INDEX 10
 
 const _PyOpcodeRecordEntry _PyOpcode_RecordEntries[256] = {
         [TO_BOOL_BOOL] = {1, {_RECORD_TOS_TYPE_INDEX}},
@@ -186,6 +194,8 @@ const _PyOpcodeRecordEntry _PyOpcode_RecordEntries[256] = {
         [CONTAINS_OP] = {1, {_RECORD_TOS_TYPE_INDEX}},
         [CONTAINS_OP_SET] = {1, {_RECORD_TOS_TYPE_INDEX}},
         [CONTAINS_OP_DICT] = {1, {_RECORD_TOS_TYPE_INDEX}},
+        [MATCH_CLASS] = {1, {_RECORD_3OS_TYPE_INDEX}},
+        [MATCH_CLASS_RECORD] = {1, {_RECORD_3OS_TYPE_INDEX}},
         [GET_ITER] = {1, {_RECORD_TOS_TYPE_INDEX}},
         [GET_ITER_SELF] = {1, {_RECORD_TOS_TYPE_INDEX}},
         [GET_ITER_VIRTUAL] = {1, {_RECORD_TOS_TYPE_INDEX}},
@@ -263,6 +273,7 @@ const _PyOpcodeRecordSlotMap _PyOpcode_RecordSlotMaps[256] = {
         [STORE_ATTR_RECORD_DRAFT] = {1, 0, {0}},
         [COMPARE_OP] = {2, 0, {0, 1}},
         [CONTAINS_OP] = {1, 0, {0}},
+        [MATCH_CLASS_RECORD] = {1, 0, {0}},
         [GET_ITER] = {1, 0, {0}},
         [GET_ITER_SELF] = {1, 0, {0}},
         [GET_ITER_VIRTUAL] = {1, 0, {0}},
@@ -293,13 +304,14 @@ const _PyOpcodeRecordSlotMap _PyOpcode_RecordSlotMaps[256] = {
         [BINARY_OP] = {2, 2, {1, 0}},
 };
 
-const _Py_RecordFuncPtr _PyOpcode_RecordFunctions[10] = {
+const _Py_RecordFuncPtr _PyOpcode_RecordFunctions[11] = {
         [0] = NULL,
         [_RECORD_TOS_TYPE_INDEX] = _PyOpcode_RecordFunction_TOS_TYPE,
         [_RECORD_NOS_INDEX] = _PyOpcode_RecordFunction_NOS,
         [_RECORD_NOS_TYPE_INDEX] = _PyOpcode_RecordFunction_NOS_TYPE,
         [_RECORD_3OS_GEN_FUNC_INDEX] = _PyOpcode_RecordFunction_3OS_GEN_FUNC,
         [_RECORD_TOS_INDEX] = _PyOpcode_RecordFunction_TOS,
+        [_RECORD_3OS_TYPE_INDEX] = _PyOpcode_RecordFunction_3OS_TYPE,
         [_RECORD_CALLABLE_INDEX] = _PyOpcode_RecordFunction_CALLABLE,
         [_RECORD_GRAIL_GENERIC_IMPL_INDEX] = _PyOpcode_RecordFunction_GRAIL_GENERIC_IMPL,
         [_RECORD_CALLABLE_KW_INDEX] = _PyOpcode_RecordFunction_CALLABLE_KW,
@@ -312,6 +324,7 @@ _PyOpcode_RecordTransformValue(int uop, PyObject *value)
         switch (uop) {
                 case _RECORD_TOS_TYPE:
                 case _RECORD_NOS_TYPE:
+                case _RECORD_3OS_TYPE:
                     return record_trace_transform_to_type(value);
                 case _RECORD_NOS_GEN_FUNC:
                 case _RECORD_3OS_GEN_FUNC:

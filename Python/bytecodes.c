@@ -4367,8 +4367,42 @@ dummy_func(
             INPUTS_DEAD();
         }
 
-        macro(MATCH_CLASS_RECORD) = unused/1 + _GUARD_MATCH_CLASS_RECORD +
+        macro(MATCH_CLASS_RECORD) = unused/1 + _RECORD_3OS_TYPE +
+            _GUARD_MATCH_CLASS_RECORD +
             _MATCH_CLASS_RECORD + POP_TOP + POP_TOP + POP_TOP;
+
+        /* Tier 2, when the optimizer knows the subject's exact record type
+         * and the class pattern's type (both records, so the match is type
+         * equality). Records are final, so the subject's type decides the
+         * match; the guard checks it once for a whole match statement. */
+        tier2 op(_GUARD_3OS_TYPE_VERSION, (type_version/2, subject, type, names -- subject, type, names)) {
+            PyTypeObject *tp_o = PyStackRef_TYPE(subject);
+            EXIT_IF(FT_ATOMIC_LOAD_UINT_RELAXED(tp_o->tp_version_tag) != type_version);
+        }
+
+        /* A match of every field: the subject itself, as
+         * _PyGrail_MatchRecordPositional returns it. */
+        tier2 op(_MATCH_CLASS_RECORD_SELF, (subject, type, names -- attrs, s, tp, n)) {
+            PyObject **fields = ((RecordObject *)PyStackRef_AsPyObjectBorrow(subject))->fields;
+            int cleared = 0;
+            for (int i = 0; i < oparg; i++) {
+                cleared |= fields[i] == NULL;
+            }
+            EXIT_IF(cleared);
+            attrs = PyStackRef_DUP(subject);
+            s = subject;
+            tp = type;
+            n = names;
+            INPUTS_DEAD();
+        }
+
+        tier2 op(_MATCH_CLASS_RECORD_NONE, (subject, type, names -- attrs, s, tp, n)) {
+            attrs = PyStackRef_None;
+            s = subject;
+            tp = type;
+            n = names;
+            INPUTS_DEAD();
+        }
 
         inst(MATCH_MAPPING, (subject -- subject, res)) {
             int match = PyStackRef_TYPE(subject)->tp_flags & Py_TPFLAGS_MAPPING;
@@ -7461,6 +7495,10 @@ dummy_func(
                     RECORD_VALUE(PyStackRef_AsPyObjectBorrow(func));
                 }
             }
+        }
+
+        tier2 op(_RECORD_3OS_TYPE, (value, nos, tos -- value, nos, tos)) {
+            RECORD_VALUE(Py_TYPE(PyStackRef_AsPyObjectBorrow(value)));
         }
 
         tier2 op(_RECORD_4OS, (value, _3os, nos, tos -- value, _3os, nos, tos)) {

@@ -3195,11 +3195,73 @@ dummy_func(void) {
         n = names;
     }
 
+    op(_GUARD_MATCH_CLASS_RECORD, (subject, type, names -- subject, type, names)) {
+        /* With constant record type and no keyword names, only the subject
+         * remains to check: speculate on the type recorded while tracing,
+         * so later cases of the same match fold. */
+        PyObject *type_o = sym_get_const(ctx, type);
+        PyObject *names_o = sym_get_const(ctx, names);
+        if (type_o != NULL && PyType_Check(type_o) &&
+            _PyGrail_IsRecordTypeFast((PyTypeObject *)type_o) &&
+            names_o != NULL && PyTuple_CheckExact(names_o) &&
+            PyTuple_GET_SIZE(names_o) == 0) {
+            PyTypeObject *st = sym_get_type(subject);
+            if (st != NULL && _PyGrail_IsRecordTypeFast(st)) {
+                ADD_OP(_NOP, 0, 0);
+            }
+            else if (st == NULL) {
+                PyTypeObject *probable = sym_get_probable_type(subject);
+                if (probable != NULL && _PyGrail_IsRecordTypeFast(probable) &&
+                    (probable->tp_version_tag != 0 ||
+                     PyUnstable_Type_AssignVersionTag(probable))) {
+                    ADD_OP(_GUARD_3OS_TYPE_VERSION, 0, probable->tp_version_tag);
+                    sym_set_type(subject, probable);
+                    sym_set_type_version(subject, probable->tp_version_tag);
+                    watch_type(probable, dependencies);
+                }
+            }
+        }
+    }
+
     op(_MATCH_CLASS_RECORD, (subject, type, names -- attrs, s, tp, n)) {
-        attrs = sym_new_not_null(ctx);
-        s = subject;
+        PyTypeObject *st = sym_get_type(subject);
+        PyObject *type_o = sym_get_const(ctx, type);
+        PyObject *names_o = sym_get_const(ctx, names);
+        if (st != NULL && _PyGrail_IsRecordTypeFast(st) &&
+            type_o != NULL && PyType_Check(type_o) &&
+            names_o != NULL && PyTuple_CheckExact(names_o) &&
+            PyTuple_GET_SIZE(names_o) == 0) {
+            if ((PyObject *)st != type_o) {
+                ADD_OP(_MATCH_CLASS_RECORD_NONE, oparg, 0);
+                attrs = sym_new_const(ctx, Py_None);
+            }
+            else if (oparg <= (st->tp_basicsize - offsetof(RecordObject, fields)) /
+                              (Py_ssize_t)sizeof(PyObject *)) {
+                ADD_OP(_MATCH_CLASS_RECORD_SELF, oparg, 0);
+                attrs = PyJitRef_StripReferenceInfo(subject);
+            }
+            else {
+                attrs = sym_new_not_null(ctx);
+            }
+        }
+        else {
+            attrs = sym_new_not_null(ctx);
+        }
+        s = PyJitRef_RemoveUnique(subject);
         tp = type;
         n = names;
+    }
+
+    op(_GUARD_TOS_MATCHED_RECORD, (seq -- seq)) {
+        PyTypeObject *st = sym_get_type(seq);
+        if (st != NULL && _PyGrail_IsRecordTypeFast(st)) {
+            ADD_OP(_NOP, 0, 0);
+        }
+    }
+
+    op(_RECORD_3OS_TYPE, (value, nos, tos -- value, nos, tos)) {
+        PyTypeObject *tp = (PyTypeObject *)this_instr->operand0;
+        sym_set_recorded_type(value, tp);
     }
 
     op(_DICT_UPDATE, (dict, unused[oparg - 1], update -- dict, unused[oparg - 1], upd)) {

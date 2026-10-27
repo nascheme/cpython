@@ -2506,6 +2506,12 @@
         }
 
         case _GUARD_TOS_MATCHED_RECORD: {
+            JitOptRef seq;
+            seq = stack_pointer[-1];
+            PyTypeObject *st = sym_get_type(seq);
+            if (st != NULL && _PyGrail_IsRecordTypeFast(st)) {
+                ADD_OP(_NOP, 0, 0);
+            }
             break;
         }
 
@@ -4212,6 +4218,34 @@
         }
 
         case _GUARD_MATCH_CLASS_RECORD: {
+            JitOptRef names;
+            JitOptRef type;
+            JitOptRef subject;
+            names = stack_pointer[-1];
+            type = stack_pointer[-2];
+            subject = stack_pointer[-3];
+            PyObject *type_o = sym_get_const(ctx, type);
+            PyObject *names_o = sym_get_const(ctx, names);
+            if (type_o != NULL && PyType_Check(type_o) &&
+                _PyGrail_IsRecordTypeFast((PyTypeObject *)type_o) &&
+                names_o != NULL && PyTuple_CheckExact(names_o) &&
+                PyTuple_GET_SIZE(names_o) == 0) {
+                PyTypeObject *st = sym_get_type(subject);
+                if (st != NULL && _PyGrail_IsRecordTypeFast(st)) {
+                    ADD_OP(_NOP, 0, 0);
+                }
+                else if (st == NULL) {
+                    PyTypeObject *probable = sym_get_probable_type(subject);
+                    if (probable != NULL && _PyGrail_IsRecordTypeFast(probable) &&
+                        (probable->tp_version_tag != 0 ||
+                            PyUnstable_Type_AssignVersionTag(probable))) {
+                        ADD_OP(_GUARD_3OS_TYPE_VERSION, 0, probable->tp_version_tag);
+                        sym_set_type(subject, probable);
+                        sym_set_type_version(subject, probable->tp_version_tag);
+                        watch_type(probable, dependencies);
+                    }
+                }
+            }
             break;
         }
 
@@ -4226,10 +4260,74 @@
             names = stack_pointer[-1];
             type = stack_pointer[-2];
             subject = stack_pointer[-3];
-            attrs = sym_new_not_null(ctx);
-            s = subject;
+            PyTypeObject *st = sym_get_type(subject);
+            PyObject *type_o = sym_get_const(ctx, type);
+            PyObject *names_o = sym_get_const(ctx, names);
+            if (st != NULL && _PyGrail_IsRecordTypeFast(st) &&
+                type_o != NULL && PyType_Check(type_o) &&
+                names_o != NULL && PyTuple_CheckExact(names_o) &&
+                PyTuple_GET_SIZE(names_o) == 0) {
+                if ((PyObject *)st != type_o) {
+                    ADD_OP(_MATCH_CLASS_RECORD_NONE, oparg, 0);
+                    attrs = sym_new_const(ctx, Py_None);
+                }
+                else if (oparg <= (st->tp_basicsize - offsetof(RecordObject, fields)) /
+                     (Py_ssize_t)sizeof(PyObject *)) {
+                    ADD_OP(_MATCH_CLASS_RECORD_SELF, oparg, 0);
+                    attrs = PyJitRef_StripReferenceInfo(subject);
+                }
+                else {
+                    attrs = sym_new_not_null(ctx);
+                }
+            }
+            else {
+                attrs = sym_new_not_null(ctx);
+            }
+            s = PyJitRef_RemoveUnique(subject);
             tp = type;
             n = names;
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-3] = attrs;
+            stack_pointer[-2] = s;
+            stack_pointer[-1] = tp;
+            stack_pointer[0] = n;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _GUARD_3OS_TYPE_VERSION: {
+            break;
+        }
+
+        case _MATCH_CLASS_RECORD_SELF: {
+            JitOptRef attrs;
+            JitOptRef s;
+            JitOptRef tp;
+            JitOptRef n;
+            attrs = sym_new_not_null(ctx);
+            s = sym_new_not_null(ctx);
+            tp = sym_new_not_null(ctx);
+            n = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-3] = attrs;
+            stack_pointer[-2] = s;
+            stack_pointer[-1] = tp;
+            stack_pointer[0] = n;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _MATCH_CLASS_RECORD_NONE: {
+            JitOptRef attrs;
+            JitOptRef s;
+            JitOptRef tp;
+            JitOptRef n;
+            attrs = sym_new_not_null(ctx);
+            s = sym_new_not_null(ctx);
+            tp = sym_new_not_null(ctx);
+            n = sym_new_not_null(ctx);
             CHECK_STACK_BOUNDS(1);
             stack_pointer[-3] = attrs;
             stack_pointer[-2] = s;
@@ -6848,6 +6946,14 @@
             PyFunctionObject *func = (PyFunctionObject *)this_instr->operand0;
             assert(func == NULL || PyFunction_Check(func));
             sym_set_recorded_gen_func(gen, func);
+            break;
+        }
+
+        case _RECORD_3OS_TYPE: {
+            JitOptRef value;
+            value = stack_pointer[-3];
+            PyTypeObject *tp = (PyTypeObject *)this_instr->operand0;
+            sym_set_recorded_type(value, tp);
             break;
         }
 

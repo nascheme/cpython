@@ -951,6 +951,65 @@ class KnownConformingTests(unittest.TestCase):
         assert_python_ok("-c", code, PYTHON_GRAIL_JIT_KNOWN_CONFORMING="0")
 
 
+MATCH_SOURCE = """
+import grail
+
+@grail.record
+class A:
+    x: int
+
+@grail.record
+class B:
+    x: int
+    y: int
+
+@grail.record
+class C:
+    pass
+
+def total(items):
+    t = 0
+    for it in items:
+        match it:
+            case A(x):
+                t += x
+            case B(x, y):
+                t += x * y
+            case C():
+                t += 100
+            case _:
+                t += 1000
+    return t
+"""
+
+
+def load_match():
+    namespace = {}
+    exec(MATCH_SOURCE, namespace)
+    return namespace
+
+
+class MatchFoldTests(unittest.TestCase):
+    """A class pattern on a record subject of a type known in the trace
+    folds to its outcome: one type guard per match statement."""
+
+    def test_homogeneous_then_mixed(self):
+        m = load_match()
+        A, B, C, total = m["A"], m["B"], m["C"], m["total"]
+        bs = [B(i, 2) for i in range(100)]
+        for _ in range(REPEAT):
+            self.assertEqual(total(bs), 9900)
+        if tier2_enabled():
+            uops = executor_uop_counts(total)
+            self.assertEqual(uops["_MATCH_CLASS_RECORD_NONE"], 1, uops)
+            self.assertEqual(uops["_MATCH_CLASS_RECORD_SELF"], 1, uops)
+            self.assertEqual(uops["_GUARD_MATCH_CLASS_RECORD"], 0, uops)
+        mixed = [A(3), B(2, 5), C(), 7, "s", B(1, 1), A(-1)] * 20
+        for _ in range(REPEAT):
+            self.assertEqual(total(mixed), 20 * (3 + 10 + 100 + 1000 + 1000 + 1 - 1))
+        for _ in range(REPEAT):
+            self.assertEqual(total(bs), 9900)
+
 def sum_repeat(value, n):
     t = 0.0
     for _ in range(n):
