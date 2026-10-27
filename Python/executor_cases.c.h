@@ -14080,19 +14080,14 @@
                 SET_CURRENT_CACHED_VALUES(0);
                 JUMP_TO_JUMP_TARGET();
             }
-            PyObject *base = ((_PyGrailDraft *)owner_o)->base;
-            if (base == NULL) {
-                UOP_STAT_INC(uopcode, miss);
-                SET_CURRENT_CACHED_VALUES(0);
-                JUMP_TO_JUMP_TARGET();
-            }
-            if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version) {
+            assert(type_version != 0);
+            if (((_PyGrailDraft *)owner_o)->base_version != type_version) {
                 UOP_STAT_INC(uopcode, miss);
                 SET_CURRENT_CACHED_VALUES(0);
                 JUMP_TO_JUMP_TARGET();
             }
             _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
-            if (root->state != 0 || root->owner != tstate) {
+            if (root->open_owner != tstate) {
                 UOP_STAT_INC(uopcode, miss);
                 SET_CURRENT_CACHED_VALUES(0);
                 JUMP_TO_JUMP_TARGET();
@@ -14119,21 +14114,15 @@
                 SET_CURRENT_CACHED_VALUES(1);
                 JUMP_TO_JUMP_TARGET();
             }
-            PyObject *base = ((_PyGrailDraft *)owner_o)->base;
-            if (base == NULL) {
-                UOP_STAT_INC(uopcode, miss);
-                _tos_cache0 = owner;
-                SET_CURRENT_CACHED_VALUES(1);
-                JUMP_TO_JUMP_TARGET();
-            }
-            if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version) {
+            assert(type_version != 0);
+            if (((_PyGrailDraft *)owner_o)->base_version != type_version) {
                 UOP_STAT_INC(uopcode, miss);
                 _tos_cache0 = owner;
                 SET_CURRENT_CACHED_VALUES(1);
                 JUMP_TO_JUMP_TARGET();
             }
             _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
-            if (root->state != 0 || root->owner != tstate) {
+            if (root->open_owner != tstate) {
                 UOP_STAT_INC(uopcode, miss);
                 _tos_cache0 = owner;
                 SET_CURRENT_CACHED_VALUES(1);
@@ -14161,15 +14150,8 @@
                 SET_CURRENT_CACHED_VALUES(2);
                 JUMP_TO_JUMP_TARGET();
             }
-            PyObject *base = ((_PyGrailDraft *)owner_o)->base;
-            if (base == NULL) {
-                UOP_STAT_INC(uopcode, miss);
-                _tos_cache1 = owner;
-                _tos_cache0 = _stack_item_0;
-                SET_CURRENT_CACHED_VALUES(2);
-                JUMP_TO_JUMP_TARGET();
-            }
-            if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version) {
+            assert(type_version != 0);
+            if (((_PyGrailDraft *)owner_o)->base_version != type_version) {
                 UOP_STAT_INC(uopcode, miss);
                 _tos_cache1 = owner;
                 _tos_cache0 = _stack_item_0;
@@ -14177,7 +14159,7 @@
                 JUMP_TO_JUMP_TARGET();
             }
             _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
-            if (root->state != 0 || root->owner != tstate) {
+            if (root->open_owner != tstate) {
                 UOP_STAT_INC(uopcode, miss);
                 _tos_cache1 = owner;
                 _tos_cache0 = _stack_item_0;
@@ -14209,16 +14191,8 @@
                 SET_CURRENT_CACHED_VALUES(3);
                 JUMP_TO_JUMP_TARGET();
             }
-            PyObject *base = ((_PyGrailDraft *)owner_o)->base;
-            if (base == NULL) {
-                UOP_STAT_INC(uopcode, miss);
-                _tos_cache2 = owner;
-                _tos_cache1 = _stack_item_1;
-                _tos_cache0 = _stack_item_0;
-                SET_CURRENT_CACHED_VALUES(3);
-                JUMP_TO_JUMP_TARGET();
-            }
-            if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version) {
+            assert(type_version != 0);
+            if (((_PyGrailDraft *)owner_o)->base_version != type_version) {
                 UOP_STAT_INC(uopcode, miss);
                 _tos_cache2 = owner;
                 _tos_cache1 = _stack_item_1;
@@ -14227,7 +14201,7 @@
                 JUMP_TO_JUMP_TARGET();
             }
             _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
-            if (root->state != 0 || root->owner != tstate) {
+            if (root->open_owner != tstate) {
                 UOP_STAT_INC(uopcode, miss);
                 _tos_cache2 = owner;
                 _tos_cache1 = _stack_item_1;
@@ -21974,6 +21948,7 @@
             _PyGrailDraft *root = ((_PyGrailDraft *)self_o)->root;
             if (root != NULL && root->state == _PyGrail_DRAFT_OPEN) {
                 root->state = _PyGrail_DRAFT_SEALED;
+                root->open_owner = NULL;
             }
             STAT_INC(CALL, hit);
             _PyFrame_SetStackPointer(frame, stack_pointer);

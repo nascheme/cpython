@@ -138,8 +138,13 @@ typedef struct _PyGrailDraft {
     PyObject *built;             /* finish() result for this draft */
     struct _PyGrailDraftState *st;
     PyThreadState *owner;        /* root only: the creating thread */
+    /* root only: owner while open (state 0), else NULL; one test for
+     * _GUARD_RECORD_DRAFT */
+    PyThreadState *open_owner;
     int state;                   /* root only: 0 while open */
     int building;
+    /* record drafts: the base's type version tag, 0 once cleared */
+    unsigned int base_version;
 } _PyGrailDraft;
 
 typedef struct {

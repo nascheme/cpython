@@ -3066,6 +3066,7 @@
                 _PyGrailDraft *root = ((_PyGrailDraft *)self_o)->root;
                 if (root != NULL && root->state == _PyGrail_DRAFT_OPEN) {
                     root->state = _PyGrail_DRAFT_SEALED;
+                    root->open_owner = NULL;
                 }
                 STAT_INC(CALL, hit);
                 _PyFrame_SetStackPointer(frame, stack_pointer);
@@ -9890,19 +9891,14 @@
                     assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
                     JUMP_TO_PREDICTED(LOAD_ATTR);
                 }
-                PyObject *base = ((_PyGrailDraft *)owner_o)->base;
-                if (base == NULL) {
-                    UPDATE_MISS_STATS(LOAD_ATTR);
-                    assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
-                    JUMP_TO_PREDICTED(LOAD_ATTR);
-                }
-                if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version) {
+                assert(type_version != 0);
+                if (((_PyGrailDraft *)owner_o)->base_version != type_version) {
                     UPDATE_MISS_STATS(LOAD_ATTR);
                     assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
                     JUMP_TO_PREDICTED(LOAD_ATTR);
                 }
                 _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
-                if (root->state != 0 || root->owner != tstate) {
+                if (root->open_owner != tstate) {
                     UPDATE_MISS_STATS(LOAD_ATTR);
                     assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
                     JUMP_TO_PREDICTED(LOAD_ATTR);
@@ -12621,19 +12617,14 @@
                     assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
                     JUMP_TO_PREDICTED(STORE_ATTR);
                 }
-                PyObject *base = ((_PyGrailDraft *)owner_o)->base;
-                if (base == NULL) {
-                    UPDATE_MISS_STATS(STORE_ATTR);
-                    assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
-                    JUMP_TO_PREDICTED(STORE_ATTR);
-                }
-                if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version) {
+                assert(type_version != 0);
+                if (((_PyGrailDraft *)owner_o)->base_version != type_version) {
                     UPDATE_MISS_STATS(STORE_ATTR);
                     assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
                     JUMP_TO_PREDICTED(STORE_ATTR);
                 }
                 _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
-                if (root->state != 0 || root->owner != tstate) {
+                if (root->open_owner != tstate) {
                     UPDATE_MISS_STATS(STORE_ATTR);
                     assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
                     JUMP_TO_PREDICTED(STORE_ATTR);

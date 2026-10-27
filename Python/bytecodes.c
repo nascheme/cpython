@@ -3458,11 +3458,12 @@ dummy_func(
         op(_GUARD_RECORD_DRAFT, (type_version/2, owner -- owner)) {
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
             EXIT_IF(!_PyGrail_IsRecordDraft(owner_o));
-            PyObject *base = ((_PyGrailDraft *)owner_o)->base;
-            EXIT_IF(base == NULL);
-            EXIT_IF(FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(base)->tp_version_tag) != type_version);
+            /* base_version is 0 once the draft is cleared (root NULL);
+             * open_owner is NULL once the root is closed. */
+            assert(type_version != 0);
+            EXIT_IF(((_PyGrailDraft *)owner_o)->base_version != type_version);
             _PyGrailDraft *root = ((_PyGrailDraft *)owner_o)->root;
-            EXIT_IF(root->state != 0 || root->owner != tstate);
+            EXIT_IF(root->open_owner != tstate);
         }
 
         op(_LOAD_ATTR_RECORD_DRAFT, (index/1, owner -- attr)) {
@@ -5967,6 +5968,7 @@ dummy_func(
             _PyGrailDraft *root = ((_PyGrailDraft *)self_o)->root;
             if (root != NULL && root->state == _PyGrail_DRAFT_OPEN) {
                 root->state = _PyGrail_DRAFT_SEALED;
+                root->open_owner = NULL;
             }
             STAT_INC(CALL, hit);
             DECREF_INPUTS();

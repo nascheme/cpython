@@ -192,6 +192,14 @@ new_draft(DraftState *st, RootObject *root, PyObject *base, int kind)
     d->built = NULL;
     d->st = st;
     d->owner = root == NULL ? _PyThreadState_GET() : NULL;
+    d->open_owner = d->owner;
+    d->base_version = 0;
+    if (kind == KIND_RECORD) {
+        PyTypeObject *tp = Py_TYPE(base);
+        if (tp->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(tp)) {
+            d->base_version = tp->tp_version_tag;
+        }
+    }
     d->state = ROOT_OPEN;
     d->building = 0;
     _PyObject_GC_TRACK(d);
@@ -234,6 +242,8 @@ head_traverse(DraftObject *d, visitproc visit, void *arg)
 static void
 head_clear(DraftObject *d)
 {
+    d->base_version = 0;
+    d->open_owner = NULL;
     if (d->root == d) {
         d->root = NULL;
     }
@@ -266,10 +276,12 @@ draft_exit(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
     if (root != NULL && root->state == ROOT_OPEN) {
         if (nargs > 0 && args[0] != Py_None) {
             root->state = ROOT_DONE;         /* aborted: no result */
+            root->open_owner = NULL;
             drop_edits(root);
         }
         else {
             root->state = ROOT_SEALED;
+            root->open_owner = NULL;
         }
     }
     Py_RETURN_FALSE;
@@ -1250,6 +1262,7 @@ grail_finish(PyObject *module, PyObject *draft)
             return NULL;
         }
         root->state = ROOT_DONE;
+        root->open_owner = NULL;
         if (build(draft) == NULL) {
             drop_edits(root);
             return NULL;

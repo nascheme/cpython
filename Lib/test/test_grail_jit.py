@@ -1124,6 +1124,36 @@ class SubscriptTests(unittest.TestCase):
         self.assertEqual(total(v, [True, 2]), 3)
 
 
+class DraftGuardTests(unittest.TestCase):
+    def test_closed_draft_in_trace(self):
+        ns = {}
+        exec("""if 1:
+            import grail
+
+            @grail.record
+            class P:
+                x: int
+                y: int
+
+            def bump(d, n):
+                for _ in range(n):
+                    d.x = d.x + d.y
+                return d.x
+            """, ns)
+        P, bump = ns["P"], ns["bump"]
+        for _ in range(REPEAT):
+            with grail.mutate(P(0, 1)) as d:
+                self.assertEqual(bump(d, 100), 100)
+            self.assertEqual(grail.finish(d), P(100, 1))
+            # Sealed by the with statement, then finished: no more edits.
+            with self.assertRaises(RuntimeError):
+                bump(d, 1)
+        with grail.mutate(P(0, 1)) as d:
+            pass
+        with self.assertRaises(RuntimeError):
+            bump(d, 1)
+
+
 def sum_repeat(value, n):
     t = 0.0
     for _ in range(n):
