@@ -937,11 +937,89 @@ build_string(SubString *input, PyObject *args, PyObject *kwargs,
 /*********** main routine ***********************************************/
 /************************************************************************/
 
+/* A format string whose replacement fields are all "{}" (and whose other
+   braces are "{{" and "}}"), with enough positional arguments: the same
+   result as build_string, without parsing each field. Returns 0 if not
+   applicable, else 1 with *result set (NULL on error). */
+static int
+format_auto_fields(PyObject *self, PyObject *args, PyObject **result)
+{
+    Py_ssize_t n = PyUnicode_GET_LENGTH(self);
+    int kind = PyUnicode_KIND(self);
+    const void *data = PyUnicode_DATA(self);
+    Py_ssize_t nfields = 0;
+    for (Py_ssize_t i = 0; i < n; i++) {
+        Py_UCS4 c = PyUnicode_READ(kind, data, i);
+        if (c == '{' || c == '}') {
+            if (i + 1 >= n) {
+                return 0;
+            }
+            Py_UCS4 next = PyUnicode_READ(kind, data, i + 1);
+            if (c == '{' && next == '}') {
+                nfields++;
+            }
+            else if (next != c) {
+                return 0;
+            }
+            i++;
+        }
+    }
+    if (nfields == 0 || nfields > PyTuple_GET_SIZE(args)) {
+        return 0;
+    }
+
+    _PyUnicodeWriter writer;
+    _PyUnicodeWriter_Init(&writer);
+    writer.overallocate = 1;
+    writer.min_length = n + 100;
+    SubString no_spec;
+    SubString_init(&no_spec, NULL, 0, 0);
+    Py_ssize_t start = 0, field = 0;
+    for (Py_ssize_t i = 0; i < n; i++) {
+        Py_UCS4 c = PyUnicode_READ(kind, data, i);
+        if (c != '{' && c != '}') {
+            continue;
+        }
+        if (i > start &&
+            _PyUnicodeWriter_WriteSubstring(&writer, self, start, i) < 0) {
+            goto error;
+        }
+        if (c == '{' && PyUnicode_READ(kind, data, i + 1) == '}') {
+            if (!render_field(PyTuple_GET_ITEM(args, field++), &no_spec,
+                              &writer)) {
+                goto error;
+            }
+        }
+        else if (_PyUnicodeWriter_WriteChar(&writer, c) < 0) {
+            goto error;
+        }
+        i++;
+        start = i + 1;
+    }
+    if (n > start &&
+        _PyUnicodeWriter_WriteSubstring(&writer, self, start, n) < 0) {
+        goto error;
+    }
+    *result = _PyUnicodeWriter_Finish(&writer);
+    return 1;
+
+error:
+    _PyUnicodeWriter_Dealloc(&writer);
+    *result = NULL;
+    return 1;
+}
+
 /* this is the main entry point */
 static PyObject *
 do_string_format(PyObject *self, PyObject *args, PyObject *kwargs)
 {
     SubString input;
+    PyObject *result;
+
+    if (args != NULL && (kwargs == NULL || PyDict_GET_SIZE(kwargs) == 0) &&
+        format_auto_fields(self, args, &result)) {
+        return result;
+    }
 
     /* PEP 3101 says only 2 levels, so that
        "{0:{1}}".format('abc', 's')            # works
