@@ -27,6 +27,20 @@ def executor_uops(func):
     return names
 
 
+def executor_uop_counts(func):
+    import _opcode
+    from collections import Counter
+    code = func.__code__
+    counts = Counter()
+    for i in range(0, len(code.co_code), 2):
+        try:
+            executor = _opcode.get_executor(code, i)
+        except (ValueError, RuntimeError):
+            continue
+        counts.update(executor[j][0].rsplit("_r", 1)[0] for j in range(len(executor)))
+    return counts
+
+
 def tier2_enabled():
     jit = getattr(sys, "_jit", None)
     return jit is not None and jit.is_enabled()
@@ -160,7 +174,9 @@ class GrailTraceTests(unittest.TestCase):
         uops = executor_uops(loop)
         for name in ("_GRAIL_CALL_GENERIC_SELECT_TIER_TWO", "_CALL_RECORD"):
             self.assertIn(name, uops)
-        self.assertTrue({"_LOAD_ATTR_RECORD", "_LOAD_ATTR_RECORD_TYPED"} & uops)
+        self.assertTrue({"_LOAD_ATTR_RECORD", "_LOAD_ATTR_RECORD_TYPED",
+                         "_LOAD_ATTR_RECORD_BORROW",
+                         "_LOAD_ATTR_RECORD_TYPED_BORROW"} & uops)
         self.assertTrue({"_GRAIL_BINARY_CHECK_FUNC", "_GRAIL_BINARY_LOAD_IMPL"} & uops)
 
 
@@ -347,6 +363,132 @@ class TypedFieldTests(unittest.TestCase):
         """
         assert_python_ok("-c", code, PYTHON_GRAIL_JIT_TYPED_FIELDS="0")
 
+
+# Borrowed record field loads (_LOAD_ATTR_RECORD*_BORROW). Each loop has
+# exactly two field loads; the comments say which may be borrowed.
+BORROW = """
+import grail
+
+@grail.record
+class V:
+    x: float
+    y: float
+
+@grail.record
+class U:
+    x: float | int
+    y: float | int
+
+def dot(vs):            # both
+    t = 0.0
+    for v in vs:
+        t += v.x * v.y
+    return t
+
+def dot_untyped(us):    # both, untyped
+    t = 0.0
+    for u in us:
+        t += u.x * u.y
+    return t
+
+def stored(vs):         # neither: the fields are stored as locals
+    t = 0.0
+    for v in vs:
+        x = v.x
+        y = v.y
+        t += x * y
+    return t
+
+def rebound(vs, w):     # only w.y: v is rebound while v.x is on the stack
+    t = 0.0
+    for v in vs:
+        t += v.x * (v := w).y
+    return t
+
+def branch(vs, flag):   # only v.y: a jump between v.x and its pop
+    t = 0.0
+    for v in vs:
+        t += v.x * (2.0 if flag else v.y)
+    return t
+"""
+
+
+REPEAT = 100   # calls of 100 iterations, enough to trace the loops
+
+
+def load_borrow():
+    namespace = {"__name__": "grail_jit_borrow"}
+    exec(BORROW, namespace)
+    return namespace
+
+
+class BorrowedFieldTests(unittest.TestCase):
+    def check(self, func, args, expected, borrowed):
+        for _ in range(REPEAT):
+            self.assertEqual(func(*args), expected)
+        if tier2_enabled():
+            counts = executor_uop_counts(func)
+            loads = sum(counts[name] for name in (
+                "_LOAD_ATTR_RECORD", "_LOAD_ATTR_RECORD_TYPED",
+                "_LOAD_ATTR_RECORD_BORROW", "_LOAD_ATTR_RECORD_TYPED_BORROW"))
+            self.assertEqual(loads, 2, counts)
+            self.assertEqual(counts["_LOAD_ATTR_RECORD_BORROW"] +
+                             counts["_LOAD_ATTR_RECORD_TYPED_BORROW"],
+                             borrowed, counts)
+
+    def test_borrowed_loads(self):
+        m = load_borrow()
+        V, U = m["V"], m["U"]
+        x, y = float("1.5"), float("2.5")
+        before = sys.getrefcount(x), sys.getrefcount(y)
+        vs = [V(x, y)] * 100
+        self.check(m["dot"], (vs,), 100 * 3.75, 2)
+        if tier2_enabled():
+            # v conforms after the first typed load, so the second needs
+            # no exit.
+            counts = executor_uop_counts(m["dot"])
+            self.assertEqual(counts["_LOAD_ATTR_RECORD_TYPED_BORROW"], 1, counts)
+            self.assertEqual(counts["_LOAD_ATTR_RECORD_BORROW"], 1, counts)
+        us = [U(x, y)] * 100
+        self.check(m["dot_untyped"], (us,), 100 * 3.75, 2)
+        del vs, us
+        self.assertEqual((sys.getrefcount(x), sys.getrefcount(y)), before)
+
+    def test_owning_loads(self):
+        m = load_borrow()
+        V = m["V"]
+        vs = [V(1.5, 2.5)] * 100
+        w = V(3.0, 4.0)
+        self.check(m["stored"], (vs,), 100 * 3.75, 0)
+        self.check(m["rebound"], (vs, w), 100 * 6.0, 1)
+        self.check(m["branch"], (vs, False), 100 * 3.75, 1)
+
+    def test_rebound_owner_is_freed(self):
+        # The record behind v.x dies when v is rebound, so that load must
+        # own its result (a debug build checks the reference counts).
+        m = load_borrow()
+        V = m["V"]
+        w = V(3.0, 4.0)
+        expected = sum(float(i) * 4.0 for i in range(100))
+        for _ in range(REPEAT):
+            vs = [V(float(i), 2.0) for i in range(100)]
+            self.assertEqual(m["rebound"](iter(vs), w), expected)
+
+    @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
+    def test_borrow_ablation(self):
+        from test.support.script_helper import assert_python_ok
+        code = f"""if 1:
+            import sys
+            sys.path.insert(0, {repr(__file__.rsplit("/", 1)[0])})
+            from test.test_grail_jit import load_borrow, executor_uop_counts
+            m = load_borrow()
+            vs = [m["V"](1.5, 2.5)] * 100
+            for _ in range({REPEAT}):
+                assert m["dot"](vs) == 375.0
+            counts = executor_uop_counts(m["dot"])
+            assert counts["_LOAD_ATTR_RECORD_TYPED"] + counts["_LOAD_ATTR_RECORD"] == 2, counts
+        """
+        assert_python_ok("-c", code, PYTHON_GRAIL_JIT_BORROW_FIELDS="0")
 
 if __name__ == "__main__":
     unittest.main()

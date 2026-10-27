@@ -1199,19 +1199,19 @@ dummy_func(void) {
     }
 
     op(_POP_TOP_INT, (value --)) {
-        if (PyJitRef_IsBorrowed(value)) {
+        if (grail_borrow_pop(ctx, value) || PyJitRef_IsBorrowed(value)) {
             ADD_OP(_POP_TOP_NOP, 0, 0);
         }
     }
 
     op(_POP_TOP_FLOAT, (value --)) {
-        if (PyJitRef_IsBorrowed(value)) {
+        if (grail_borrow_pop(ctx, value) || PyJitRef_IsBorrowed(value)) {
             ADD_OP(_POP_TOP_NOP, 0, 0);
         }
     }
 
     op(_POP_TOP_UNICODE, (value --)) {
-        if (PyJitRef_IsBorrowed(value)) {
+        if (grail_borrow_pop(ctx, value) || PyJitRef_IsBorrowed(value)) {
             ADD_OP(_POP_TOP_NOP, 0, 0);
         }
     }
@@ -1306,20 +1306,23 @@ dummy_func(void) {
         if (type != NULL && grail_typed_fields()) {
             field_type = _PyGrail_ConformingFieldType(type, index);
         }
+        bool checked = false;
         if (field_type != NULL) {
             // Exits unless the instance conforms, so the field has its
-            // plan's exact type. Record types are frozen.
-            REPLACE_OP(this_instr, _LOAD_ATTR_RECORD_TYPED, oparg, index);
-            attr = sym_new_type(ctx, field_type);
-            if (_PyGrail_IsRecordTypeFast(field_type) &&
-                field_type->tp_version_tag != 0) {
-                sym_set_type_version(attr, field_type->tp_version_tag);
-                watch_type(field_type, dependencies);
+            // plan's exact type. Record types are frozen. A record already
+            // known to conform needs no exit: conformance never changes.
+            checked = !grail_known_conforming(ctx, owner);
+            if (checked) {
+                REPLACE_OP(this_instr, _LOAD_ATTR_RECORD_TYPED, oparg, index);
             }
+            attr = grail_typed_field(ctx, owner, field_type, dependencies);
         }
         else {
             attr = sym_new_not_null(ctx);
         }
+        grail_borrow_candidate(ctx, attr, owner,
+                               checked ? _LOAD_ATTR_RECORD_TYPED_BORROW
+                                       : _LOAD_ATTR_RECORD_BORROW);
         o = owner;
     }
 
@@ -1327,7 +1330,25 @@ dummy_func(void) {
         PyTypeObject *type = sym_get_type(owner);
         PyTypeObject *field_type = type != NULL ?
             _PyGrail_ConformingFieldType(type, index) : NULL;
-        attr = field_type != NULL ? sym_new_type(ctx, field_type) : sym_new_not_null(ctx);
+        if (field_type != NULL) {
+            attr = grail_typed_field(ctx, owner, field_type, dependencies);
+        }
+        else {
+            attr = sym_new_not_null(ctx);
+        }
+        grail_borrow_candidate(ctx, attr, owner, _LOAD_ATTR_RECORD_TYPED_BORROW);
+        o = owner;
+    }
+
+    op(_LOAD_ATTR_RECORD_BORROW, (index/1, owner -- attr, o)) {
+        (void)index;
+        attr = sym_new_not_null(ctx);
+        o = owner;
+    }
+
+    op(_LOAD_ATTR_RECORD_TYPED_BORROW, (index/1, owner -- attr, o)) {
+        (void)index;
+        attr = sym_new_not_null(ctx);
         o = owner;
     }
 

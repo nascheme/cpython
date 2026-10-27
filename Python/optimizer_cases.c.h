@@ -132,7 +132,7 @@
         case _POP_TOP_INT: {
             JitOptRef value;
             value = stack_pointer[-1];
-            if (PyJitRef_IsBorrowed(value)) {
+            if (grail_borrow_pop(ctx, value) || PyJitRef_IsBorrowed(value)) {
                 ADD_OP(_POP_TOP_NOP, 0, 0);
             }
             CHECK_STACK_BOUNDS(-1);
@@ -144,7 +144,7 @@
         case _POP_TOP_FLOAT: {
             JitOptRef value;
             value = stack_pointer[-1];
-            if (PyJitRef_IsBorrowed(value)) {
+            if (grail_borrow_pop(ctx, value) || PyJitRef_IsBorrowed(value)) {
                 ADD_OP(_POP_TOP_NOP, 0, 0);
             }
             CHECK_STACK_BOUNDS(-1);
@@ -156,7 +156,7 @@
         case _POP_TOP_UNICODE: {
             JitOptRef value;
             value = stack_pointer[-1];
-            if (PyJitRef_IsBorrowed(value)) {
+            if (grail_borrow_pop(ctx, value) || PyJitRef_IsBorrowed(value)) {
                 ADD_OP(_POP_TOP_NOP, 0, 0);
             }
             CHECK_STACK_BOUNDS(-1);
@@ -3162,22 +3162,23 @@
             if (type != NULL && grail_typed_fields()) {
                 field_type = _PyGrail_ConformingFieldType(type, index);
             }
+            bool checked = false;
             if (field_type != NULL) {
-                REPLACE_OP(this_instr, _LOAD_ATTR_RECORD_TYPED, oparg, index);
-                attr = sym_new_type(ctx, field_type);
-                if (_PyGrail_IsRecordTypeFast(field_type) &&
-                    field_type->tp_version_tag != 0) {
-                    sym_set_type_version(attr, field_type->tp_version_tag);
-                    stack_pointer[-1] = attr;
-                    watch_type(field_type, dependencies);
+                checked = !grail_known_conforming(ctx, owner);
+                if (checked) {
+                    REPLACE_OP(this_instr, _LOAD_ATTR_RECORD_TYPED, oparg, index);
                 }
+                attr = grail_typed_field(ctx, owner, field_type, dependencies);
             }
             else {
                 attr = sym_new_not_null(ctx);
             }
+            stack_pointer[-1] = attr;
+            grail_borrow_candidate(ctx, attr, owner,
+                               checked ? _LOAD_ATTR_RECORD_TYPED_BORROW
+            : _LOAD_ATTR_RECORD_BORROW);
             o = owner;
             CHECK_STACK_BOUNDS(1);
-            stack_pointer[-1] = attr;
             stack_pointer[0] = o;
             stack_pointer += 1;
             ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
@@ -3193,7 +3194,47 @@
             PyTypeObject *type = sym_get_type(owner);
             PyTypeObject *field_type = type != NULL ?
             _PyGrail_ConformingFieldType(type, index) : NULL;
-            attr = field_type != NULL ? sym_new_type(ctx, field_type) : sym_new_not_null(ctx);
+            if (field_type != NULL) {
+                attr = grail_typed_field(ctx, owner, field_type, dependencies);
+            }
+            else {
+                attr = sym_new_not_null(ctx);
+            }
+            stack_pointer[-1] = attr;
+            grail_borrow_candidate(ctx, attr, owner, _LOAD_ATTR_RECORD_TYPED_BORROW);
+            o = owner;
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[0] = o;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _LOAD_ATTR_RECORD_BORROW: {
+            JitOptRef owner;
+            JitOptRef attr;
+            JitOptRef o;
+            owner = stack_pointer[-1];
+            uint16_t index = (uint16_t)this_instr->operand0;
+            (void)index;
+            attr = sym_new_not_null(ctx);
+            o = owner;
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-1] = attr;
+            stack_pointer[0] = o;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _LOAD_ATTR_RECORD_TYPED_BORROW: {
+            JitOptRef owner;
+            JitOptRef attr;
+            JitOptRef o;
+            owner = stack_pointer[-1];
+            uint16_t index = (uint16_t)this_instr->operand0;
+            (void)index;
+            attr = sym_new_not_null(ctx);
             o = owner;
             CHECK_STACK_BOUNDS(1);
             stack_pointer[-1] = attr;

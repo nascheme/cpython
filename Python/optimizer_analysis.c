@@ -472,11 +472,174 @@ lookup_attr(JitOptContext *ctx, _PyBloomFilter *dependencies, _PyUOpInstruction 
     return sym_new_not_null(ctx);
 }
 
+/* Grail records known to conform, so that typed field loads from them need
+ * no exit. A conforming record stays conforming (its fields are immutable
+ * values), so this holds for the rest of the trace. */
+static bool
+grail_known_conforming(JitOptContext *ctx, JitOptRef ref)
+{
+    JitOptSymbol *sym = PyJitRef_Unwrap(ref);
+    for (int i = 0; i < ctx->grail_conforming_count; i++) {
+        if (ctx->grail_conforming[i] == sym) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void
+grail_set_conforming(JitOptContext *ctx, JitOptRef ref)
+{
+    if (!grail_known_conforming(ctx, ref) &&
+        ctx->grail_conforming_count < GRAIL_MAX_CONFORMING) {
+        ctx->grail_conforming[ctx->grail_conforming_count++] = PyJitRef_Unwrap(ref);
+    }
+}
+
+/* The result of a typed load (field_type is from the field's plan): owner
+ * conforms once the load is reached. A record-typed field of a conforming
+ * record conforms too. */
+static JitOptRef
+grail_typed_field(JitOptContext *ctx, JitOptRef owner, PyTypeObject *field_type,
+                  _PyBloomFilter *dependencies)
+{
+    grail_set_conforming(ctx, owner);
+    JitOptRef attr = sym_new_type(ctx, field_type);
+    if (_PyGrail_IsRecordTypeFast(field_type)) {
+        grail_set_conforming(ctx, attr);
+        if (field_type->tp_version_tag != 0) {
+            sym_set_type_version(attr, field_type->tp_version_tag);
+            watch_type(field_type, dependencies);
+        }
+    }
+    return attr;
+}
+
+/* Borrowed Grail record field loads.
+ *
+ * A record's fields are never replaced, so a field lives as long as its
+ * record. A field load can then push a borrowed reference, and the pop that
+ * consumes it becomes _POP_TOP_NOP, if a local of the current frame holds
+ * the record from the load until the pop. These are the lifetime rules of
+ * LOAD_FAST_BORROW (see optimize_load_fast() in flowgraph.c): the borrowed
+ * value is consumed before its supporting local is killed, and is not
+ * stored as a local.
+ *
+ * The load is emitted in its owning form and remembered. The decision is
+ * made at the pop: if nothing between the load and the pop could kill the
+ * local, copy the value, or change frames, the load is rewritten to its
+ * borrowed form. Code between the two must also contain no bytecode jump,
+ * so that a side exit in between continues in tier 1 on the same
+ * straight-line bytecode, which pops the value too.
+ *
+ * PYTHON_GRAIL_JIT_BORROW_FIELDS=0 disables it (fresh process per setting). */
+static int
+grail_borrow_fields(void)
+{
+    const char *value = Py_GETENV("PYTHON_GRAIL_JIT_BORROW_FIELDS");
+    return value == NULL || strcmp(value, "0") != 0;
+}
+
+/* Remember the record field load just processed (not yet copied to the
+ * output buffer) if a local of the current frame holds its owner. */
+static void
+grail_borrow_candidate(JitOptContext *ctx, JitOptRef attr, JitOptRef owner,
+                       uint16_t borrow_op)
+{
+    if (ctx->grail_borrow_count >= GRAIL_MAX_BORROWS || !grail_borrow_fields()) {
+        return;
+    }
+    JitOptSymbol *owner_sym = PyJitRef_Unwrap(owner);
+    _Py_UOpsAbstractFrame *frame = ctx->frame;
+    for (int i = 0; i < frame->locals_len; i++) {
+        if (PyJitRef_Unwrap(frame->locals[i]) == owner_sym) {
+            int n = ctx->grail_borrow_count++;
+            ctx->grail_borrows[n].field = PyJitRef_Unwrap(attr);
+            ctx->grail_borrows[n].owner = owner_sym;
+            ctx->grail_borrows[n].local = i;
+            ctx->grail_borrows[n].load =
+                (int)(ctx->out_buffer.next - ctx->out_buffer.start);
+            ctx->grail_borrows[n].borrow_op = borrow_op;
+            return;
+        }
+    }
+}
+
+/* True if popping value can be a no-op because it is a remembered field
+ * load, which is then rewritten to its borrowed form. */
+static bool
+grail_borrow_pop(JitOptContext *ctx, JitOptRef value)
+{
+    if (ctx->grail_borrow_count == 0 || PyJitRef_IsBorrowed(value)) {
+        return false;
+    }
+    JitOptSymbol *sym = PyJitRef_Unwrap(value);
+    for (int n = 0; n < ctx->grail_borrow_count; n++) {
+        if (ctx->grail_borrows[n].field != sym) {
+            continue;
+        }
+        bool ok = PyJitRef_Unwrap(ctx->frame->locals[ctx->grail_borrows[n].local]) ==
+                  ctx->grail_borrows[n].owner;
+        if (ok) {
+            _PyUOpInstruction *load = ctx->out_buffer.start + ctx->grail_borrows[n].load;
+            assert(load->opcode == _LOAD_ATTR_RECORD ||
+                   load->opcode == _LOAD_ATTR_RECORD_TYPED);
+            load->opcode = ctx->grail_borrows[n].borrow_op;
+        }
+        ctx->grail_borrows[n] = ctx->grail_borrows[--ctx->grail_borrow_count];
+        return ok;
+    }
+    return false;
+}
+
+/* Forget all remembered loads if this uop could kill a local, copy a stack
+ * value or come from a bytecode jump, or if it changed frames. */
+static void
+grail_borrow_barrier(JitOptContext *ctx, _PyUOpInstruction *this_instr,
+                     _Py_UOpsAbstractFrame *frame_before)
+{
+    int opcode = this_instr->opcode;
+    bool barrier = ctx->frame != frame_before;
+    switch (opcode) {
+        case _SWAP_FAST: case _SWAP_FAST_0: case _SWAP_FAST_1:
+        case _SWAP_FAST_2: case _SWAP_FAST_3: case _SWAP_FAST_4:
+        case _SWAP_FAST_5: case _SWAP_FAST_6: case _SWAP_FAST_7:
+        case _DELETE_FAST:
+        case _LOAD_FAST_AND_CLEAR:
+        case _MAKE_CELL:
+        case _COPY: case _COPY_1: case _COPY_2: case _COPY_3:
+            barrier = true;
+            break;
+        default:
+            if (is_terminator_uop(this_instr)) {
+                barrier = true;
+            }
+            break;
+    }
+    if (!barrier && !CURRENT_FRAME_IS_SHIM()) {
+        PyCodeObject *code = ctx->frame->code;
+        if (this_instr->format == UOP_FORMAT_TARGET &&
+            this_instr->target < (uint32_t)Py_SIZE(code)) {
+            int op = _PyOpcode_Deopt[_PyCode_CODE(code)[this_instr->target].op.code];
+            barrier = OPCODE_HAS_JUMP(op);
+        }
+        else {
+            barrier = true;
+        }
+    }
+    if (barrier) {
+        ctx->grail_borrow_count = 0;
+    }
+}
+
 static void
 optimize_pop_top(JitOptContext *ctx, _PyUOpInstruction *this_instr, JitOptRef value)
 {
     PyTypeObject *typ = sym_get_type(value);
-    if (PyJitRef_IsBorrowed(value) ||
+    if (grail_borrow_pop(ctx, value)) {
+        ADD_OP(_POP_TOP_NOP, 0, 0);
+    }
+    else if (PyJitRef_IsBorrowed(value) ||
         sym_is_immortal(PyJitRef_Unwrap(value)) ||
         sym_is_null(value)) {
         ADD_OP(_POP_TOP_NOP, 0, 0);
@@ -692,6 +855,7 @@ optimize_uops(
         DUMP_UOP(ctx, "abs", (int)(this_instr - trace), this_instr, stack_pointer);
 
         _PyUOpInstruction *out_ptr = ctx->out_buffer.next;
+        _Py_UOpsAbstractFrame *frame_before = ctx->frame;
 
         switch (opcode) {
 
@@ -700,6 +864,9 @@ optimize_uops(
             default:
                 DPRINTF(1, "\nUnknown opcode in abstract interpreter\n");
                 Py_UNREACHABLE();
+        }
+        if (ctx->grail_borrow_count) {
+            grail_borrow_barrier(ctx, this_instr, frame_before);
         }
         // If no ADD_OP was called during this iteration, copy the original instruction
         if (ctx->out_buffer.next == out_ptr) {

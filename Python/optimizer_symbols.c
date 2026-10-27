@@ -1496,6 +1496,8 @@ _Py_uop_abstractcontext_init(JitOptContext *ctx, _PyBloomFilter *dependencies)
 
     // Frame setup
     ctx->curr_frame_depth = 0;
+    ctx->grail_borrow_count = 0;
+    ctx->grail_conforming_count = 0;
 
     // Ctx signals.
     // Note: this must happen before frame_new, as it might override

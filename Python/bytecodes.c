@@ -3339,6 +3339,29 @@ dummy_func(
             DEAD(owner);
         }
 
+        /* Tier 2 only: borrowed forms of the two record field loads. Fields
+         * are never replaced, so the field lives as long as the record. The
+         * optimizer uses these only when a local holds the record until the
+         * field is popped (see grail_borrow_pop() in optimizer_analysis.c). */
+        tier2 op(_LOAD_ATTR_RECORD_BORROW, (index/1, owner -- attr, o)) {
+            PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            PyObject *attr_o = *(PyObject **)((char *)owner_o + index);
+            assert(attr_o != NULL);
+            attr = PyStackRef_FromPyObjectBorrow(attr_o);
+            o = owner;
+            DEAD(owner);
+        }
+
+        tier2 op(_LOAD_ATTR_RECORD_TYPED_BORROW, (index/1, owner -- attr, o)) {
+            PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            EXIT_IF(!((RecordObject *)owner_o)->conforming);
+            PyObject *attr_o = *(PyObject **)((char *)owner_o + index);
+            assert(attr_o != NULL);
+            attr = PyStackRef_FromPyObjectBorrow(attr_o);
+            o = owner;
+            DEAD(owner);
+        }
+
         macro(LOAD_ATTR_RECORD) =
             unused/1 +
             _RECORD_TOS_TYPE +

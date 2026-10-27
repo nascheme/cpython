@@ -71,6 +71,9 @@ typedef struct _JitOptRefBuffer {
     JitOptRef *end;
 } _JitOptRefBuffer;
 
+#define GRAIL_MAX_BORROWS 8
+#define GRAIL_MAX_CONFORMING 32
+
 typedef struct _JitOptContext {
     char done;
     char out_of_space;
@@ -94,6 +97,19 @@ typedef struct _JitOptContext {
     JitOptRef stack_array[ABSTRACT_INTERP_STACK_SIZE];
     _PyJitUopBuffer out_buffer;
     _PyBloomFilter *dependencies;
+    /* Grail record field loads that may become borrowed when their result
+     * is popped (see grail_borrow_pop() in optimizer_analysis.c). */
+    struct {
+        JitOptSymbol *field;    // the loaded value
+        JitOptSymbol *owner;    // the record, held by local `local`
+        int local;
+        int load;               // index of the load in out_buffer
+        uint16_t borrow_op;     // borrowed form of the load
+    } grail_borrows[GRAIL_MAX_BORROWS];
+    int grail_borrow_count;
+    // Grail records known to conform (see grail_known_conforming()).
+    JitOptSymbol *grail_conforming[GRAIL_MAX_CONFORMING];
+    int grail_conforming_count;
 } JitOptContext;
 
 
