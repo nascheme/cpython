@@ -78,6 +78,7 @@ struct _Py_global_strings {
         STRUCT_FOR_ID(JSONDecodeError)
         STRUCT_FOR_ID(PENDING)
         STRUCT_FOR_ID(Py_Repr)
+        STRUCT_FOR_ID(RNAME)
         STRUCT_FOR_ID(TextIOWrapper)
         STRUCT_FOR_ID(True)
         STRUCT_FOR_ID(WarningMessage)

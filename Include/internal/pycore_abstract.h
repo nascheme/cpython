@@ -22,7 +22,10 @@ PyAPI_FUNC(PyObject *) _PyNumber_InPlacePowerNoMod(PyObject *lhs, PyObject *rhs)
 
 /* Finish binary operator nb_op (an NB_* oparg) after the left operand's
    Python method, called directly for BINARY_OP_PY, returned NotImplemented:
-   the right operand is of the same type or an exact int or float. */
+   the right operand is of the same type or an exact int or float. With
+   _Py_NB_REFLECTED set, the method was the right operand's reflected one
+   (the left operand is an exact int or float), so the operator fails. */
+#define _Py_NB_REFLECTED 0x100
 PyAPI_FUNC(PyObject *) _PyNumber_BinaryOpAfterNotImplemented(
     PyObject *v, PyObject *w, int nb_op);
 

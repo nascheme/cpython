@@ -1353,6 +1353,7 @@ extern "C" {
     INIT_ID(JSONDecodeError), \
     INIT_ID(PENDING), \
     INIT_ID(Py_Repr), \
+    INIT_ID(RNAME), \
     INIT_ID(TextIOWrapper), \
     INIT_ID(True), \
     INIT_ID(WarningMessage), \

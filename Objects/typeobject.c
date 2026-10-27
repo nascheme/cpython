@@ -10984,8 +10984,8 @@ SLOT1BIN(slot_nb_true_divide, nb_true_divide, __truediv__, __rtruediv__)
 SLOT1(slot_nb_inplace_floor_divide, __ifloordiv__, PyObject *)
 SLOT1(slot_nb_inplace_true_divide, __itruediv__, PyObject *)
 
-PyObject *
-_PyType_BinaryOpDunder(PyTypeObject *tp, int nb_op)
+static PyObject *
+binary_op_dunder(PyTypeObject *tp, int nb_op, int reflected)
 {
     PyNumberMethods *nm = tp->tp_as_number;
     if (!(tp->tp_flags & Py_TPFLAGS_HEAPTYPE) || nm == NULL) {
@@ -10994,41 +10994,53 @@ _PyType_BinaryOpDunder(PyTypeObject *tp, int nb_op)
     binaryfunc slot, generic, inplace;
     PyObject *name;
     switch (nb_op) {
-#define BINARY_OP_DUNDER(OP, SLOT, IOP, ISLOT, FUNC, NAME) \
+#define BINARY_OP_DUNDER(OP, SLOT, IOP, ISLOT, FUNC, NAME, RNAME) \
         case OP: \
         case IOP: \
             slot = nm->SLOT; \
             inplace = nm->ISLOT; \
             generic = FUNC; \
-            name = &_Py_ID(NAME); \
+            name = reflected ? &_Py_ID(RNAME) : &_Py_ID(NAME); \
             break;
         BINARY_OP_DUNDER(NB_ADD, nb_add, NB_INPLACE_ADD, nb_inplace_add,
-                         slot_nb_add, __add__)
+                         slot_nb_add, __add__,
+                         __radd__)
         BINARY_OP_DUNDER(NB_SUBTRACT, nb_subtract, NB_INPLACE_SUBTRACT,
-                         nb_inplace_subtract, slot_nb_subtract, __sub__)
+                         nb_inplace_subtract, slot_nb_subtract, __sub__,
+                         __rsub__)
         BINARY_OP_DUNDER(NB_MULTIPLY, nb_multiply, NB_INPLACE_MULTIPLY,
-                         nb_inplace_multiply, slot_nb_multiply, __mul__)
+                         nb_inplace_multiply, slot_nb_multiply, __mul__,
+                         __rmul__)
         BINARY_OP_DUNDER(NB_MATRIX_MULTIPLY, nb_matrix_multiply,
                          NB_INPLACE_MATRIX_MULTIPLY, nb_inplace_matrix_multiply,
-                         slot_nb_matrix_multiply, __matmul__)
+                         slot_nb_matrix_multiply, __matmul__,
+                         __rmatmul__)
         BINARY_OP_DUNDER(NB_REMAINDER, nb_remainder, NB_INPLACE_REMAINDER,
-                         nb_inplace_remainder, slot_nb_remainder, __mod__)
+                         nb_inplace_remainder, slot_nb_remainder, __mod__,
+                         __rmod__)
         BINARY_OP_DUNDER(NB_LSHIFT, nb_lshift, NB_INPLACE_LSHIFT,
-                         nb_inplace_lshift, slot_nb_lshift, __lshift__)
+                         nb_inplace_lshift, slot_nb_lshift, __lshift__,
+                         __rlshift__)
         BINARY_OP_DUNDER(NB_RSHIFT, nb_rshift, NB_INPLACE_RSHIFT,
-                         nb_inplace_rshift, slot_nb_rshift, __rshift__)
+                         nb_inplace_rshift, slot_nb_rshift, __rshift__,
+                         __rrshift__)
         BINARY_OP_DUNDER(NB_AND, nb_and, NB_INPLACE_AND, nb_inplace_and,
-                         slot_nb_and, __and__)
+                         slot_nb_and, __and__,
+                         __rand__)
         BINARY_OP_DUNDER(NB_XOR, nb_xor, NB_INPLACE_XOR, nb_inplace_xor,
-                         slot_nb_xor, __xor__)
+                         slot_nb_xor, __xor__,
+                         __rxor__)
         BINARY_OP_DUNDER(NB_OR, nb_or, NB_INPLACE_OR, nb_inplace_or,
-                         slot_nb_or, __or__)
+                         slot_nb_or, __or__,
+                         __ror__)
         BINARY_OP_DUNDER(NB_FLOOR_DIVIDE, nb_floor_divide,
                          NB_INPLACE_FLOOR_DIVIDE, nb_inplace_floor_divide,
-                         slot_nb_floor_divide, __floordiv__)
+                         slot_nb_floor_divide, __floordiv__,
+                         __rfloordiv__)
         BINARY_OP_DUNDER(NB_TRUE_DIVIDE, nb_true_divide,
                          NB_INPLACE_TRUE_DIVIDE, nb_inplace_true_divide,
-                         slot_nb_true_divide, __truediv__)
+                         slot_nb_true_divide, __truediv__,
+                         __rtruediv__)
 #undef BINARY_OP_DUNDER
         default:
             return NULL;
@@ -11036,8 +11048,9 @@ _PyType_BinaryOpDunder(PyTypeObject *tp, int nb_op)
     if (slot != generic) {
         return NULL;
     }
-    /* An in-place operator without its own method is the binary one. */
-    if (nb_op >= NB_INPLACE_ADD && inplace != NULL) {
+    /* An in-place operator without its own method is the binary one. (The
+       reflected method's left operand, an int or float, has none.) */
+    if (!reflected && nb_op >= NB_INPLACE_ADD && inplace != NULL) {
         return NULL;
     }
     /* No sequence fallback after a NotImplemented result. */
@@ -11048,6 +11061,18 @@ _PyType_BinaryOpDunder(PyTypeObject *tp, int nb_op)
         return NULL;
     }
     return name;
+}
+
+PyObject *
+_PyType_BinaryOpDunder(PyTypeObject *tp, int nb_op)
+{
+    return binary_op_dunder(tp, nb_op, 0);
+}
+
+PyObject *
+_PyType_BinaryOpReflectedDunder(PyTypeObject *tp, int nb_op)
+{
+    return binary_op_dunder(tp, nb_op, 1);
 }
 
 static PyObject *

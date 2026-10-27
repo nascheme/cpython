@@ -4596,6 +4596,31 @@ class TestUopsOptimization(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, r"for \+: 'V' and 'str'"):
             V(1) + "x"
 
+    def test_binary_op_py_reflected(self):
+        class V:
+            def __init__(self, val):
+                self.val = val
+            def __rmul__(self, other):
+                return V(other * self.val)
+            def __radd__(self, other):
+                return NotImplemented
+
+        def testfunc(n):
+            a = V(2)
+            total = 0
+            for _ in range(n):
+                total += (3 * a).val + (1.5 * a).val
+            return total
+
+        res, ex = self._run_with_optimizer(testfunc, TIER2_THRESHOLD)
+        self.assertEqual(res, 9 * TIER2_THRESHOLD)
+        self.assertIsNotNone(ex)
+        uops = get_opnames(ex)
+        self.assertNotIn("_BINARY_OP", uops)
+        self.assertEqual(count_ops(ex, "_BINARY_OP_PY_INIT_CALL"), 2)
+        with self.assertRaisesRegex(TypeError, r"for \+: 'int' and 'V'"):
+            1 + V(1)
+
     def test_binary_op_extend_float_long_add_refcount_elimination(self):
         def testfunc(n):
             a = 1.5

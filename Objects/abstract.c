@@ -1040,8 +1040,13 @@ _PyNumber_BinaryOpAfterNotImplemented(PyObject *v, PyObject *w, int nb_op)
         [NB_INPLACE_TRUE_DIVIDE] = {NB_SLOT(nb_true_divide), "/="},
         [NB_INPLACE_XOR] = {NB_SLOT(nb_xor), "^="},
     };
+    int reflected = nb_op & _Py_NB_REFLECTED;
+    nb_op &= ~_Py_NB_REFLECTED;
     assert(nb_op >= 0 && nb_op < (int)Py_ARRAY_LENGTH(ops));
     assert(ops[nb_op].name != NULL);
+    if (reflected) {
+        return binop_type_error(v, w, ops[nb_op].name);
+    }
     /* As binary_op1 after slotv: the right operand cannot be a subtype of
        the left one, so its slot comes second. */
     if (!Py_IS_TYPE(w, Py_TYPE(v)) && Py_TYPE(w)->tp_as_number != NULL) {

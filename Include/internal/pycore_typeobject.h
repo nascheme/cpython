@@ -168,6 +168,13 @@ int _PyType_CacheGetItemForSpecialization(PyHeapTypeObject *ht, PyObject *descri
    else precedes it; NULL otherwise. Borrowed (interned). */
 PyAPI_FUNC(PyObject *) _PyType_BinaryOpDunder(PyTypeObject *tp, int nb_op);
 
+/* The reflected method (__radd__ etc.) that `v OP w` calls when v is an
+   exact int or float and w an instance of heap type tp that is not a
+   subtype of v's type: the int or float slot returns NotImplemented and
+   tp's slot calls the method by name. NULL if tp's slot is not the generic
+   one. Borrowed (interned). */
+PyAPI_FUNC(PyObject *) _PyType_BinaryOpReflectedDunder(PyTypeObject *tp, int nb_op);
+
 // Precalculates count of non-unique slots and fills wrapperbase.name_count.
 extern int _PyType_InitSlotDefs(PyInterpreterState *interp);
 

@@ -667,18 +667,42 @@
                 uint32_t func_version = read_u32(&this_instr[4].cache);
                 PyTypeObject *tp = Py_TYPE(PyStackRef_AsPyObjectBorrow(left));
                 PyTypeObject *rtp = Py_TYPE(PyStackRef_AsPyObjectBorrow(right));
-                if (FT_ATOMIC_LOAD_UINT32_RELAXED(tp->tp_version_tag) != type_version) {
-                    UPDATE_MISS_STATS(BINARY_OP);
-                    assert(_PyOpcode_Deopt[opcode] == (BINARY_OP));
-                    JUMP_TO_PREDICTED(BINARY_OP);
+                PyTypeObject *owner;
+                PyObject *name;
+                if (tp == &PyLong_Type || tp == &PyFloat_Type) {
+                    owner = rtp;
+                    if (FT_ATOMIC_LOAD_UINT32_RELAXED(rtp->tp_version_tag) != type_version) {
+                        UPDATE_MISS_STATS(BINARY_OP);
+                        assert(_PyOpcode_Deopt[opcode] == (BINARY_OP));
+                        JUMP_TO_PREDICTED(BINARY_OP);
+                    }
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    name = _PyType_BinaryOpReflectedDunder(rtp, oparg);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
                 }
-                if (rtp != tp && rtp != &PyLong_Type && rtp != &PyFloat_Type) {
+                else {
+                    owner = tp;
+                    if (FT_ATOMIC_LOAD_UINT32_RELAXED(tp->tp_version_tag) != type_version) {
+                        UPDATE_MISS_STATS(BINARY_OP);
+                        assert(_PyOpcode_Deopt[opcode] == (BINARY_OP));
+                        JUMP_TO_PREDICTED(BINARY_OP);
+                    }
+                    if (rtp != tp && rtp != &PyLong_Type && rtp != &PyFloat_Type) {
+                        UPDATE_MISS_STATS(BINARY_OP);
+                        assert(_PyOpcode_Deopt[opcode] == (BINARY_OP));
+                        JUMP_TO_PREDICTED(BINARY_OP);
+                    }
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    name = _PyType_BinaryOpDunder(tp, oparg);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                }
+                if (name == NULL) {
                     UPDATE_MISS_STATS(BINARY_OP);
                     assert(_PyOpcode_Deopt[opcode] == (BINARY_OP));
                     JUMP_TO_PREDICTED(BINARY_OP);
                 }
                 _PyFrame_SetStackPointer(frame, stack_pointer);
-                PyObject *func_o = _PyType_LookupRef(tp, _PyType_BinaryOpDunder(tp, oparg));
+                PyObject *func_o = _PyType_LookupRef(owner, name);
                 stack_pointer = _PyFrame_GetStackPointer(frame);
                 if (func_o != NULL && !(PyFunction_Check(func_o) &&
                                     ((PyFunctionObject *)func_o)->func_version == func_version &&
@@ -712,8 +736,16 @@
                 shim->localsplus[1] = PyStackRef_DUP(right);
                 shim->localsplus[2] = PyStackRef_TagInt(oparg);
                 _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, func, 2, shim);
-                pushed_frame->localsplus[0] = left;
-                pushed_frame->localsplus[1] = right;
+                PyTypeObject *tp = PyStackRef_TYPE(left);
+                if (tp == &PyLong_Type || tp == &PyFloat_Type) {
+                    shim->localsplus[2] = PyStackRef_TagInt(oparg | _Py_NB_REFLECTED);
+                    pushed_frame->localsplus[0] = right;
+                    pushed_frame->localsplus[1] = left;
+                }
+                else {
+                    pushed_frame->localsplus[0] = left;
+                    pushed_frame->localsplus[1] = right;
+                }
                 frame->return_offset = 6u ;
                 tstate->py_recursion_remaining--;
                 new_frame = PyStackRef_Wrap(pushed_frame);

@@ -1355,6 +1355,7 @@ _PyStaticObjects_CheckRefcnt(PyInterpreterState *interp) {
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(JSONDecodeError));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(PENDING));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(Py_Repr));
+    _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(RNAME));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(TextIOWrapper));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(True));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(WarningMessage));

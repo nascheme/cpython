@@ -353,5 +353,77 @@ class PowerTests(unittest.TestCase):
             self.assertEqual(run(pairs), expected)
 
 
+class ReflectedBinaryOpTests(unittest.TestCase):
+    """int or float OP instance: the instance's reflected method."""
+
+    def test_reflected_methods(self):
+        class V:
+            def __init__(self, x):
+                self.x = x
+            def __rmul__(self, k):
+                return V(k * self.x)
+            def __radd__(self, k):
+                return ("radd", k, self.x)
+            def __rsub__(self, k):
+                return NotImplemented
+
+        class F(float):
+            def __radd__(self, k):
+                return ("F.radd", k)
+
+        def run(v, f):
+            out = []
+            for i in range(REPEAT):
+                a = 2.0 * v
+                b = 3 * v
+                c = 1.5 + v
+                d = 7
+                d *= v
+                e = 2.5 + f
+                out.append((a.x, b.x, c, d.x, e))
+            return out
+
+        expected = [(2.0, 3, ("radd", 1.5, 1), 7, ("F.radd", 2.5))] * REPEAT
+        for _ in range(REPEAT):
+            self.assertEqual(run(V(1), F(1.0)), expected)
+        if tier2_enabled():
+            counts = executor_uop_counts(run)
+            self.assertEqual(counts["_BINARY_OP_PY_INIT_CALL"], 4, counts)
+
+        def sub(v, op):
+            for i in range(REPEAT):
+                x = 1
+                try:
+                    if op:
+                        x -= v
+                    else:
+                        1.0 - v
+                except TypeError as e:
+                    msg = str(e)
+            return msg
+        for _ in range(REPEAT):
+            self.assertEqual(sub(V(1), False),
+                             "unsupported operand type(s) for -: 'float' and 'V'")
+            self.assertEqual(sub(V(1), True),
+                             "unsupported operand type(s) for -=: 'int' and 'V'")
+
+        # Replacing or deleting the method while the loop is hot.
+        def change(v, new):
+            out = []
+            for i in range(REPEAT):
+                if i == REPEAT // 2 and new is not None:
+                    V.__rmul__ = new
+                out.append(2 * v)
+            return out
+        for _ in range(REPEAT):
+            self.assertEqual([r.x for r in change(V(5), None)], [10] * REPEAT)
+        res = change(V(5), lambda self, k: ("new", k))
+        self.assertEqual(res[0].x, 10)
+        self.assertEqual(res[-1], ("new", 2))
+        del V.__rmul__
+        with self.assertRaises(TypeError):
+            change(V(5), None)
+
+
 if __name__ == "__main__":
     unittest.main()

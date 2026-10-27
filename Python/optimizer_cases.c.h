@@ -1327,11 +1327,16 @@
             PyTypeObject *tp = sym_get_probable_type(left);
             PyTypeObject *rtp = sym_get_probable_type(right);
             PyObject *func_o = NULL;
-            if (tp != NULL && rtp != NULL && tp->tp_version_tag == type_version &&
-                (rtp == tp || rtp == &PyLong_Type || rtp == &PyFloat_Type) &&
+            int reflected = tp == &PyLong_Type || tp == &PyFloat_Type;
+            PyTypeObject *owner = reflected ? rtp : tp;
+            if (tp != NULL && rtp != NULL && owner->tp_version_tag == type_version &&
+                (reflected || rtp == tp || rtp == &PyLong_Type || rtp == &PyFloat_Type) &&
+                (tp->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(tp)) &&
                 (rtp->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(rtp))) {
-                PyObject *name = _PyType_BinaryOpDunder(tp, oparg);
-                func_o = name == NULL ? NULL : _PyType_Lookup(tp, name);
+                PyObject *name = reflected
+                ? _PyType_BinaryOpReflectedDunder(owner, oparg)
+            : _PyType_BinaryOpDunder(owner, oparg);
+                func_o = name == NULL ? NULL : _PyType_Lookup(owner, name);
                 if (func_o != NULL && !(PyFunction_Check(func_o) &&
                                     ((PyFunctionObject *)func_o)->func_version == func_version)) {
                     func_o = NULL;
@@ -1339,7 +1344,7 @@
             }
             if (func_o != NULL) {
                 if (sym_get_type(left) != tp) {
-                    ADD_OP(_GUARD_NOS_OBJ_TYPE_VERSION, 0, type_version);
+                    ADD_OP(_GUARD_NOS_OBJ_TYPE_VERSION, 0, tp->tp_version_tag);
                     sym_set_type(left, tp);
                 }
                 if (sym_get_type(right) != rtp) {
@@ -1347,7 +1352,7 @@
                     sym_set_type(right, rtp);
                     sym_set_type_version(right, rtp->tp_version_tag);
                 }
-                watch_type(tp, dependencies);
+                watch_type(owner, dependencies);
                 _Py_BloomFilter_Add(dependencies, func_o);
                 ADD_OP(_BINARY_OP_PY_LOAD_FUNC, oparg, (uintptr_t)func_o);
                 func = sym_new_const(ctx, func_o);
@@ -1396,8 +1401,19 @@
             if (f == NULL) {
                 break;
             }
-            f->locals[0] = left;
-            f->locals[1] = right;
+            PyTypeObject *tp = sym_get_type(left);
+            if (tp == &PyLong_Type || tp == &PyFloat_Type) {
+                f->locals[0] = right;
+                f->locals[1] = left;
+            }
+            else if (tp != NULL) {
+                f->locals[0] = left;
+                f->locals[1] = right;
+            }
+            else {
+                f->locals[0] = sym_new_not_null(ctx);
+                f->locals[1] = sym_new_not_null(ctx);
+            }
             new_frame = PyJitRef_WrapInvalid(f);
             CHECK_STACK_BOUNDS(-2);
             stack_pointer[-3] = new_frame;
