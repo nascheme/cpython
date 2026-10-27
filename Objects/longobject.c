@@ -3225,6 +3225,29 @@ PyLong_FromUnicodeObject(PyObject *u, int base)
     char *end = NULL;
     Py_ssize_t buflen;
 
+    /* Base 10, an optional sign and up to 18 ASCII digits (no spaces or
+       underscores): the value directly. */
+    if (base == 10 && PyUnicode_IS_ASCII(u)) {
+        Py_ssize_t n = PyUnicode_GET_LENGTH(u);
+        const Py_UCS1 *p = PyUnicode_1BYTE_DATA(u);
+        const Py_UCS1 *stop = p + n;
+        int negative = 0;
+        if (n > 0 && (*p == '-' || *p == '+')) {
+            negative = *p == '-';
+            p++;
+        }
+        if (p < stop && stop - p <= 18) {
+            int64_t value = 0;
+            while (p < stop && (unsigned)(*p - '0') < 10) {
+                value = value * 10 + (*p - '0');
+                p++;
+            }
+            if (p == stop) {
+                return PyLong_FromInt64(negative ? -value : value);
+            }
+        }
+    }
+
     asciidig = _PyUnicode_TransformDecimalAndSpaceToASCII(u);
     if (asciidig == NULL)
         return NULL;
