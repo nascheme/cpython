@@ -7,6 +7,7 @@
 #endif
 
 #include "Python.h"
+#include "internal/pycore_freelist.h" // _Py_FREELIST_POP_MEM()
 #include "internal/pycore_code.h"    // _PySpecialize_RegisterIntSubscript()
 #include "internal/pycore_grail.h"   // _PyGrail_RegisterVectorOps()
 #include "internal/pycore_long.h"    // _PyLong_IsCompact()
@@ -45,6 +46,8 @@ typedef struct {
     PyTypeObject *builder_type;
 } VectorState;
 
+static void vector_dealloc(PyObject *op);
+
 static PyObject *
 vector_wrap(PyTypeObject *type, PyObject *root, PyObject *tail,
             Py_ssize_t count, unsigned int shift)
@@ -54,17 +57,31 @@ vector_wrap(PyTypeObject *type, PyObject *root, PyObject *tail,
         Py_XDECREF(root);
         return NULL;
     }
-    Vector *self = (Vector *)type->tp_alloc(type, 0);
-    if (self == NULL) {
-        Py_XDECREF(root);
-        Py_DECREF(tail);
-        return NULL;
+    Vector *self = NULL;
+    /* Exact vectors are recycled through a per-thread freelist; tp_dealloc
+     * of a Python subclass is subtype_dealloc. */
+    int exact = type->tp_dealloc == vector_dealloc;
+    if (exact) {
+        self = _Py_FREELIST_POP_MEM(grail_vectors);
+    }
+    if (self != NULL) {
+        assert(Py_IS_TYPE(self, &_PyGrail_FreeRecord_Type));
+        _PyObject_Init((PyObject *)self, type);
+    }
+    else {
+        self = (Vector *)_PyType_AllocNoTrack(type, 0);
+        if (self == NULL) {
+            Py_XDECREF(root);
+            Py_DECREF(tail);
+            return NULL;
+        }
     }
     self->root = root;
     self->tail = tail;
     self->count = count;
     self->hash = -1;
     self->shift = shift;
+    _PyObject_GC_TRACK(self);
     return (PyObject *)self;
 }
 
@@ -87,7 +104,17 @@ vector_dealloc(PyObject *op)
     }
     Py_XDECREF(((Vector *)op)->root);
     Py_XDECREF(((Vector *)op)->tail);
-    type->tp_free(op);
+    if (type->tp_dealloc == vector_dealloc) {
+        assert(_PyType_PreHeaderSize(type) ==
+               _PyType_PreHeaderSize(&_PyGrail_FreeRecord_Type));
+        Py_SET_TYPE(op, &_PyGrail_FreeRecord_Type);
+        if (!_Py_FREELIST_PUSH(grail_vectors, op, Py_grail_vectors_MAXFREELIST)) {
+            PyObject_GC_Del(op);
+        }
+    }
+    else {
+        type->tp_free(op);
+    }
     _Py_DECREF_TYPE(type);  // pairs with tp_alloc's per-thread type reference
 }
 

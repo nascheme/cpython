@@ -34,12 +34,13 @@
 # Experimental Grail runtime (currently importable only in --disable-gil builds).
 _grail _grail.c
 _grail_atom _grail_atom.c
+# Built into the interpreter (the HAMT, like the core HAMT it was forked
+# from; drafts and the vectors so the interpreter's helpers inline into
+# them).  The sources in _grail/ are copied from grail-compat
+# (tools/sync_to_cpython_grail.py).
+*static*
 _grail_vector _grail_vector.c
 _grail_numvec _grail_numvec.c
-# Built into the interpreter (the HAMT, like the core HAMT it was forked
-# from; drafts so the interpreter's helpers inline into them).  The
-# sources in _grail/ are copied from grail-compat (tools/sync_to_cpython_grail.py).
-*static*
 _grail_pds _grail/pds.c _grail/grail_hamt.c -DPy_BUILD_CORE
 _grail_pool _grail_pool.c
 _grail_draft _grail_draft.c

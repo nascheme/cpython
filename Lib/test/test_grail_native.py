@@ -848,6 +848,9 @@ operations = [
     lambda: small + full,
     lambda: PVector(source),
 ]
+# Appends to a short tail may be served entirely from freelists (the
+# vector and its new tail).
+may_not_fail = {operations[3], operations[4], operations[6]}
 for operation in operations:
     expected = operation()
     failures = 0
@@ -866,7 +869,7 @@ for operation in operations:
             assert result == expected
         for original, model in models:
             assert list(original) == model
-    assert failures > 0
+    assert failures > 0 or operation in may_not_fail
 
 # A builder stays consistent after an operation fails.
 for position in range(60):

@@ -949,6 +949,7 @@ _PyObject_ClearFreeLists(struct _Py_freelists *freelists, int is_finalization)
     for (Py_ssize_t i = 0; i <= Py_grail_records_MAXSAVESIZE + 1; i++) {
         clear_freelist(&freelists->grail_drafts[i], is_finalization, free_object);
     }
+    clear_freelist(&freelists->grail_vectors, is_finalization, free_object);
     clear_freelist(&freelists->funcs, is_finalization, free_object);
     clear_freelist(&freelists->cells, is_finalization, free_object);
     clear_freelist(&freelists->async_gens, is_finalization, free_object);
