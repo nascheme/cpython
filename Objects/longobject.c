@@ -2134,6 +2134,34 @@ long_to_decimal_string_internal(PyObject *aa,
         }
     }
 
+    /* A compact int: its digits directly, without the scratch number in
+       base _PyLong_DECIMAL_BASE. The result is a new string, which
+       callers such as _PyUnicode_FormatLong modify. */
+    if (_PyLong_IsCompact(a) && bytes_writer == NULL) {
+        Py_ssize_t v = _PyLong_CompactValue(a);
+        char buf[24];
+        char *end = buf + sizeof(buf);
+        char *q = end;
+        size_t u = negative ? (size_t)0 - (size_t)v : (size_t)v;
+        do {
+            *--q = (char)('0' + u % 10);
+            u /= 10;
+        } while (u != 0);
+        if (negative) {
+            *--q = '-';
+        }
+        if (writer) {
+            return _PyUnicodeWriter_WriteASCIIString(writer, q, end - q);
+        }
+        str = PyUnicode_New(end - q, 127);
+        if (str == NULL) {
+            return -1;
+        }
+        memcpy(PyUnicode_1BYTE_DATA(str), q, end - q);
+        *p_output = str;
+        return 0;
+    }
+
 #if WITH_PYLONG_MODULE
     if (size_a > 1000) {
         /* Switch to _pylong.int_to_decimal_string(). */
@@ -2321,6 +2349,13 @@ static PyObject *
 long_to_decimal_string(PyObject *aa)
 {
     PyObject *v;
+    /* repr() of 0 to 9: the cached one-character strings. */
+    if (PyLong_Check(aa) && _PyLong_IsCompact((PyLongObject *)aa)) {
+        Py_ssize_t ival = _PyLong_CompactValue((PyLongObject *)aa);
+        if (0 <= ival && ival <= 9) {
+            return _Py_LATIN1_CHR('0' + ival);
+        }
+    }
     if (long_to_decimal_string_internal(aa, &v, NULL, NULL, NULL) == -1)
         return NULL;
     return v;
