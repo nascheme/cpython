@@ -1168,7 +1168,9 @@ results_dealloc(PyObject *op)
         /* Unconsumed items still run, as with concurrent.futures, but their
          * results are dropped and buffersize no longer limits them. */
         _Py_atomic_store_int(&self->job->detached, 1);
-        core_notify(self->core, 1);
+        if (!_Py_atomic_load_int_acquire(&self->job->done_pulling)) {
+            core_notify(self->core, 1);
+        }
         job_decref(self->job);
     }
     if (self->core != NULL) {

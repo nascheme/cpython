@@ -323,8 +323,8 @@ _core._configure(repr, eq, hash,
                  (ops.add, ops.sub, ops.mul, ops.truediv, ops.neg, ops.abs))
 
 
-_pool = None
-_pool_lock = _thread.allocate_lock()
+_shared_pool = None
+_shared_pool_lock = _thread.allocate_lock()
 
 
 def pool():
@@ -332,19 +332,19 @@ def pool():
 
     It is shut down at exit. A child process made by fork() starts its own.
     """
-    global _pool
-    with _pool_lock:
-        if _pool is None:
+    global _shared_pool
+    with _shared_pool_lock:
+        if _shared_pool is None:
             import atexit
             import os
-            _pool = Pool(os.process_cpu_count() or 1)
-            atexit.register(_pool.shutdown)
+            _shared_pool = Pool(os.process_cpu_count() or 1)
+            atexit.register(_shared_pool.shutdown)
             if hasattr(os, "register_at_fork"):
                 os.register_at_fork(after_in_child=_forget_pool)
-        return _pool
+        return _shared_pool
 
 
 def _forget_pool():
-    global _pool, _pool_lock
-    _pool = None
-    _pool_lock = _thread.allocate_lock()
+    global _shared_pool, _shared_pool_lock
+    _shared_pool = None
+    _shared_pool_lock = _thread.allocate_lock()

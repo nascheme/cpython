@@ -1,4 +1,5 @@
-"""Tests for grail.Pool, the native thread pool (cpython-grail only)."""
+# Copied from grail-compat tests/ by tools/sync_to_cpython_grail.py; do not edit here.
+"""grail.Pool, the thread pool (backend-agnostic: native and pure Python)."""
 import contextvars
 import gc
 import os
@@ -277,7 +278,8 @@ class PoolTests(unittest.TestCase):
 class SharedPoolTests(unittest.TestCase):
     def test_shared_pool(self):
         self.assertIs(grail.pool(), grail.pool())
-        self.assertEqual(grail.pool().n_threads, os.process_cpu_count())
+        cpus = getattr(os, "process_cpu_count", os.cpu_count)()
+        self.assertEqual(grail.pool().n_threads, cpus)
         self.assertEqual(list(grail.pool().map(abs, [-1, -2])), [1, 2])
 
     def test_exit_with_busy_pool(self):
