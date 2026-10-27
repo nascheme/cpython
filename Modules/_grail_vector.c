@@ -82,7 +82,9 @@ static void
 vector_dealloc(PyObject *op)
 {
     PyTypeObject *type = Py_TYPE(op);
-    PyObject_GC_UnTrack(op);
+    if (_PyObject_GC_IS_TRACKED(op)) {
+        _PyObject_GC_UNTRACK(op);
+    }
     Py_XDECREF(((Vector *)op)->root);
     Py_XDECREF(((Vector *)op)->tail);
     type->tp_free(op);

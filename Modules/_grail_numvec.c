@@ -746,6 +746,15 @@ iterator_next(PyObject *op)
 {
     NumIterator *self = (NumIterator *)op;
     NumVector *v = self->vector;
+#ifndef Py_GIL_DISABLED
+    /* The GIL serializes advancing the position. */
+    Py_ssize_t index = self->index;
+    if (index < 0 || index >= Py_SIZE(v)) {
+        return NULL;
+    }
+    self->index = self->reverse ? index - 1 : index + 1;
+    return box(v->kind, v->items[index]);
+#else
     Py_ssize_t index = _Py_atomic_load_ssize_relaxed(&self->index);
     for (;;) {
         if (index < 0 || index >= Py_SIZE(v)) {
@@ -756,6 +765,7 @@ iterator_next(PyObject *op)
             return box(v->kind, v->items[index]);
         }
     }
+#endif
 }
 
 static PyObject *

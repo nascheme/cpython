@@ -1222,7 +1222,9 @@ static void
 record_dealloc(RecordObject *self)
 {
     PyTypeObject *type = Py_TYPE(self);
-    PyObject_GC_UnTrack(self);
+    if (_PyObject_GC_IS_TRACKED(self)) {
+        _PyObject_GC_UNTRACK(self);
+    }
     Py_TRASHCAN_BEGIN(self, record_dealloc);
     /* As record_clear, but float fields (the common numeric case) are
      * released without the generic deallocation dispatch. Fields are NULL
