@@ -932,6 +932,33 @@ class PickleFailure:
         return _pickle_fail, ()
 
 
+class RecordEqualityTests(unittest.TestCase):
+    def test_scalar_fields(self):
+        @grail.record
+        class K:
+            a: int
+            b: str
+
+        class S(str):
+            def __eq__(self, other):
+                return True
+
+            __hash__ = str.__hash__
+
+        x, y = "".join(["s", "1"]), "".join(["s", "1"])
+        self.assertIsNot(x, y)
+        self.assertEqual(K(1, x), K(1, y))
+        self.assertNotEqual(K(1, x), K(1, "s2"))
+        self.assertNotEqual(K(1, x), K(2, x))
+        big = 10 ** 30
+        self.assertEqual(K(big, x), K(int(str(big)), x))
+        self.assertNotEqual(K(big, x), K(big + 1, x))
+        self.assertEqual(K(True, x), K(1, x))          # nonconforming
+        self.assertEqual(K(1, S("a")), K(1, "b"))       # S.__eq__ decides
+        d = {K(i, str(i)): i for i in range(50)}
+        self.assertEqual([d[K(i, "".join([str(i)]))] for i in range(50)], list(range(50)))
+
+
 class CopyPickleTests(unittest.TestCase):
     def roundtrips(self, obj):
         for protocol in range(pickle.HIGHEST_PROTOCOL + 1):

@@ -7,6 +7,7 @@
 #include "internal/pycore_floatobject.h"  // _PyFloat_ExactDealloc()
 #include "internal/pycore_freelist.h"  // _Py_FREELIST_PUSH()
 #include "internal/pycore_grail.h"
+#include "internal/pycore_long.h"   // _PyLong_BothAreCompact()
 #include "internal/pycore_object.h"  // _Py_DECREF_TYPE()
 #include "internal/pycore_runtime.h"  // _Py_ID()
 #include "internal/pycore_stackref.h"
@@ -1330,6 +1331,27 @@ record_setattr(PyObject *self, PyObject *name, PyObject *value)
 
 static int record_substitutable(PyObject *, PyObject *);
 
+/* a == b for two exact strs or two compact ints of the same type (the
+ * common field values), without the rich comparison dispatch; -1 for
+ * other values. */
+static inline int
+exact_scalar_eq(PyObject *a, PyObject *b)
+{
+    PyTypeObject *t = Py_TYPE(a);
+    if (t != Py_TYPE(b)) {
+        return -1;
+    }
+    if (t == &PyUnicode_Type) {
+        return _PyUnicode_Equal(a, b);
+    }
+    if (t == &PyLong_Type && _PyLong_BothAreCompact((PyLongObject *)a,
+                                                    (PyLongObject *)b)) {
+        return _PyLong_CompactValue((PyLongObject *)a) ==
+               _PyLong_CompactValue((PyLongObject *)b);
+    }
+    return -1;
+}
+
 /* p is NULL when the values have no plan to compare under. */
 static int
 value_substitutable(const PlanNode *nodes, const PlanNode *p,
@@ -1352,7 +1374,8 @@ value_substitutable(const PlanNode *nodes, const PlanNode *p,
             double x = PyFloat_AS_DOUBLE(a), y = PyFloat_AS_DOUBLE(b);
             return memcmp(&x, &y, sizeof(double)) == 0;
         }
-        return PyObject_RichCompareBool(a, b, Py_EQ);
+        int eq = exact_scalar_eq(a, b);
+        return eq >= 0 ? eq : PyObject_RichCompareBool(a, b, Py_EQ);
     }
     const PlanNode *children = nodes + p->first;
     if (p->kind == PLAN_UNION) {
@@ -1442,10 +1465,20 @@ record_default_eq(PyObject *a, PyObject *b)
     int both = x->conforming && y->conforming;
     int result = 1;
     for (Py_ssize_t i = 0; i < record_count(a); i++) {
-        result = value_substitutable(nodes, both ? &nodes[i] : NULL,
-                                     x->fields[i], y->fields[i]);
+        PyObject *fa = x->fields[i], *fb = y->fields[i];
+        if (fa == fb) {
+            continue;
+        }
+        result = exact_scalar_eq(fa, fb);
+        if (result >= 0) {
+            if (!result) {
+                break;
+            }
+            continue;
+        }
+        result = value_substitutable(nodes, both ? &nodes[i] : NULL, fa, fb);
         if (result == 0) {
-            result = PyObject_RichCompareBool(x->fields[i], y->fields[i], Py_EQ);
+            result = PyObject_RichCompareBool(fa, fb, Py_EQ);
         }
         if (result != 1) {
             break;
