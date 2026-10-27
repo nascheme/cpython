@@ -29,7 +29,7 @@
     <_KeywordSources Include="$(PySourcePath)Grammar\python.gram;$(PySourcePath)Grammar\Tokens" />
     <_KeywordOutputs Include="$(PySourcePath)Lib\keyword.py" />
     <!-- Taken from _Target._compute_digest in Tools\jit\_targets.py: -->
-    <_JITSources Include="$(PySourcePath)Python\executor_cases.c.h;$(PySourcePath)PC\pyconfig.h;$(PySourcePath)Tools\jit\**"/>
+    <_JITSources Include="$(PySourcePath)Python\executor_cases.c.h;$(PySourcePath)PC\pyconfig.h;$(PySourcePath)Tools\jit\**;$(PySourcePath)Include\**\*.h;$(PySourcePath)Python\*.h"/>
     <!-- Need to explicitly enumerate these, since globbing doesn't work for missing outputs: -->
     <_JITOutputs Include="$(GeneratedJitStencilsDir)jit_stencils.h"/>
     <_JITOutputs Include="$(GeneratedJitStencilsDir)jit_stencils-aarch64-pc-windows-msvc.h" Condition="$(Platform) == 'ARM64'"/>

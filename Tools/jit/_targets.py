@@ -103,6 +103,12 @@ class _Target(typing.Generic[_S, _R]):
         # These dependencies are also reflected in _JITSources in regen.targets:
         hasher.update(PYTHON_EXECUTOR_CASES_C_H.read_bytes())
         hasher.update((self.pyconfig_dir / "pyconfig.h").read_bytes())
+        # The template includes CPython's headers: a change to a struct
+        # layout must rebuild the stencils too.
+        for header in sorted((CPYTHON / "Include").rglob("*.h")):
+            hasher.update(header.read_bytes())
+        for header in sorted((CPYTHON / "Python").glob("*.h")):
+            hasher.update(header.read_bytes())
         for dirpath, _, filenames in sorted(os.walk(TOOLS_JIT)):
             # Exclude cache files from digest computation to ensure reproducible builds.
             if dirpath.endswith("__pycache__"):

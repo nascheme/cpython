@@ -3240,6 +3240,11 @@ JIT_DEPS = \
 		$(srcdir)/Tools/jit/*.h \
 		$(srcdir)/Tools/jit/*.py \
 		$(srcdir)/Python/executor_cases.c.h \
+		$(srcdir)/Include/*.h \
+		$(srcdir)/Include/cpython/*.h \
+		$(srcdir)/Include/internal/*.h \
+		$(srcdir)/Include/internal/mimalloc/mimalloc/*.h \
+		$(srcdir)/Python/*.h \
 		pyconfig.h
 
 $(JIT_GENERATED_STAMP): $(JIT_DEPS)
