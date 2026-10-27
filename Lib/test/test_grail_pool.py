@@ -275,6 +275,207 @@ class PoolTests(unittest.TestCase):
             self.assertEqual(acc, sorted(acc))
 
 
+HAVE_GROUPS = sys.version_info >= (3, 11)
+
+
+class ScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.pool = Pool(4)
+        self.addCleanup(self.pool.shutdown)
+
+    def test_spawn(self):
+        done = grail.Atom(0)
+        with self.pool.scope() as s:
+            for i in range(1000):
+                self.assertIsNone(s.spawn(done.add, i))
+        self.assertEqual(done.value, sum(range(1000)))
+
+    def test_args_and_kwargs(self):
+        seen = []
+        with self.pool.scope() as s:
+            s.spawn(lambda a, b, *, c: seen.append((a, b, c)), 1, 2, c=3)
+            s.spawn(seen.append, "x")
+        self.assertEqual(sorted(seen, key=str), [(1, 2, 3), "x"])
+
+    def test_tasks_run_on_workers(self):
+        names = set()
+        with self.pool.scope() as s:
+            for _ in range(20):
+                s.spawn(lambda: names.add(threading.current_thread().name))
+        self.assertNotIn(threading.current_thread().name, names)
+
+    def test_tasks_spawn_into_the_scope(self):
+        total = grail.Atom(0)
+        def fib(n, s):
+            if n < 2:
+                total.add(n)
+            else:
+                s.spawn(fib, n - 1, s)
+                s.spawn(fib, n - 2, s)
+        with self.pool.scope() as s:
+            s.spawn(fib, 18, s)
+        self.assertEqual(total.value, 2584)
+
+    def test_nested_scopes(self):
+        for n_threads in (1, 2):
+            pool = Pool(n_threads)
+            self.addCleanup(pool.shutdown)
+            def tree(depth):
+                if depth == 0:
+                    return 1
+                out = grail.Atom(0)
+                with pool.scope() as s:
+                    for _ in range(3):
+                        s.spawn(lambda: out.add(tree(depth - 1)))
+                return out.value
+            with self.subTest(n_threads=n_threads):
+                self.assertEqual(tree(5), 3 ** 5)
+
+    def test_scope_and_map_nest(self):
+        def task(n):
+            return sum(self.pool.map(lambda x: x, range(n)))
+        total = grail.Atom(0)
+        with self.pool.scope() as s:
+            for n in range(30):
+                s.spawn(lambda n=n: total.add(task(n)))
+        self.assertEqual(total.value, sum(n * (n - 1) // 2 for n in range(30)))
+        def mapped(n):
+            out = grail.Atom(0)
+            with self.pool.scope() as s:
+                for i in range(n):
+                    s.spawn(out.add, i)
+            return out.value
+        self.assertEqual(list(self.pool.map(mapped, range(30))),
+                         [n * (n - 1) // 2 for n in range(30)])
+
+    def test_spawn_from_other_threads(self):
+        total = grail.Atom(0)
+        with self.pool.scope() as s:
+            threads = [threading.Thread(target=lambda: [s.spawn(total.add, 1)
+                                                        for _ in range(100)])
+                       for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(total.value, 400)
+
+    def test_contextvars_copied_at_spawn(self):
+        var = contextvars.ContextVar("var", default=0)
+        seen = []
+        with self.pool.scope() as s:
+            var.set(1)
+            s.spawn(lambda: seen.append(var.get()))
+            var.set(2)
+            s.spawn(lambda: seen.append(var.get()))
+            s.spawn(var.set, 99)
+        self.assertEqual(sorted(seen), [1, 2])
+        self.assertEqual(var.get(), 2)
+
+    def _errors(self, scope_body):
+        try:
+            with self.pool.scope() as s:
+                scope_body(s)
+        except BaseException as exc:
+            return exc
+        return None
+
+    @unittest.skipUnless(HAVE_GROUPS, "needs exception groups")
+    def test_task_errors_raise_a_group(self):
+        def bad(i):
+            raise ValueError(i)
+        exc = self._errors(lambda s: [s.spawn(bad, i) for i in range(3)])
+        self.assertIsInstance(exc, ExceptionGroup)
+        self.assertGreaterEqual(len(exc.exceptions), 1)
+        self.assertTrue(all(isinstance(e, ValueError) for e in exc.exceptions))
+        exc = self._errors(lambda s: s.spawn(sys.exit, 3))
+        self.assertIsInstance(exc, BaseExceptionGroup)
+        self.assertNotIsInstance(exc, ExceptionGroup)
+
+    def test_error_cancels_unstarted_tasks(self):
+        pool = Pool(1)
+        self.addCleanup(pool.shutdown)
+        ran = []
+        def bad():
+            raise ValueError
+        try:
+            with pool.scope() as s:
+                s.spawn(bad)
+                time.sleep(0.05)
+                for i in range(100):
+                    s.spawn(ran.append, i)
+        except BaseException as exc:
+            first = exc.exceptions[0] if HAVE_GROUPS else exc
+            self.assertIsInstance(first, ValueError)
+        else:
+            self.fail("no error")
+        self.assertEqual(ran, [])
+
+    def test_body_error_cancels_and_propagates(self):
+        pool = Pool(1)
+        self.addCleanup(pool.shutdown)
+        ran = []
+        with self.assertRaises(KeyError):
+            with pool.scope() as s:
+                s.spawn(time.sleep, 0.05)
+                for i in range(100):
+                    s.spawn(ran.append, i)
+                raise KeyError
+        self.assertEqual(ran, [])
+
+    @unittest.skipUnless(HAVE_GROUPS, "needs exception groups")
+    def test_body_error_joins_task_errors(self):
+        def bad():
+            raise ValueError
+        def body(s):
+            s.spawn(bad)
+            time.sleep(0.05)
+            raise KeyError
+        exc = self._errors(body)
+        self.assertIsInstance(exc, ExceptionGroup)
+        self.assertEqual([type(e) for e in exc.exceptions], [KeyError, ValueError])
+
+    def test_closed_scope(self):
+        with self.pool.scope() as s:
+            pass
+        with self.assertRaisesRegex(RuntimeError, "closed"):
+            s.spawn(print)
+        with self.assertRaisesRegex(RuntimeError, "closed"):
+            with s:
+                pass
+
+    def test_scope_waits_for_slow_tasks(self):
+        done = []
+        with self.pool.scope() as s:
+            for i in range(8):
+                s.spawn(lambda i=i: (spin(2000), done.append(i)))
+        self.assertEqual(sorted(done), list(range(8)))
+
+    def test_shutdown(self):
+        pool = Pool(2)
+        s = pool.scope()
+        pool.shutdown()
+        with self.assertRaisesRegex(RuntimeError, "shut down"):
+            s.spawn(print)
+        with self.assertRaisesRegex(RuntimeError, "shut down"):
+            pool.scope()
+
+    def test_interrupt_waiting_scope(self):
+        proc = run_python(
+            "import grail, os, signal, threading, time\n"
+            "threading.Timer(0.3, os.kill, (os.getpid(), signal.SIGINT)).start()\n"
+            "pool = grail.Pool(2)\n"
+            "ran = []\n"
+            "try:\n"
+            "    with pool.scope() as s:\n"
+            "        for i in range(200):\n"
+            "            s.spawn(lambda: (time.sleep(0.05), ran.append(1)))\n"
+            "except KeyboardInterrupt:\n"
+            "    print('interrupted', len(ran) < 200)\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "interrupted True\n")
+
+
 class SharedPoolTests(unittest.TestCase):
     def test_shared_pool(self):
         self.assertIs(grail.pool(), grail.pool())
