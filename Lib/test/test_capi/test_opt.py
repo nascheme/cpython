@@ -5049,7 +5049,7 @@ class TestUopsOptimization(unittest.TestCase):
         uops = get_opnames(ex)
 
         # For now... until we constant propagate it away.
-        self.assertIn("_BINARY_OP", uops)
+        self.assertIn("_BINARY_OP_EXTEND", uops)
 
     def test_jitted_code_sees_changed_globals(self):
         "Issue 136154: Check that jitted code spots the change in the globals"

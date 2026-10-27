@@ -2284,6 +2284,85 @@ compactlongs_floor_divide(PyObject *lhs, PyObject *rhs)
     return PyLong_FromSsize_t(q);
 }
 
+/* ** of compact ints with a non-negative exponent (a negative one gives
+ * a float): square-and-multiply in 64 bits, falling back to long_pow on
+ * overflow. */
+static int
+compactlongs_nonneg_exponent_guard(PyObject *lhs, PyObject *rhs)
+{
+    return is_compactlong(lhs) && is_compactlong(rhs) &&
+           _PyLong_CompactValue((PyLongObject *)rhs) >= 0;
+}
+
+/* *r = a * b, or 1 on overflow. Neither operand is INT64_MIN. */
+static inline int
+int64_mul_overflow(int64_t a, int64_t b, int64_t *r)
+{
+    int64_t abs_a = a < 0 ? -a : a;
+    int64_t abs_b = b < 0 ? -b : b;
+    if (abs_a != 0 && abs_b > INT64_MAX / abs_a) {
+        return 1;
+    }
+    *r = a * b;
+    return 0;
+}
+
+static PyObject *
+compactlongs_power(PyObject *lhs, PyObject *rhs)
+{
+    int64_t base = _PyLong_CompactValue((PyLongObject *)lhs);
+    Py_ssize_t exp = _PyLong_CompactValue((PyLongObject *)rhs);
+    int64_t result = 1;
+    while (1) {
+        if ((exp & 1) && int64_mul_overflow(result, base, &result)) {
+            break;
+        }
+        exp >>= 1;
+        if (exp == 0) {
+            return PyLong_FromInt64(result);
+        }
+        if (int64_mul_overflow(base, base, &base)) {
+            break;
+        }
+    }
+    return PyLong_Type.tp_as_number->nb_power(lhs, rhs, Py_None);
+}
+
+/* float ** compact int, and float ** float with a base that is not
+ * negative: float_pow, whose result is then always a float (a negative
+ * base with a fractional exponent gives a complex). */
+static int
+float_power_guard(PyObject *lhs, PyObject *rhs)
+{
+    return PyFloat_CheckExact(lhs) &&
+           ((PyFloat_CheckExact(rhs) && !(PyFloat_AS_DOUBLE(lhs) < 0.0)) ||
+            is_compactlong(rhs));
+}
+
+static PyObject *
+float_power(PyObject *lhs, PyObject *rhs)
+{
+    /* Finite operands and a finite result: float_pow's answer is C's pow.
+     * Anything else (overflow, 0 ** -n, infinities, NaNs) takes float_pow
+     * and its special cases and errors. */
+    double x = PyFloat_AS_DOUBLE(lhs);
+    double y = PyFloat_CheckExact(rhs)
+        ? PyFloat_AS_DOUBLE(rhs)
+        : (double)_PyLong_CompactValue((PyLongObject *)rhs);
+    if (isfinite(x) && isfinite(y)) {
+        /* As float_pow: a negative base (the exponent is then an int)
+         * goes through pow(-x, y). */
+        double r = x < 0.0 ? pow(-x, y) : pow(x, y);
+        if (isfinite(r)) {
+            if (x < 0.0 && fmod(y, 2.0) != 0.0) {
+                r = -r;
+            }
+            return PyFloat_FromDouble(r);
+        }
+    }
+    return PyFloat_Type.tp_as_number->nb_power(lhs, rhs, Py_None);
+}
+
 /* float-long */
 
 static inline int
@@ -2420,6 +2499,11 @@ static _PyBinaryOpSpecializationDescr binaryop_extend_descrs[] = {
     {NB_INPLACE_OR, compactlongs_guard, compactlongs_or, &PyLong_Type, 1, NULL, NULL},
     {NB_INPLACE_AND, compactlongs_guard, compactlongs_and, &PyLong_Type, 1, NULL, NULL},
     {NB_INPLACE_XOR, compactlongs_guard, compactlongs_xor, &PyLong_Type, 1, NULL, NULL},
+
+    {NB_POWER, compactlongs_nonneg_exponent_guard, compactlongs_power, &PyLong_Type, 1, NULL, NULL},
+    {NB_INPLACE_POWER, compactlongs_nonneg_exponent_guard, compactlongs_power, &PyLong_Type, 1, NULL, NULL},
+    {NB_POWER, float_power_guard, float_power, &PyFloat_Type, 1, NULL, NULL},
+    {NB_INPLACE_POWER, float_power_guard, float_power, &PyFloat_Type, 1, NULL, NULL},
 
     /* float-long arithmetic: guards also check NaN and compactness. */
     {NB_ADD, float_compactlong_guard, float_compactlong_add, &PyFloat_Type, 1, NULL, NULL},

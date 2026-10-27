@@ -316,5 +316,42 @@ class ContainsTests(unittest.TestCase):
             self.assertEqual(lst, [])
 
 
+import operator
+class PowerTests(unittest.TestCase):
+    def test_float_and_int_power(self):
+        ns = {}
+        exec("""if 1:
+            def run(pairs):
+                out = []
+                for a, b in pairs:
+                    try:
+                        r = a ** b
+                    except Exception as e:
+                        r = type(e)
+                    try:
+                        a **= b
+                    except Exception as e:
+                        a = type(e)
+                    out.append((repr(r), repr(a)))
+                return out
+            """, ns)
+        run = ns["run"]
+        def oracle(a, b):
+            try:
+                return repr(operator.pow(a, b))
+            except Exception as e:
+                return repr(type(e))
+        inf, nan = float("inf"), float("nan")
+        floats = [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 1.5, -1.5, 2.0, -2.0,
+                  1e-300, -1e-300, 1e300, -1e300, inf, -inf, nan, 3.7, -3.7]
+        ints = [0, 1, 2, 3, -1, -2, -3, 10, 63, 64, 1000, -1000,
+                2**30 - 1, -(2**30 - 1), 2**70]
+        pairs = ([(a, b) for a in floats for b in floats + ints] +
+                 [(a, b) for a in ints for b in ints if abs(b) <= 64]) * 2
+        expected = [(oracle(a, b), oracle(a, b)) for a, b in pairs]
+        for _ in range(REPEAT):
+            self.assertEqual(run(pairs), expected)
+
+
 if __name__ == "__main__":
     unittest.main()
