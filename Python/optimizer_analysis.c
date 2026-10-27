@@ -371,6 +371,38 @@ optimize_to_bool(
     return 0;
 }
 
+/* For COMPARE_OP: true if both operands are records of one type, known or
+ * as recorded while tracing (then guarded here). */
+static bool
+grail_same_record_operands(JitOptContext *ctx, _PyUOpInstruction *this_instr,
+                           JitOptRef left, JitOptRef right)
+{
+    PyTypeObject *lt = sym_has_type(left) ? sym_get_type(left)
+                                          : sym_get_probable_type(left);
+    PyTypeObject *rt = sym_has_type(right) ? sym_get_type(right)
+                                           : sym_get_probable_type(right);
+    if (lt == NULL || lt != rt || !_PyGrail_IsRecordTypeFast(lt)) {
+        return false;
+    }
+    if ((!sym_has_type(left) || !sym_has_type(right)) &&
+        lt->tp_version_tag == 0 && !PyUnstable_Type_AssignVersionTag(lt)) {
+        return false;
+    }
+    _PyBloomFilter *dependencies = ctx->dependencies;
+    if (!sym_has_type(left)) {
+        ADD_OP(_GUARD_NOS_OBJ_TYPE_VERSION, 0, lt->tp_version_tag);
+        sym_set_type(left, lt);
+        watch_type(lt, dependencies);
+    }
+    if (!sym_has_type(right)) {
+        ADD_OP(_GUARD_TYPE_VERSION, 0, lt->tp_version_tag);
+        sym_set_type(right, lt);
+        sym_set_type_version(right, lt->tp_version_tag);
+        watch_type(lt, dependencies);
+    }
+    return true;
+}
+
 /* For COMPARE_OP: true if one operand is an exact float and the other a
  * compact int, known or as recorded while tracing (then guarded here).
  * Mixed float/int comparisons do not specialize in tier 1. */

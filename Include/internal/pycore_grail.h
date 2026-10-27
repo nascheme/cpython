@@ -115,6 +115,8 @@ _PyGrail_RecordFieldCount(PyObject *record)
 PyAPI_FUNC(PyObject *) _PyGrail_RecordWithValues(PyObject *obj,
                                                  PyObject *const *values);
 PyAPI_FUNC(Py_ssize_t) _PyGrail_FieldIndex(PyTypeObject *type, PyObject *name);
+/* a == b for two records of the same type: 1, 0, or -1 with an error. */
+PyAPI_FUNC(int) _PyGrail_RecordEqual(PyObject *a, PyObject *b);
 PyAPI_FUNC(PyObject *) _PyGrail_RecordFromStackRefsStealOnSuccess(PyTypeObject *,
                                                                 _PyStackRef *, Py_ssize_t);
 /* The same, checking only the fields whose bit is set in check (fields from

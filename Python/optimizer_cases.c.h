@@ -3547,6 +3547,11 @@
                 ADD_OP(_COMPARE_OP_FLOAT_INT_CONST, oparg, (uintptr_t)ival);
                 res = sym_new_type(ctx, &PyBool_Type);
             }
+            else if (((oparg >> 5) == Py_EQ || (oparg >> 5) == Py_NE) &&
+                 grail_same_record_operands(ctx, this_instr, left, right)) {
+                ADD_OP(_COMPARE_OP_RECORD, oparg, 0);
+                res = sym_new_type(ctx, &PyBool_Type);
+            }
             else if (float_int_operands(ctx, this_instr, left, right)) {
                 ADD_OP(_COMPARE_OP_FLOAT_INT, oparg,
                    sym_matches_type(left, &PyFloat_Type));
@@ -3646,6 +3651,16 @@
         }
 
         case _COMPARE_OP_FLOAT_INT: {
+            JitOptRef res;
+            res = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(-1);
+            stack_pointer[-2] = res;
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _COMPARE_OP_RECORD: {
             JitOptRef res;
             res = sym_new_not_null(ctx);
             CHECK_STACK_BOUNDS(-1);

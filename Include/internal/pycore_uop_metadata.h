@@ -269,6 +269,7 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_COMPARE_OP_FLOAT] = HAS_ARG_FLAG,
     [_COMPARE_OP_FLOAT_INT_CONST] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
     [_COMPARE_OP_FLOAT_INT] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
+    [_COMPARE_OP_RECORD] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_COMPARE_OP_INT] = HAS_ARG_FLAG,
     [_COMPARE_OP_STR] = HAS_ARG_FLAG,
     [_IS_OP] = HAS_ARG_FLAG,
@@ -2602,6 +2603,15 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
             { -1, -1, -1 },
             { 1, 2, _COMPARE_OP_FLOAT_INT_r21 },
+            { -1, -1, -1 },
+        },
+    },
+    [_COMPARE_OP_RECORD] = {
+        .best = { 2, 2, 2, 2 },
+        .entries = {
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { 1, 2, _COMPARE_OP_RECORD_r21 },
             { -1, -1, -1 },
         },
     },
@@ -4977,6 +4987,7 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_COMPARE_OP_FLOAT_r23] = _COMPARE_OP_FLOAT,
     [_COMPARE_OP_FLOAT_INT_CONST_r21] = _COMPARE_OP_FLOAT_INT_CONST,
     [_COMPARE_OP_FLOAT_INT_r21] = _COMPARE_OP_FLOAT_INT,
+    [_COMPARE_OP_RECORD_r21] = _COMPARE_OP_RECORD,
     [_COMPARE_OP_INT_r23] = _COMPARE_OP_INT,
     [_COMPARE_OP_STR_r23] = _COMPARE_OP_STR,
     [_IS_OP_r03] = _IS_OP,
@@ -5776,6 +5787,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_COMPARE_OP_FLOAT_INT_CONST_r21] = "_COMPARE_OP_FLOAT_INT_CONST_r21",
     [_COMPARE_OP_INT] = "_COMPARE_OP_INT",
     [_COMPARE_OP_INT_r23] = "_COMPARE_OP_INT_r23",
+    [_COMPARE_OP_RECORD] = "_COMPARE_OP_RECORD",
+    [_COMPARE_OP_RECORD_r21] = "_COMPARE_OP_RECORD_r21",
     [_COMPARE_OP_STR] = "_COMPARE_OP_STR",
     [_COMPARE_OP_STR_r23] = "_COMPARE_OP_STR_r23",
     [_CONTAINS_OP] = "_CONTAINS_OP",
@@ -7423,6 +7436,8 @@ int _PyUop_num_popped(int opcode, int oparg)
         case _COMPARE_OP_FLOAT_INT_CONST:
             return 2;
         case _COMPARE_OP_FLOAT_INT:
+            return 2;
+        case _COMPARE_OP_RECORD:
             return 2;
         case _COMPARE_OP_INT:
             return 2;

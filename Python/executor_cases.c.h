@@ -15256,6 +15256,48 @@
             break;
         }
 
+        case _COMPARE_OP_RECORD_r21: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef right;
+            _PyStackRef left;
+            _PyStackRef res;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            oparg = CURRENT_OPARG();
+            right = _stack_item_1;
+            left = _stack_item_0;
+            stack_pointer[0] = left;
+            stack_pointer[1] = right;
+            stack_pointer += 2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            int eq = _PyGrail_RecordEqual(PyStackRef_AsPyObjectBorrow(left),
+                PyStackRef_AsPyObjectBorrow(right));
+            _PyStackRef tmp = right;
+            right = PyStackRef_NULL;
+            stack_pointer[-1] = right;
+            PyStackRef_CLOSE(tmp);
+            tmp = left;
+            left = PyStackRef_NULL;
+            stack_pointer[-2] = left;
+            PyStackRef_CLOSE(tmp);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            stack_pointer += -2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            if (eq < 0) {
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_ERROR();
+            }
+            res = eq != ((oparg >> 5) == Py_NE) ? PyStackRef_True : PyStackRef_False;
+            _tos_cache0 = res;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _COMPARE_OP_INT_r23: {
             CHECK_CURRENT_CACHED_VALUES(2);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());

@@ -3810,6 +3810,16 @@ dummy_func(
             res = (sign_ish & oparg) ? PyStackRef_True : PyStackRef_False;
         }
 
+        /* Tier 2: == or != of two records of the same type, known to the
+         * optimizer, without the rich comparison dispatch. */
+        tier2 op(_COMPARE_OP_RECORD, (left, right -- res)) {
+            int eq = _PyGrail_RecordEqual(PyStackRef_AsPyObjectBorrow(left),
+                                          PyStackRef_AsPyObjectBorrow(right));
+            DECREF_INPUTS();
+            ERROR_IF(eq < 0);
+            res = eq != ((oparg >> 5) == Py_NE) ? PyStackRef_True : PyStackRef_False;
+        }
+
         // Similar to COMPARE_OP_FLOAT
         op(_COMPARE_OP_INT, (left, right -- res, l, r)) {
             PyObject *left_o = PyStackRef_AsPyObjectBorrow(left);

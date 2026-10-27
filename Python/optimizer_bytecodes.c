@@ -1053,6 +1053,12 @@ dummy_func(void) {
             ADD_OP(_COMPARE_OP_FLOAT_INT_CONST, oparg, (uintptr_t)ival);
             res = sym_new_type(ctx, &PyBool_Type);
         }
+        else if (((oparg >> 5) == Py_EQ || (oparg >> 5) == Py_NE) &&
+                 grail_same_record_operands(ctx, this_instr, left, right)) {
+            // Value equality of two records of one type.
+            ADD_OP(_COMPARE_OP_RECORD, oparg, 0);
+            res = sym_new_type(ctx, &PyBool_Type);
+        }
         else if (float_int_operands(ctx, this_instr, left, right)) {
             // A float and an int, such as `x < n` or `0 <= x`.
             ADD_OP(_COMPARE_OP_FLOAT_INT, oparg,

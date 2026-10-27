@@ -1199,6 +1199,66 @@ class DraftStoreTests(unittest.TestCase):
         self.assertEqual(lst, list(range(100)))
 
 
+RECORD_EQ_SOURCE = """
+import grail
+
+@grail.record
+class K:
+    v: int
+    f: float
+
+@grail.record
+class Box:
+    k: K
+    s: str
+
+def count(pairs, n, switch=-1, action=None):
+    eq = ne = 0
+    for i in range(n):
+        if i == switch:
+            action()
+        for a, b in pairs:
+            eq += a == b
+            ne += a != b
+    return eq, ne
+"""
+
+
+class RecordEqualityJitTests(unittest.TestCase):
+    def test_equality(self):
+        ns = {}
+        exec(RECORD_EQ_SOURCE, ns)
+        K, Box, count = ns["K"], ns["Box"], ns["count"]
+        nan = float("nan")
+        n1 = K(1, nan)
+        pairs = [(K(1, 2.0), K(1, 2.0)), (K(1, 2.0), K(2, 2.0)), (n1, n1),
+                 (K(1, nan), K(1, nan)), (K(1, 0.0), K(1, -0.0)),
+                 (K(True, 2.0), K(1, 2.0))]
+        expected = (sum(a == b for a, b in pairs), sum(a != b for a, b in pairs))
+        for _ in range(REPEAT):
+            self.assertEqual(count(pairs, 50), (50 * expected[0], 50 * expected[1]))
+        boxes = [(Box(K(1, 1.0), "a"), Box(K(1, 1.0), "a")),
+                 (Box(K(1, 1.0), "a"), Box(K(1, 1.5), "a"))]
+        for _ in range(REPEAT):
+            self.assertEqual(count(boxes, 50), (50, 50))
+        if tier2_enabled():
+            self.assertIn("_COMPARE_OP_RECORD", executor_uops(count))
+
+    def test_hook_registered_while_hot(self):
+        ns = {}
+        exec(RECORD_EQ_SOURCE, ns)
+        K, count = ns["K"], ns["count"]
+        pairs = [(K(1, 2.0), K(3, 4.0))]
+
+        def register():
+            @grail.eq.impl
+            def _(a: K, b):
+                return True
+
+        self.assertEqual(count(pairs, ITERATIONS, HALF, register),
+                         (HALF, HALF))
+
+
 class DraftGuardTests(unittest.TestCase):
     def test_closed_draft_in_trace(self):
         ns = {}

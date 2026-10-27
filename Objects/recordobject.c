@@ -1457,12 +1457,21 @@ record_default_eq(PyObject *a, PyObject *b)
     if (Py_TYPE(a) != Py_TYPE(b)) {
         return 2;
     }
-    if (Py_EnterRecursiveCall(" in record equality")) {
-        return -1;
+    if (a == b) {
+        return 1;               /* every field is itself */
     }
     RecordObject *x = (RecordObject *)a, *y = (RecordObject *)b;
     const PlanNode *nodes = schema_nodes(Py_TYPE(a));
     int both = x->conforming && y->conforming;
+    /* Conforming fields of exact scalar plans (None, bool, int, float, str,
+     * bytes) compare without recursion. */
+    int recursive = !both;
+    for (Py_ssize_t i = 0; !recursive && i < record_count(a); i++) {
+        recursive = nodes[i].kind != PLAN_EXACT;
+    }
+    if (recursive && Py_EnterRecursiveCall(" in record equality")) {
+        return -1;
+    }
     int result = 1;
     for (Py_ssize_t i = 0; i < record_count(a); i++) {
         PyObject *fa = x->fields[i], *fb = y->fields[i];
@@ -1484,8 +1493,43 @@ record_default_eq(PyObject *a, PyObject *b)
             break;
         }
     }
-    Py_LeaveRecursiveCall();
+    if (recursive) {
+        Py_LeaveRecursiveCall();
+    }
     return result;
+}
+
+static int hook_is_default(PyObject *hook, PyObject *obj, PyCFunction impl);
+static GrailState *record_state(PyObject *obj);
+
+/* For tier-2 _COMPARE_OP_RECORD: a == b for two records of the same type,
+ * as record_richcompare computes it: 1, 0, or -1 with an error. */
+int
+_PyGrail_RecordEqual(PyObject *a, PyObject *b)
+{
+    assert(Py_TYPE(a) == Py_TYPE(b));
+    GrailState *state = record_state(a);
+    if (hook_is_default(state->eq_hook, a, (PyCFunction)_PyGrail_DefaultEq)) {
+        return record_default_eq(a, b);
+    }
+    /* As PyObject_RichCompare: the reflected call, then identity. */
+    PyObject *args[] = {a, b};
+    PyObject *result = PyObject_Vectorcall(state->eq_hook, args, 2, NULL);
+    if (result == Py_NotImplemented) {
+        Py_DECREF(result);
+        PyObject *reflected[] = {b, a};
+        result = PyObject_Vectorcall(state->eq_hook, reflected, 2, NULL);
+        if (result == Py_NotImplemented) {
+            Py_DECREF(result);
+            return a == b;
+        }
+    }
+    if (result == NULL) {
+        return -1;
+    }
+    int truth = PyObject_IsTrue(result);
+    Py_DECREF(result);
+    return truth;
 }
 
 PyObject *
