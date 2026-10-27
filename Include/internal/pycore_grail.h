@@ -162,6 +162,9 @@ typedef struct {
     lenfunc length;
     PyObject *(*borrow)(PyObject *vector, Py_ssize_t index);
     PyObject *(*set)(PyObject *vector, Py_ssize_t index, PyObject *value);
+    /* set for n indices at once; the values are borrowed. */
+    PyObject *(*set_many)(PyObject *vector, Py_ssize_t n,
+                          const Py_ssize_t *indices, PyObject *const *values);
     PyObject *(*append)(PyObject *vector, PyObject *value);
     /* A private transient of a vector, edited without ownership checks and
      * finished once (then only released). */

@@ -806,35 +806,31 @@ vector_draft_build(VectorDraft *v)
     PyObject *base = v->head.base;
     Py_ssize_t ntail = v->tail ? PyList_GET_SIZE(v->tail) : 0;
     if (v->nchanges + ntail < VECTOR_DRAFT_TRANSIENT) {
-        PyObject *result = Py_NewRef(base);
+        Py_ssize_t indices[VECTOR_DRAFT_TRANSIENT];
+        PyObject *values[VECTOR_DRAFT_TRANSIENT];
+        Py_ssize_t n = 0;
         for (Py_ssize_t k = 0; k < v->nchanges; k++) {
             PyObject *value = build(v->changes[k].value);
             if (value == NULL) {
-                goto error;
+                return NULL;
             }
             Py_ssize_t index = v->changes[k].index;
-            if (value == ops->borrow(base, index)) {
-                continue;
-            }
-            Py_SETREF(result, ops->set(result, index, value));
-            if (result == NULL) {
-                return NULL;
+            if (value != ops->borrow(base, index)) {
+                indices[n] = index;
+                values[n++] = value;
             }
         }
-        for (Py_ssize_t k = 0; k < ntail; k++) {
+        PyObject *result = n ? ops->set_many(base, n, indices, values)
+                             : Py_NewRef(base);
+        for (Py_ssize_t k = 0; k < ntail && result != NULL; k++) {
             PyObject *value = build(PyList_GET_ITEM(v->tail, k));
             if (value == NULL) {
-                goto error;
-            }
-            Py_SETREF(result, ops->append(result, value));
-            if (result == NULL) {
+                Py_DECREF(result);
                 return NULL;
             }
+            Py_SETREF(result, ops->append(result, value));
         }
         return result;
-    error:
-        Py_DECREF(result);
-        return NULL;
     }
     PyObject *builder = NULL, *result = NULL;
     int changed = ntail > 0;

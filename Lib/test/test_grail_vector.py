@@ -306,6 +306,15 @@ class VectorTests(unittest.TestCase):
         self.assertIs(c[0], row)
         self.assertIsNot(c[1], b[1])
         self.assertEqual(c, b)
+        mixed = (1, [2])
+        b = PVector([row] * 3 + [mixed] * 2 + [(row, row, mixed), row])
+        c = copy.deepcopy(b)
+        self.assertEqual(c, b)
+        self.assertIs(c[2], row)
+        self.assertIsNot(c[3], mixed)
+        self.assertIs(c[3], c[4])
+        self.assertIs(c[5][2], c[3])
+        self.assertIs(c[6], row)
 
     def test_copy_and_pickle_cycles(self):
         leaf = []

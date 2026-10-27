@@ -202,6 +202,19 @@ class MutateCollectionTest(unittest.TestCase):
             self.assertIs(r[i], v[i])
         self.assertEqual(v[0], Point(0, 0))
 
+    def test_vector_few_changes(self):
+        for n in (3, 33, 100, 1100):
+            v = PVector(range(n))
+            for indices in ((n - 1,), (0, n - 1), (n - 1, n - 2, 0), (1, 1), (0, n // 2)):
+                with mutate(v) as d:
+                    for k, i in enumerate(indices):
+                        d[i] = -k - 1
+                expected = list(range(n))
+                for k, i in enumerate(indices):
+                    expected[i] = -k - 1
+                self.assertEqual(list(finish(d)), expected)
+            self.assertEqual(list(v), list(range(n)))
+
     def test_map(self):
         m = PMap({"a": Point(0, 0), "b": 1})
         with mutate(m) as d:

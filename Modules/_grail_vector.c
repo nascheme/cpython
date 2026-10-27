@@ -316,6 +316,45 @@ vector_set_index(PyObject *op, Py_ssize_t index, PyObject *value)
     return vector_wrap(Py_TYPE(op), root, Py_NewRef(self->tail), self->count, self->shift);
 }
 
+/* A vector with n existing indices replaced (later entries win). When
+ * every index is in the tail, the tail is copied once. */
+static PyObject *
+vector_set_many(PyObject *op, Py_ssize_t n, const Py_ssize_t *indices,
+                PyObject *const *values)
+{
+    Vector *self = (Vector *)op;
+    Py_ssize_t trunk = self->count - PyTuple_GET_SIZE(self->tail);
+    Py_ssize_t k;
+    for (k = 0; k < n; k++) {
+        assert(0 <= indices[k] && indices[k] < self->count);
+        if (indices[k] < trunk) {
+            break;
+        }
+    }
+    if (k < n) {
+        PyObject *result = Py_NewRef(op);
+        for (k = 0; k < n && result != NULL; k++) {
+            Py_SETREF(result, vector_set_index(result, indices[k], values[k]));
+        }
+        return result;
+    }
+    Py_ssize_t size = PyTuple_GET_SIZE(self->tail);
+    PyObject *tail = PyTuple_New(size);
+    if (tail == NULL) {
+        return NULL;
+    }
+    PyObject **items = _PyTuple_ITEMS(tail);
+    memcpy(items, _PyTuple_ITEMS(self->tail), size * sizeof(PyObject *));
+    for (k = 0; k < n; k++) {
+        items[indices[k] - trunk] = values[k];
+    }
+    for (Py_ssize_t i = 0; i < size; i++) {
+        Py_INCREF(items[i]);
+    }
+    return vector_wrap(Py_TYPE(op), Py_XNewRef(self->root), tail,
+                       self->count, self->shift);
+}
+
 static PyObject *
 vector_set(PyObject *op, PyObject *const *args, Py_ssize_t nargs)
 {
@@ -1313,10 +1352,14 @@ deepcopy_is_identity(PyObject *value, int depth)
     if (type != &PyTuple_Type || depth <= 0) {
         return 0;
     }
+    PyObject *prev = NULL;
     for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(value); i++) {
-        if (!deepcopy_is_identity(PyTuple_GET_ITEM(value, i), depth - 1)) {
+        PyObject *item = PyTuple_GET_ITEM(value, i);
+        /* Repeated items ((x,) * n) need checking once. */
+        if (item != prev && !deepcopy_is_identity(item, depth - 1)) {
             return 0;
         }
+        prev = item;
     }
     return 1;
 }
@@ -1374,10 +1417,19 @@ vector_deepcopy(PyObject *op, PyObject *memo)
     if (copied == NULL) {
         goto done;
     }
+    PyObject *same = NULL;          /* the previous item, its own copy */
     for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *item = deepcopy_item(&deepcopy, PyTuple_GET_ITEM(contents, i), memo, &changed);
-        if (item == NULL) {
-            goto done;
+        PyObject *value = PyTuple_GET_ITEM(contents, i);
+        PyObject *item;
+        if (value == same || deepcopy_is_identity(value, 16)) {
+            item = Py_NewRef(value);
+            same = value;
+        }
+        else {
+            item = deepcopy_item(&deepcopy, value, memo, &changed);
+            if (item == NULL) {
+                goto done;
+            }
         }
         PyTuple_SET_ITEM(copied, i, item);
     }
@@ -1516,6 +1568,7 @@ module_exec(PyObject *module)
         .length = vector_len,
         .borrow = vector_borrow_item,
         .set = vector_set_index,
+        .set_many = vector_set_many,
         .append = vector_append,
         .builder = draft_builder_new,
         .builder_set = draft_builder_set,
