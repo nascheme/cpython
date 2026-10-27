@@ -13262,3 +13262,34 @@ PyTypeObject PySuper_Type = {
     PyObject_GC_Del,                            /* tp_free */
     .tp_vectorcall = super_vectorcall,
 };
+
+
+/* For isinstance(): whether x.__class__ is certainly type(x) for an
+ * instance x of tp, because attribute access is the generic one and
+ * __class__ is object's data descriptor (which no instance attribute
+ * shadows). */
+int
+_PyType_HasDefaultClassAttr(PyTypeObject *tp)
+{
+    if (tp->tp_getattro != PyObject_GenericGetAttr) {
+        return 0;
+    }
+    PyObject *descr = _PyType_Lookup(tp, &_Py_ID(__class__));
+    return descr != NULL && Py_IS_TYPE(descr, &PyGetSetDescr_Type) &&
+           ((PyGetSetDescrObject *)descr)->d_getset->get == object_get_class;
+}
+
+/* Whether metaclass meta inherits type's __instancecheck__ (or, if
+ * subclass, __subclasscheck__), so that isinstance() and issubclass()
+ * know what calling it does. */
+int
+_PyType_HasTypeInstanceCheck(PyTypeObject *meta, int subclass)
+{
+    PyObject *name = subclass ? &_Py_ID(__subclasscheck__)
+                              : &_Py_ID(__instancecheck__);
+    PyCFunction impl = subclass ? (PyCFunction)type___subclasscheck__
+                                : (PyCFunction)type___instancecheck__;
+    PyObject *descr = _PyType_Lookup(meta, name);
+    return descr != NULL && Py_IS_TYPE(descr, &PyMethodDescr_Type) &&
+           ((PyMethodDescrObject *)descr)->d_method->ml_meth == impl;
+}

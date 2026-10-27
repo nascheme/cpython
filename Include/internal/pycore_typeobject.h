@@ -175,6 +175,10 @@ PyAPI_FUNC(PyObject *) _PyType_BinaryOpDunder(PyTypeObject *tp, int nb_op);
    one. Borrowed (interned). */
 PyAPI_FUNC(PyObject *) _PyType_BinaryOpReflectedDunder(PyTypeObject *tp, int nb_op);
 
+/* For isinstance() and issubclass(); see typeobject.c. */
+extern int _PyType_HasDefaultClassAttr(PyTypeObject *tp);
+extern int _PyType_HasTypeInstanceCheck(PyTypeObject *meta, int subclass);
+
 // Precalculates count of non-unique slots and fills wrapperbase.name_count.
 extern int _PyType_InitSlotDefs(PyInterpreterState *interp);
 
