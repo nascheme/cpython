@@ -44,7 +44,8 @@
 static bool
 has_space_for_executor(PyCodeObject *code, _Py_CODEUNIT *instr)
 {
-    if (code == (PyCodeObject *)&_Py_InitCleanup) {
+    if (code == (PyCodeObject *)&_Py_InitCleanup ||
+        code == (PyCodeObject *)&_Py_BinaryOpCleanup) {
         return false;
     }
     if (instr->op.code == ENTER_EXECUTOR) {

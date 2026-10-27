@@ -482,14 +482,14 @@ class CodeTest(unittest.TestCase):
         def foo():
             pass
 
-        # assert that opcode 127 is invalid
-        self.assertEqual(opname[127], '<127>')
+        # assert that opcode 126 is invalid (127 is EXIT_BINARY_OP_CHECK)
+        self.assertEqual(opname[126], '<126>')
 
-        # change first opcode to 0x7f (=127)
+        # change first opcode to 0x7e (=126)
         foo.__code__ = foo.__code__.replace(
-            co_code=b'\x7f' + foo.__code__.co_code[1:])
+            co_code=b'\x7e' + foo.__code__.co_code[1:])
 
-        msg = "unknown opcode 127"
+        msg = "unknown opcode 126"
         with self.assertRaisesRegex(SystemError, msg):
             foo()
 

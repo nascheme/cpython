@@ -2628,6 +2628,38 @@ _Py_Specialize_BinaryOp(_PyStackRef lhs_st, _PyStackRef rhs_st, _Py_CODEUNIT *in
             break;
     }
 
+    if (Py_TYPE(lhs)->tp_flags & Py_TPFLAGS_HEAPTYPE &&
+        _PyInterpreterState_IsSpecializationEnabled(_PyInterpreterState_GET())) {
+        /* A Python class's operator method, entered directly. The right
+         * operand must be of the same type or an exact int or float: then
+         * the slot would call the method first and nothing else, and a
+         * NotImplemented result only needs the right operand's slot (see
+         * _PyNumber_BinaryOpAfterNotImplemented). */
+        PyTypeObject *tp = Py_TYPE(lhs);
+        PyTypeObject *rtp = Py_TYPE(rhs);
+        PyObject *name = _PyType_BinaryOpDunder(tp, oparg);
+        if (name != NULL &&
+            (rtp == tp || rtp == &PyLong_Type || rtp == &PyFloat_Type)) {
+            unsigned int tp_version;
+            PyObject *descr = _PyType_LookupRefAndVersion(tp, name, &tp_version);
+            if (descr != NULL && Py_TYPE(descr) == &PyFunction_Type && tp_version != 0) {
+                PyCodeObject *fcode = (PyCodeObject *)PyFunction_GET_CODE(descr);
+                uint32_t version;
+                if (function_kind(fcode) == SIMPLE_FUNCTION &&
+                    fcode->co_argcount == 2 &&
+                    (version = function_get_version(descr, BINARY_OP)) != 0) {
+                    _PyBinaryOpPyCache *pycache = (_PyBinaryOpPyCache *)(instr + 1);
+                    write_u32(pycache->type_version, tp_version);
+                    write_u32(pycache->func_version, version);
+                    Py_DECREF(descr);
+                    specialize(instr, BINARY_OP_PY);
+                    return;
+                }
+            }
+            Py_XDECREF(descr);
+        }
+    }
+
     _PyBinaryOpSpecializationDescr *descr;
     if (binary_op_extended_specialization(lhs, rhs, oparg, &descr)) {
         specialize(instr, BINARY_OP_EXTEND);
@@ -3246,3 +3278,41 @@ const struct _PyCode8 _Py_InitCleanup = {
         CACHE, 0, /* RESUME's cache */
     }
 };
+/* Binary operator cleanup, for BINARY_OP_PY: the shim frame's stack holds
+ * the two operands and the operator (a tagged int) below the result of the
+ * Python method, which EXIT_BINARY_OP_CHECK replaces by the rest of the
+ * protocol if it is NotImplemented. Same constraints as _Py_InitCleanup.
+ */
+#ifdef Py_GIL_DISABLED
+static _PyCodeArray binary_op_cleanup_tlbc = {
+    .size = 1,
+    .entries = {(char*) &_Py_BinaryOpCleanup.co_code_adaptive},
+};
+#endif
+
+const struct _PyCode8 _Py_BinaryOpCleanup = {
+    _PyVarObject_HEAD_INIT(&PyCode_Type, 3),
+    .co_consts = (PyObject *)&_Py_SINGLETON(tuple_empty),
+    .co_names = (PyObject *)&_Py_SINGLETON(tuple_empty),
+    .co_exceptiontable = (PyObject *)&_Py_SINGLETON(bytes_empty),
+    .co_flags = CO_OPTIMIZED | CO_NO_MONITORING_EVENTS,
+    .co_localsplusnames = (PyObject *)&_Py_SINGLETON(tuple_empty),
+    .co_localspluskinds = (PyObject *)&_Py_SINGLETON(bytes_empty),
+    .co_filename = &_Py_ID(__binary_op__),
+    .co_name = &_Py_ID(__binary_op__),
+    .co_qualname = &_Py_ID(__binary_op__),
+    .co_linetable = (PyObject *)&no_location,
+    ._co_firsttraceable = 4,
+    .co_stacksize = 4,
+    .co_framesize = 4 + FRAME_SPECIALS_SIZE,
+#ifdef Py_GIL_DISABLED
+    .co_tlbc = &binary_op_cleanup_tlbc,
+#endif
+    .co_code_adaptive = {
+        EXIT_BINARY_OP_CHECK, 0,
+        RETURN_VALUE, 0,
+        RESUME, RESUME_AT_FUNC_START,
+        CACHE, 0, /* RESUME's cache */
+    }
+};
+

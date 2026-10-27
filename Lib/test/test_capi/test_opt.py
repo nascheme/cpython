@@ -4547,9 +4547,13 @@ class TestUopsOptimization(unittest.TestCase):
             def __add__(self, other):
                 return CustomAdder(self.val + other.val)
 
+        class Other:
+            val = 2
+
         def testfunc(n):
+            # Operands of different Python classes are not BINARY_OP_PY.
             a = CustomAdder(1)
-            b = CustomAdder(2)
+            b = Other()
             res = None
             for _ in range(n):
                 res = a + b
@@ -4562,6 +4566,35 @@ class TestUopsOptimization(unittest.TestCase):
         self.assertIn("_BINARY_OP", uops)
         self.assertIn("_POP_TOP_NOP", uops)
         self.assertLessEqual(count_ops(ex, "_POP_TOP"), 2)
+
+    def test_binary_op_py(self):
+        class V:
+            def __init__(self, val):
+                self.val = val
+            def __add__(self, other):
+                if isinstance(other, V):
+                    return V(self.val + other.val)
+                return NotImplemented
+            def __mul__(self, other):
+                return V(self.val * other)
+
+        def testfunc(n):
+            a = V(1)
+            b = V(2)
+            total = 0
+            for _ in range(n):
+                total += (a + b).val + (a * 3).val
+            return total
+
+        res, ex = self._run_with_optimizer(testfunc, TIER2_THRESHOLD)
+        self.assertEqual(res, 6 * TIER2_THRESHOLD)
+        self.assertIsNotNone(ex)
+        uops = get_opnames(ex)
+        self.assertNotIn("_BINARY_OP", uops)
+        self.assertEqual(count_ops(ex, "_BINARY_OP_PY_INIT_CALL"), 2)
+        self.assertEqual(count_ops(ex, "_EXIT_BINARY_OP_CHECK"), 2)
+        with self.assertRaisesRegex(TypeError, r"for \+: 'V' and 'str'"):
+            V(1) + "x"
 
     def test_binary_op_extend_float_long_add_refcount_elimination(self):
         def testfunc(n):

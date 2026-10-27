@@ -580,6 +580,75 @@ dummy_func(void) {
         new_frame = PyJitRef_WrapInvalid(f);
     }
 
+    op(_BINARY_OP_PY_CHECK_FUNC, (type_version/2, func_version/2, left, right -- left, right, func)) {
+        PyTypeObject *tp = sym_get_probable_type(left);
+        PyTypeObject *rtp = sym_get_probable_type(right);
+        PyObject *func_o = NULL;
+        if (tp != NULL && rtp != NULL && tp->tp_version_tag == type_version &&
+            (rtp == tp || rtp == &PyLong_Type || rtp == &PyFloat_Type) &&
+            (rtp->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(rtp))) {
+            PyObject *name = _PyType_BinaryOpDunder(tp, oparg);
+            func_o = name == NULL ? NULL : _PyType_Lookup(tp, name);
+            if (func_o != NULL && !(PyFunction_Check(func_o) &&
+                ((PyFunctionObject *)func_o)->func_version == func_version)) {
+                func_o = NULL;
+            }
+        }
+        if (func_o != NULL) {
+            // The method is a constant while both operand types are: guard
+            // them (type watchers invalidate the executor if the left one
+            // changes) and load it.
+            if (sym_get_type(left) != tp) {
+                ADD_OP(_GUARD_NOS_OBJ_TYPE_VERSION, 0, type_version);
+                sym_set_type(left, tp);
+            }
+            if (sym_get_type(right) != rtp) {
+                ADD_OP(_GUARD_TYPE_VERSION, 0, rtp->tp_version_tag);
+                sym_set_type(right, rtp);
+                sym_set_type_version(right, rtp->tp_version_tag);
+            }
+            watch_type(tp, dependencies);
+            _Py_BloomFilter_Add(dependencies, func_o);
+            ADD_OP(_BINARY_OP_PY_LOAD_FUNC, oparg, (uintptr_t)func_o);
+            func = sym_new_const(ctx, func_o);
+        }
+        else {
+            func = sym_new_not_null(ctx);
+        }
+    }
+
+    op(_BINARY_OP_PY_INIT_CALL, (left, right, func -- new_frame)) {
+        ctx->frame->stack_pointer = stack_pointer - 3;
+        _Py_UOpsAbstractFrame *shim = frame_new(ctx, (PyCodeObject *)&_Py_BinaryOpCleanup, NULL, 0);
+        if (shim == NULL) {
+            break;
+        }
+        shim->stack_pointer[0] = left;
+        shim->stack_pointer[1] = right;
+        shim->stack_pointer[2] = sym_new_not_null(ctx);
+        shim->stack_pointer += 3;
+        ctx->frame = shim;
+        ctx->curr_frame_depth++;
+        assert((this_instr + 1)->opcode == _PUSH_FRAME);
+        _Py_UOpsAbstractFrame *f = frame_new_from_symbol(ctx, func, NULL, 0);
+        if (f == NULL) {
+            break;
+        }
+        f->locals[0] = left;
+        f->locals[1] = right;
+        new_frame = PyJitRef_WrapInvalid(f);
+    }
+
+    op(_EXIT_BINARY_OP_CHECK, (left, right, nb_op, value -- res)) {
+        PyTypeObject *tp = sym_get_type(value);
+        if (tp != NULL && tp != Py_TYPE(Py_NotImplemented)) {
+            res = value;
+        }
+        else {
+            res = sym_new_not_null(ctx);
+        }
+    }
+
     op(_BINARY_OP_SUBSCR_STR_INT, (str_st, sub_st -- res, s, i)) {
         res = sym_new_type(ctx, &PyUnicode_Type);
         s = str_st;
@@ -1621,7 +1690,7 @@ dummy_func(void) {
 
     op(_PUSH_FRAME, (new_frame -- )) {
         SYNC_SP();
-        if (!CURRENT_FRAME_IS_INIT_SHIM()) {
+        if (!CURRENT_FRAME_IS_SHIM()) {
             ctx->frame->stack_pointer = stack_pointer;
         }
         ctx->frame->caller = true;

@@ -54,6 +54,8 @@ int _PyOpcode_num_popped(int opcode, int oparg)  {
             return 2;
         case BINARY_OP_MULTIPLY_INT:
             return 2;
+        case BINARY_OP_PY:
+            return 2;
         case BINARY_OP_SUBSCR_DICT:
             return 2;
         case BINARY_OP_SUBSCR_GETITEM:
@@ -202,6 +204,8 @@ int _PyOpcode_num_popped(int opcode, int oparg)  {
             return 3;
         case ENTER_EXECUTOR:
             return 0;
+        case EXIT_BINARY_OP_CHECK:
+            return 4;
         case EXIT_INIT_CHECK:
             return 1;
         case EXTENDED_ARG:
@@ -555,6 +559,8 @@ int _PyOpcode_num_pushed(int opcode, int oparg)  {
             return 1;
         case BINARY_OP_MULTIPLY_INT:
             return 1;
+        case BINARY_OP_PY:
+            return 0;
         case BINARY_OP_SUBSCR_DICT:
             return 1;
         case BINARY_OP_SUBSCR_GETITEM:
@@ -703,6 +709,8 @@ int _PyOpcode_num_pushed(int opcode, int oparg)  {
             return 1;
         case ENTER_EXECUTOR:
             return 0;
+        case EXIT_BINARY_OP_CHECK:
+            return 1;
         case EXIT_INIT_CHECK:
             return 0;
         case EXTENDED_ARG:
@@ -1120,6 +1128,7 @@ const struct opcode_metadata _PyOpcode_opcode_metadata[267] = {
     [BINARY_OP_INPLACE_ADD_UNICODE] = { true, INSTR_FMT_IXC0000, HAS_LOCAL_FLAG | HAS_EXIT_FLAG | HAS_ERROR_FLAG | HAS_ESCAPES_FLAG },
     [BINARY_OP_MULTIPLY_FLOAT] = { true, INSTR_FMT_IXC0000, HAS_EXIT_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG },
     [BINARY_OP_MULTIPLY_INT] = { true, INSTR_FMT_IXC0000, HAS_EXIT_FLAG },
+    [BINARY_OP_PY] = { true, INSTR_FMT_IBC0000, HAS_ARG_FLAG | HAS_DEOPT_FLAG | HAS_EXIT_FLAG | HAS_ESCAPES_FLAG | HAS_SYNC_SP_FLAG | HAS_NEEDS_GUARD_IP_FLAG | HAS_RECORDS_VALUE_FLAG },
     [BINARY_OP_SUBSCR_DICT] = { true, INSTR_FMT_IXC0000, HAS_DEOPT_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG | HAS_RECORDS_VALUE_FLAG },
     [BINARY_OP_SUBSCR_GETITEM] = { true, INSTR_FMT_IXC0000, HAS_DEOPT_FLAG | HAS_EXIT_FLAG | HAS_SYNC_SP_FLAG | HAS_NEEDS_GUARD_IP_FLAG | HAS_RECORDS_VALUE_FLAG },
     [BINARY_OP_SUBSCR_LIST_INT] = { true, INSTR_FMT_IXC0000, HAS_EXIT_FLAG | HAS_ESCAPES_FLAG },
@@ -1194,6 +1203,7 @@ const struct opcode_metadata _PyOpcode_opcode_metadata[267] = {
     [END_FOR] = { true, INSTR_FMT_IX, HAS_ESCAPES_FLAG | HAS_NO_SAVE_IP_FLAG },
     [END_SEND] = { true, INSTR_FMT_IX, HAS_ESCAPES_FLAG | HAS_PURE_FLAG },
     [ENTER_EXECUTOR] = { true, INSTR_FMT_IB, HAS_ARG_FLAG },
+    [EXIT_BINARY_OP_CHECK] = { true, INSTR_FMT_IX, HAS_ERROR_FLAG | HAS_ESCAPES_FLAG },
     [EXIT_INIT_CHECK] = { true, INSTR_FMT_IX, HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG },
     [EXTENDED_ARG] = { true, INSTR_FMT_IB, HAS_ARG_FLAG },
     [FORMAT_SIMPLE] = { true, INSTR_FMT_IX, HAS_ERROR_FLAG | HAS_ESCAPES_FLAG },
@@ -1378,6 +1388,7 @@ _PyOpcode_macro_expansion[256] = {
     [BINARY_OP_INPLACE_ADD_UNICODE] = { .nuops = 3, .uops = { { _GUARD_TOS_UNICODE, OPARG_SIMPLE, 0 }, { _GUARD_NOS_UNICODE, OPARG_SIMPLE, 0 }, { _BINARY_OP_INPLACE_ADD_UNICODE, OPARG_SIMPLE, 5 } } },
     [BINARY_OP_MULTIPLY_FLOAT] = { .nuops = 5, .uops = { { _GUARD_TOS_FLOAT, OPARG_SIMPLE, 0 }, { _GUARD_NOS_FLOAT, OPARG_SIMPLE, 0 }, { _BINARY_OP_MULTIPLY_FLOAT, OPARG_SIMPLE, 5 }, { _POP_TOP_FLOAT, OPARG_SIMPLE, 5 }, { _POP_TOP_FLOAT, OPARG_SIMPLE, 5 } } },
     [BINARY_OP_MULTIPLY_INT] = { .nuops = 5, .uops = { { _GUARD_TOS_INT, OPARG_SIMPLE, 0 }, { _GUARD_NOS_INT, OPARG_SIMPLE, 0 }, { _BINARY_OP_MULTIPLY_INT, OPARG_SIMPLE, 5 }, { _POP_TOP_INT, OPARG_SIMPLE, 5 }, { _POP_TOP_INT, OPARG_SIMPLE, 5 } } },
+    [BINARY_OP_PY] = { .nuops = 8, .uops = { { _RECORD_NOS, OPARG_SIMPLE, 0 }, { _RECORD_TOS_TYPE, OPARG_SIMPLE, 0 }, { _CHECK_PEP_523, OPARG_SIMPLE, 1 }, { _CHECK_RECURSION_REMAINING, OPARG_SIMPLE, 1 }, { _BINARY_OP_PY_CHECK_FUNC, 2, 1 }, { _BINARY_OP_PY_CHECK_FUNC, OPERAND1_2, 3 }, { _BINARY_OP_PY_INIT_CALL, OPARG_SIMPLE, 5 }, { _PUSH_FRAME, OPARG_SIMPLE, 5 } } },
     [BINARY_OP_SUBSCR_DICT] = { .nuops = 5, .uops = { { _RECORD_NOS_TYPE, OPARG_SIMPLE, 0 }, { _GUARD_NOS_DICT_SUBSCRIPT, OPARG_SIMPLE, 0 }, { _BINARY_OP_SUBSCR_DICT, OPARG_SIMPLE, 5 }, { _POP_TOP, OPARG_SIMPLE, 5 }, { _POP_TOP, OPARG_SIMPLE, 5 } } },
     [BINARY_OP_SUBSCR_GETITEM] = { .nuops = 5, .uops = { { _RECORD_NOS, OPARG_SIMPLE, 0 }, { _CHECK_PEP_523, OPARG_SIMPLE, 5 }, { _BINARY_OP_SUBSCR_CHECK_FUNC, OPARG_SIMPLE, 5 }, { _BINARY_OP_SUBSCR_INIT_CALL, OPARG_SIMPLE, 5 }, { _PUSH_FRAME, OPARG_SIMPLE, 5 } } },
     [BINARY_OP_SUBSCR_LIST_INT] = { .nuops = 5, .uops = { { _GUARD_TOS_INT, OPARG_SIMPLE, 0 }, { _GUARD_NOS_LIST, OPARG_SIMPLE, 0 }, { _BINARY_OP_SUBSCR_LIST_INT, OPARG_SIMPLE, 5 }, { _POP_TOP_INT, OPARG_SIMPLE, 5 }, { _POP_TOP, OPARG_SIMPLE, 5 } } },
@@ -1445,6 +1456,7 @@ _PyOpcode_macro_expansion[256] = {
     [DICT_UPDATE] = { .nuops = 2, .uops = { { _DICT_UPDATE, OPARG_SIMPLE, 0 }, { _POP_TOP, OPARG_SIMPLE, 0 } } },
     [END_FOR] = { .nuops = 1, .uops = { { _END_FOR, OPARG_SIMPLE, 0 } } },
     [END_SEND] = { .nuops = 1, .uops = { { _END_SEND, OPARG_SIMPLE, 0 } } },
+    [EXIT_BINARY_OP_CHECK] = { .nuops = 1, .uops = { { _EXIT_BINARY_OP_CHECK, OPARG_SIMPLE, 0 } } },
     [EXIT_INIT_CHECK] = { .nuops = 1, .uops = { { _EXIT_INIT_CHECK, OPARG_SIMPLE, 0 } } },
     [FORMAT_SIMPLE] = { .nuops = 1, .uops = { { _FORMAT_SIMPLE, OPARG_SIMPLE, 0 } } },
     [FORMAT_WITH_SPEC] = { .nuops = 1, .uops = { { _FORMAT_WITH_SPEC, OPARG_SIMPLE, 0 } } },
@@ -1579,6 +1591,7 @@ const char *_PyOpcode_OpName[267] = {
     [BINARY_OP_INPLACE_ADD_UNICODE] = "BINARY_OP_INPLACE_ADD_UNICODE",
     [BINARY_OP_MULTIPLY_FLOAT] = "BINARY_OP_MULTIPLY_FLOAT",
     [BINARY_OP_MULTIPLY_INT] = "BINARY_OP_MULTIPLY_INT",
+    [BINARY_OP_PY] = "BINARY_OP_PY",
     [BINARY_OP_SUBSCR_DICT] = "BINARY_OP_SUBSCR_DICT",
     [BINARY_OP_SUBSCR_GETITEM] = "BINARY_OP_SUBSCR_GETITEM",
     [BINARY_OP_SUBSCR_LIST_INT] = "BINARY_OP_SUBSCR_LIST_INT",
@@ -1653,6 +1666,7 @@ const char *_PyOpcode_OpName[267] = {
     [END_FOR] = "END_FOR",
     [END_SEND] = "END_SEND",
     [ENTER_EXECUTOR] = "ENTER_EXECUTOR",
+    [EXIT_BINARY_OP_CHECK] = "EXIT_BINARY_OP_CHECK",
     [EXIT_INIT_CHECK] = "EXIT_INIT_CHECK",
     [EXTENDED_ARG] = "EXTENDED_ARG",
     [FORMAT_SIMPLE] = "FORMAT_SIMPLE",
@@ -1856,8 +1870,6 @@ const uint8_t _PyOpcode_Deopt[256] = {
     [124] = 124,
     [125] = 125,
     [126] = 126,
-    [127] = 127,
-    [219] = 219,
     [220] = 220,
     [221] = 221,
     [222] = 222,
@@ -1879,6 +1891,7 @@ const uint8_t _PyOpcode_Deopt[256] = {
     [BINARY_OP_INPLACE_ADD_UNICODE] = BINARY_OP,
     [BINARY_OP_MULTIPLY_FLOAT] = BINARY_OP,
     [BINARY_OP_MULTIPLY_INT] = BINARY_OP,
+    [BINARY_OP_PY] = BINARY_OP,
     [BINARY_OP_SUBSCR_DICT] = BINARY_OP,
     [BINARY_OP_SUBSCR_GETITEM] = BINARY_OP,
     [BINARY_OP_SUBSCR_LIST_INT] = BINARY_OP,
@@ -1953,6 +1966,7 @@ const uint8_t _PyOpcode_Deopt[256] = {
     [END_FOR] = END_FOR,
     [END_SEND] = END_SEND,
     [ENTER_EXECUTOR] = ENTER_EXECUTOR,
+    [EXIT_BINARY_OP_CHECK] = EXIT_BINARY_OP_CHECK,
     [EXIT_INIT_CHECK] = EXIT_INIT_CHECK,
     [EXTENDED_ARG] = EXTENDED_ARG,
     [FORMAT_SIMPLE] = FORMAT_SIMPLE,
@@ -2117,8 +2131,6 @@ const uint8_t _PyOpcode_Deopt[256] = {
     case 124: \
     case 125: \
     case 126: \
-    case 127: \
-    case 219: \
     case 220: \
     case 221: \
     case 222: \

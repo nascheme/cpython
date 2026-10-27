@@ -1377,6 +1377,7 @@ _PyStaticObjects_CheckRefcnt(PyInterpreterState *interp) {
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(__args__));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(__await__));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(__bases__));
+    _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(__binary_op__));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(__bool__));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(__buffer__));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(__build_class__));

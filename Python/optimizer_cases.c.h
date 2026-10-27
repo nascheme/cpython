@@ -1312,6 +1312,118 @@
             break;
         }
 
+        case _GUARD_NOS_OBJ_TYPE_VERSION: {
+            break;
+        }
+
+        case _BINARY_OP_PY_CHECK_FUNC: {
+            JitOptRef right;
+            JitOptRef left;
+            JitOptRef func;
+            right = stack_pointer[-1];
+            left = stack_pointer[-2];
+            uint32_t type_version = (uint32_t)this_instr->operand0;
+            uint32_t func_version = (uint32_t)this_instr->operand1;
+            PyTypeObject *tp = sym_get_probable_type(left);
+            PyTypeObject *rtp = sym_get_probable_type(right);
+            PyObject *func_o = NULL;
+            if (tp != NULL && rtp != NULL && tp->tp_version_tag == type_version &&
+                (rtp == tp || rtp == &PyLong_Type || rtp == &PyFloat_Type) &&
+                (rtp->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(rtp))) {
+                PyObject *name = _PyType_BinaryOpDunder(tp, oparg);
+                func_o = name == NULL ? NULL : _PyType_Lookup(tp, name);
+                if (func_o != NULL && !(PyFunction_Check(func_o) &&
+                                    ((PyFunctionObject *)func_o)->func_version == func_version)) {
+                    func_o = NULL;
+                }
+            }
+            if (func_o != NULL) {
+                if (sym_get_type(left) != tp) {
+                    ADD_OP(_GUARD_NOS_OBJ_TYPE_VERSION, 0, type_version);
+                    sym_set_type(left, tp);
+                }
+                if (sym_get_type(right) != rtp) {
+                    ADD_OP(_GUARD_TYPE_VERSION, 0, rtp->tp_version_tag);
+                    sym_set_type(right, rtp);
+                    sym_set_type_version(right, rtp->tp_version_tag);
+                }
+                watch_type(tp, dependencies);
+                _Py_BloomFilter_Add(dependencies, func_o);
+                ADD_OP(_BINARY_OP_PY_LOAD_FUNC, oparg, (uintptr_t)func_o);
+                func = sym_new_const(ctx, func_o);
+            }
+            else {
+                func = sym_new_not_null(ctx);
+            }
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[0] = func;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _BINARY_OP_PY_LOAD_FUNC: {
+            JitOptRef func;
+            func = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[0] = func;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _BINARY_OP_PY_INIT_CALL: {
+            JitOptRef func;
+            JitOptRef right;
+            JitOptRef left;
+            JitOptRef new_frame;
+            func = stack_pointer[-1];
+            right = stack_pointer[-2];
+            left = stack_pointer[-3];
+            ctx->frame->stack_pointer = stack_pointer - 3;
+            _Py_UOpsAbstractFrame *shim = frame_new(ctx, (PyCodeObject *)&_Py_BinaryOpCleanup, NULL, 0);
+            if (shim == NULL) {
+                break;
+            }
+            shim->stack_pointer[0] = left;
+            shim->stack_pointer[1] = right;
+            shim->stack_pointer[2] = sym_new_not_null(ctx);
+            shim->stack_pointer += 3;
+            ctx->frame = shim;
+            ctx->curr_frame_depth++;
+            assert((this_instr + 1)->opcode == _PUSH_FRAME);
+            _Py_UOpsAbstractFrame *f = frame_new_from_symbol(ctx, func, NULL, 0);
+            if (f == NULL) {
+                break;
+            }
+            f->locals[0] = left;
+            f->locals[1] = right;
+            new_frame = PyJitRef_WrapInvalid(f);
+            CHECK_STACK_BOUNDS(-2);
+            stack_pointer[-3] = new_frame;
+            stack_pointer += -2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _EXIT_BINARY_OP_CHECK: {
+            JitOptRef value;
+            JitOptRef res;
+            value = stack_pointer[-1];
+            PyTypeObject *tp = sym_get_type(value);
+            if (tp != NULL && tp != Py_TYPE(Py_NotImplemented)) {
+                res = value;
+            }
+            else {
+                res = sym_new_not_null(ctx);
+            }
+            CHECK_STACK_BOUNDS(-3);
+            stack_pointer[-4] = res;
+            stack_pointer += -3;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
         case _BINARY_SLICE: {
             JitOptRef container;
             JitOptRef res;
@@ -4408,7 +4520,7 @@
             CHECK_STACK_BOUNDS(-1);
             stack_pointer += -1;
             ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
-            if (!CURRENT_FRAME_IS_INIT_SHIM()) {
+            if (!CURRENT_FRAME_IS_SHIM()) {
                 ctx->frame->stack_pointer = stack_pointer;
             }
             ctx->frame->caller = true;

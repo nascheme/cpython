@@ -135,6 +135,11 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_GUARD_BINARY_OP_EXTEND_RHS] = HAS_EXIT_FLAG,
     [_GUARD_BINARY_OP_EXTEND] = HAS_EXIT_FLAG | HAS_ESCAPES_FLAG,
     [_BINARY_OP_EXTEND] = HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
+    [_GUARD_NOS_OBJ_TYPE_VERSION] = HAS_EXIT_FLAG,
+    [_BINARY_OP_PY_CHECK_FUNC] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ESCAPES_FLAG,
+    [_BINARY_OP_PY_LOAD_FUNC] = HAS_EXIT_FLAG,
+    [_BINARY_OP_PY_INIT_CALL] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
+    [_EXIT_BINARY_OP_CHECK] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_BINARY_SLICE] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_STORE_SLICE] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_BINARY_OP_SUBSCR_LIST_INT] = HAS_EXIT_FLAG | HAS_ESCAPES_FLAG,
@@ -1356,6 +1361,51 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
             { 3, 2, _BINARY_OP_EXTEND_r23 },
             { -1, -1, -1 },
+        },
+    },
+    [_GUARD_NOS_OBJ_TYPE_VERSION] = {
+        .best = { 0, 1, 2, 3 },
+        .entries = {
+            { 2, 0, _GUARD_NOS_OBJ_TYPE_VERSION_r02 },
+            { 2, 1, _GUARD_NOS_OBJ_TYPE_VERSION_r12 },
+            { 2, 2, _GUARD_NOS_OBJ_TYPE_VERSION_r22 },
+            { 3, 3, _GUARD_NOS_OBJ_TYPE_VERSION_r33 },
+        },
+    },
+    [_BINARY_OP_PY_CHECK_FUNC] = {
+        .best = { 2, 2, 2, 2 },
+        .entries = {
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { 3, 2, _BINARY_OP_PY_CHECK_FUNC_r23 },
+            { -1, -1, -1 },
+        },
+    },
+    [_BINARY_OP_PY_LOAD_FUNC] = {
+        .best = { 0, 1, 2, 2 },
+        .entries = {
+            { 3, 0, _BINARY_OP_PY_LOAD_FUNC_r03 },
+            { 3, 1, _BINARY_OP_PY_LOAD_FUNC_r13 },
+            { 3, 2, _BINARY_OP_PY_LOAD_FUNC_r23 },
+            { -1, -1, -1 },
+        },
+    },
+    [_BINARY_OP_PY_INIT_CALL] = {
+        .best = { 3, 3, 3, 3 },
+        .entries = {
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { 1, 3, _BINARY_OP_PY_INIT_CALL_r31 },
+        },
+    },
+    [_EXIT_BINARY_OP_CHECK] = {
+        .best = { 3, 3, 3, 3 },
+        .entries = {
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { 1, 3, _EXIT_BINARY_OP_CHECK_r31 },
         },
     },
     [_BINARY_SLICE] = {
@@ -4329,6 +4379,16 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_GUARD_BINARY_OP_EXTEND_RHS_r33] = _GUARD_BINARY_OP_EXTEND_RHS,
     [_GUARD_BINARY_OP_EXTEND_r22] = _GUARD_BINARY_OP_EXTEND,
     [_BINARY_OP_EXTEND_r23] = _BINARY_OP_EXTEND,
+    [_GUARD_NOS_OBJ_TYPE_VERSION_r02] = _GUARD_NOS_OBJ_TYPE_VERSION,
+    [_GUARD_NOS_OBJ_TYPE_VERSION_r12] = _GUARD_NOS_OBJ_TYPE_VERSION,
+    [_GUARD_NOS_OBJ_TYPE_VERSION_r22] = _GUARD_NOS_OBJ_TYPE_VERSION,
+    [_GUARD_NOS_OBJ_TYPE_VERSION_r33] = _GUARD_NOS_OBJ_TYPE_VERSION,
+    [_BINARY_OP_PY_CHECK_FUNC_r23] = _BINARY_OP_PY_CHECK_FUNC,
+    [_BINARY_OP_PY_LOAD_FUNC_r03] = _BINARY_OP_PY_LOAD_FUNC,
+    [_BINARY_OP_PY_LOAD_FUNC_r13] = _BINARY_OP_PY_LOAD_FUNC,
+    [_BINARY_OP_PY_LOAD_FUNC_r23] = _BINARY_OP_PY_LOAD_FUNC,
+    [_BINARY_OP_PY_INIT_CALL_r31] = _BINARY_OP_PY_INIT_CALL,
+    [_EXIT_BINARY_OP_CHECK_r31] = _EXIT_BINARY_OP_CHECK,
     [_BINARY_SLICE_r31] = _BINARY_SLICE,
     [_STORE_SLICE_r30] = _STORE_SLICE,
     [_BINARY_OP_SUBSCR_LIST_INT_r23] = _BINARY_OP_SUBSCR_LIST_INT,
@@ -5051,6 +5111,14 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_BINARY_OP_MULTIPLY_INT_INPLACE_RIGHT_r03] = "_BINARY_OP_MULTIPLY_INT_INPLACE_RIGHT_r03",
     [_BINARY_OP_MULTIPLY_INT_INPLACE_RIGHT_r13] = "_BINARY_OP_MULTIPLY_INT_INPLACE_RIGHT_r13",
     [_BINARY_OP_MULTIPLY_INT_INPLACE_RIGHT_r23] = "_BINARY_OP_MULTIPLY_INT_INPLACE_RIGHT_r23",
+    [_BINARY_OP_PY_CHECK_FUNC] = "_BINARY_OP_PY_CHECK_FUNC",
+    [_BINARY_OP_PY_CHECK_FUNC_r23] = "_BINARY_OP_PY_CHECK_FUNC_r23",
+    [_BINARY_OP_PY_INIT_CALL] = "_BINARY_OP_PY_INIT_CALL",
+    [_BINARY_OP_PY_INIT_CALL_r31] = "_BINARY_OP_PY_INIT_CALL_r31",
+    [_BINARY_OP_PY_LOAD_FUNC] = "_BINARY_OP_PY_LOAD_FUNC",
+    [_BINARY_OP_PY_LOAD_FUNC_r03] = "_BINARY_OP_PY_LOAD_FUNC_r03",
+    [_BINARY_OP_PY_LOAD_FUNC_r13] = "_BINARY_OP_PY_LOAD_FUNC_r13",
+    [_BINARY_OP_PY_LOAD_FUNC_r23] = "_BINARY_OP_PY_LOAD_FUNC_r23",
     [_BINARY_OP_SUBSCR_CHECK_FUNC] = "_BINARY_OP_SUBSCR_CHECK_FUNC",
     [_BINARY_OP_SUBSCR_CHECK_FUNC_r23] = "_BINARY_OP_SUBSCR_CHECK_FUNC_r23",
     [_BINARY_OP_SUBSCR_DICT] = "_BINARY_OP_SUBSCR_DICT",
@@ -5347,6 +5415,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_END_SEND_r31] = "_END_SEND_r31",
     [_ERROR_POP_N] = "_ERROR_POP_N",
     [_ERROR_POP_N_r00] = "_ERROR_POP_N_r00",
+    [_EXIT_BINARY_OP_CHECK] = "_EXIT_BINARY_OP_CHECK",
+    [_EXIT_BINARY_OP_CHECK_r31] = "_EXIT_BINARY_OP_CHECK_r31",
     [_EXIT_INIT_CHECK] = "_EXIT_INIT_CHECK",
     [_EXIT_INIT_CHECK_r10] = "_EXIT_INIT_CHECK_r10",
     [_EXIT_TRACE] = "_EXIT_TRACE",
@@ -5647,6 +5717,11 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_GUARD_NOS_NULL_r12] = "_GUARD_NOS_NULL_r12",
     [_GUARD_NOS_NULL_r22] = "_GUARD_NOS_NULL_r22",
     [_GUARD_NOS_NULL_r33] = "_GUARD_NOS_NULL_r33",
+    [_GUARD_NOS_OBJ_TYPE_VERSION] = "_GUARD_NOS_OBJ_TYPE_VERSION",
+    [_GUARD_NOS_OBJ_TYPE_VERSION_r02] = "_GUARD_NOS_OBJ_TYPE_VERSION_r02",
+    [_GUARD_NOS_OBJ_TYPE_VERSION_r12] = "_GUARD_NOS_OBJ_TYPE_VERSION_r12",
+    [_GUARD_NOS_OBJ_TYPE_VERSION_r22] = "_GUARD_NOS_OBJ_TYPE_VERSION_r22",
+    [_GUARD_NOS_OBJ_TYPE_VERSION_r33] = "_GUARD_NOS_OBJ_TYPE_VERSION_r33",
     [_GUARD_NOS_OVERFLOWED] = "_GUARD_NOS_OVERFLOWED",
     [_GUARD_NOS_OVERFLOWED_r02] = "_GUARD_NOS_OVERFLOWED_r02",
     [_GUARD_NOS_OVERFLOWED_r12] = "_GUARD_NOS_OVERFLOWED_r12",
@@ -6551,6 +6626,16 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 0;
         case _BINARY_OP_EXTEND:
             return 2;
+        case _GUARD_NOS_OBJ_TYPE_VERSION:
+            return 0;
+        case _BINARY_OP_PY_CHECK_FUNC:
+            return 0;
+        case _BINARY_OP_PY_LOAD_FUNC:
+            return 0;
+        case _BINARY_OP_PY_INIT_CALL:
+            return 3;
+        case _EXIT_BINARY_OP_CHECK:
+            return 4;
         case _BINARY_SLICE:
             return 3;
         case _STORE_SLICE:

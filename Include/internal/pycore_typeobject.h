@@ -163,6 +163,11 @@ typedef int (*_py_validate_type)(PyTypeObject *);
 int _PyType_Validate(PyTypeObject *ty, _py_validate_type validate, unsigned int *tp_version);
 int _PyType_CacheGetItemForSpecialization(PyHeapTypeObject *ht, PyObject *descriptor, uint32_t tp_version);
 
+/* The name of the Python method that binary operator nb_op (an NB_* oparg)
+   of heap type tp calls first, if tp's slot calls it by name and nothing
+   else precedes it; NULL otherwise. Borrowed (interned). */
+PyAPI_FUNC(PyObject *) _PyType_BinaryOpDunder(PyTypeObject *tp, int nb_op);
+
 // Precalculates count of non-unique slots and fills wrapperbase.name_count.
 extern int _PyType_InitSlotDefs(PyInterpreterState *interp);
 

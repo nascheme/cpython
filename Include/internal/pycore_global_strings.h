@@ -100,6 +100,7 @@ struct _Py_global_strings {
         STRUCT_FOR_ID(__args__)
         STRUCT_FOR_ID(__await__)
         STRUCT_FOR_ID(__bases__)
+        STRUCT_FOR_ID(__binary_op__)
         STRUCT_FOR_ID(__bool__)
         STRUCT_FOR_ID(__buffer__)
         STRUCT_FOR_ID(__build_class__)

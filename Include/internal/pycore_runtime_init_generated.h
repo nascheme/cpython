@@ -1375,6 +1375,7 @@ extern "C" {
     INIT_ID(__args__), \
     INIT_ID(__await__), \
     INIT_ID(__bases__), \
+    INIT_ID(__binary_op__), \
     INIT_ID(__bool__), \
     INIT_ID(__buffer__), \
     INIT_ID(__build_class__), \

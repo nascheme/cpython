@@ -80,6 +80,13 @@ typedef struct {
 
 #define INLINE_CACHE_ENTRIES_BINARY_OP CACHE_ENTRIES(_PyBinaryOpCache)
 
+/* BINARY_OP_PY's view of the same cache. */
+typedef struct {
+    _Py_BackoffCounter counter;
+    uint16_t type_version[2];
+    uint16_t func_version[2];
+} _PyBinaryOpPyCache;
+
 typedef struct {
     _Py_BackoffCounter counter;
 } _PyUnpackSequenceCache;
@@ -549,6 +556,7 @@ extern PyObject *_PyInstrumentation_BranchesIterator(PyCodeObject *code);
 struct _PyCode8 _PyCode_DEF(8);
 
 PyAPI_DATA(const struct _PyCode8) _Py_InitCleanup;
+PyAPI_DATA(const struct _PyCode8) _Py_BinaryOpCleanup;
 
 #ifdef Py_GIL_DISABLED
 

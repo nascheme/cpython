@@ -20,6 +20,12 @@ _PyIndex_Check(PyObject *obj)
 PyAPI_FUNC(PyObject *) _PyNumber_PowerNoMod(PyObject *lhs, PyObject *rhs);
 PyAPI_FUNC(PyObject *) _PyNumber_InPlacePowerNoMod(PyObject *lhs, PyObject *rhs);
 
+/* Finish binary operator nb_op (an NB_* oparg) after the left operand's
+   Python method, called directly for BINARY_OP_PY, returned NotImplemented:
+   the right operand is of the same type or an exact int or float. */
+PyAPI_FUNC(PyObject *) _PyNumber_BinaryOpAfterNotImplemented(
+    PyObject *v, PyObject *w, int nb_op);
+
 PyAPI_FUNC(int) _PyObject_HasLen(PyObject *o);
 
 /* === Sequence protocol ================================================ */

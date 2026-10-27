@@ -90,7 +90,8 @@ dump_uop(JitOptContext *ctx, const char *label, int index,
         printf("%4d %s: ", index, label);
         _PyUOpPrint(instr);
         printf("\n");
-        if (get_lltrace() >= 5 && ctx->frame->code != ((PyCodeObject *)&_Py_InitCleanup)) {
+        if (get_lltrace() >= 5 && ctx->frame->code != ((PyCodeObject *)&_Py_InitCleanup) &&
+            ctx->frame->code != ((PyCodeObject *)&_Py_BinaryOpCleanup)) {
             dump_abstract_stack(ctx->frame, stack_pointer);
         }
     }
@@ -234,7 +235,9 @@ is_terminator_uop(const _PyUOpInstruction *uop)
     );
 }
 
-#define CURRENT_FRAME_IS_INIT_SHIM() (ctx->frame->code == ((PyCodeObject *)&_Py_InitCleanup))
+#define CURRENT_FRAME_IS_SHIM() \
+    (ctx->frame->code == ((PyCodeObject *)&_Py_InitCleanup) || \
+     ctx->frame->code == ((PyCodeObject *)&_Py_BinaryOpCleanup))
 
 #define GETLOCAL(idx)          ((ctx->frame->locals[idx]))
 
@@ -321,7 +324,7 @@ static int
 check_stack_bounds(JitOptContext *ctx, JitOptRef *stack_pointer, int offset, int opcode)
 {
     int stack_level = (int)(stack_pointer + (offset) - ctx->frame->stack);
-    int should_check = !CURRENT_FRAME_IS_INIT_SHIM() ||
+    int should_check = !CURRENT_FRAME_IS_SHIM() ||
         (opcode == _RETURN_VALUE) ||
         (opcode == _RETURN_GENERATOR) ||
         (opcode == _YIELD_VALUE);
@@ -584,7 +587,8 @@ _Py_opt_assert_within_stack_bounds(
     _Py_UOpsAbstractFrame *frame, JitOptRef *stack_pointer,
     const char *filename, int lineno
 ) {
-    if (frame->code == ((PyCodeObject *)&_Py_InitCleanup)) {
+    if (frame->code == ((PyCodeObject *)&_Py_InitCleanup) ||
+        frame->code == ((PyCodeObject *)&_Py_BinaryOpCleanup)) {
         return;
     }
     int level = (int)(stack_pointer - frame->stack);
@@ -661,7 +665,7 @@ optimize_uops(
         int oparg = this_instr->oparg;
         opcode = this_instr->opcode;
 
-        if (!CURRENT_FRAME_IS_INIT_SHIM()) {
+        if (!CURRENT_FRAME_IS_SHIM()) {
             stack_pointer = ctx->frame->stack_pointer;
         }
 
@@ -683,7 +687,7 @@ optimize_uops(
         }
         assert(ctx->frame != NULL);
         DUMP_UOPS(ctx, "out", out_ptr, stack_pointer);
-        if (!CURRENT_FRAME_IS_INIT_SHIM() && !ctx->done) {
+        if (!CURRENT_FRAME_IS_SHIM() && !ctx->done) {
             DPRINTF(3, " stack_level %d\n", STACK_LEVEL());
             ctx->frame->stack_pointer = stack_pointer;
             assert(STACK_LEVEL() >= 0);

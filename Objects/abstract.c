@@ -1,6 +1,7 @@
 /* Abstract Object Interface (many thanks to Jim Fulton) */
 
 #include "Python.h"
+#include "opcode.h"               // NB_ADD
 #include "pycore_abstract.h"      // _PyIndex_Check()
 #include "pycore_call.h"          // _PyObject_CallNoArgs()
 #include "pycore_ceval.h"         // _Py_EnterRecursiveCallTstate()
@@ -1005,6 +1006,56 @@ binop_type_error(PyObject *v, PyObject *w, const char *op_name)
                  Py_TYPE(v)->tp_name,
                  Py_TYPE(w)->tp_name);
     return NULL;
+}
+
+PyObject *
+_PyNumber_BinaryOpAfterNotImplemented(PyObject *v, PyObject *w, int nb_op)
+{
+    static const struct {
+        Py_ssize_t slot;
+        const char *name;
+    } ops[] = {
+        [NB_ADD] = {NB_SLOT(nb_add), "+"},
+        [NB_AND] = {NB_SLOT(nb_and), "&"},
+        [NB_FLOOR_DIVIDE] = {NB_SLOT(nb_floor_divide), "//"},
+        [NB_LSHIFT] = {NB_SLOT(nb_lshift), "<<"},
+        [NB_MATRIX_MULTIPLY] = {NB_SLOT(nb_matrix_multiply), "@"},
+        [NB_MULTIPLY] = {NB_SLOT(nb_multiply), "*"},
+        [NB_REMAINDER] = {NB_SLOT(nb_remainder), "%"},
+        [NB_OR] = {NB_SLOT(nb_or), "|"},
+        [NB_RSHIFT] = {NB_SLOT(nb_rshift), ">>"},
+        [NB_SUBTRACT] = {NB_SLOT(nb_subtract), "-"},
+        [NB_TRUE_DIVIDE] = {NB_SLOT(nb_true_divide), "/"},
+        [NB_XOR] = {NB_SLOT(nb_xor), "^"},
+        [NB_INPLACE_ADD] = {NB_SLOT(nb_add), "+="},
+        [NB_INPLACE_AND] = {NB_SLOT(nb_and), "&="},
+        [NB_INPLACE_FLOOR_DIVIDE] = {NB_SLOT(nb_floor_divide), "//="},
+        [NB_INPLACE_LSHIFT] = {NB_SLOT(nb_lshift), "<<="},
+        [NB_INPLACE_MATRIX_MULTIPLY] = {NB_SLOT(nb_matrix_multiply), "@="},
+        [NB_INPLACE_MULTIPLY] = {NB_SLOT(nb_multiply), "*="},
+        [NB_INPLACE_REMAINDER] = {NB_SLOT(nb_remainder), "%="},
+        [NB_INPLACE_OR] = {NB_SLOT(nb_or), "|="},
+        [NB_INPLACE_RSHIFT] = {NB_SLOT(nb_rshift), ">>="},
+        [NB_INPLACE_SUBTRACT] = {NB_SLOT(nb_subtract), "-="},
+        [NB_INPLACE_TRUE_DIVIDE] = {NB_SLOT(nb_true_divide), "/="},
+        [NB_INPLACE_XOR] = {NB_SLOT(nb_xor), "^="},
+    };
+    assert(nb_op >= 0 && nb_op < (int)Py_ARRAY_LENGTH(ops));
+    assert(ops[nb_op].name != NULL);
+    /* As binary_op1 after slotv: the right operand cannot be a subtype of
+       the left one, so its slot comes second. */
+    if (!Py_IS_TYPE(w, Py_TYPE(v)) && Py_TYPE(w)->tp_as_number != NULL) {
+        binaryfunc slotv = NB_BINOP(Py_TYPE(v)->tp_as_number, ops[nb_op].slot);
+        binaryfunc slotw = NB_BINOP(Py_TYPE(w)->tp_as_number, ops[nb_op].slot);
+        if (slotw != NULL && slotw != slotv) {
+            PyObject *x = slotw(v, w);
+            if (x != Py_NotImplemented) {
+                return x;
+            }
+            Py_DECREF(x);
+        }
+    }
+    return binop_type_error(v, w, ops[nb_op].name);
 }
 
 static PyObject *

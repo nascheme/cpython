@@ -639,6 +639,7 @@ dummy_func(
             BINARY_OP_SUBSCR_GETITEM,
             BINARY_OP_INPLACE_ADD_UNICODE,
             BINARY_OP_EXTEND,
+            BINARY_OP_PY,
         };
 
         op(_GUARD_NOS_INT, (left, unused -- left, unused)) {
@@ -1077,6 +1078,94 @@ dummy_func(
 
         macro(BINARY_OP_INPLACE_ADD_UNICODE) =
             _GUARD_TOS_UNICODE + _GUARD_NOS_UNICODE + unused/5 + _BINARY_OP_INPLACE_ADD_UNICODE;
+
+        tier2 op(_GUARD_NOS_OBJ_TYPE_VERSION, (type_version/2, nos, unused -- nos, unused)) {
+            PyTypeObject *tp = Py_TYPE(PyStackRef_AsPyObjectBorrow(nos));
+            EXIT_IF(FT_ATOMIC_LOAD_UINT_RELAXED(tp->tp_version_tag) != type_version);
+        }
+
+        /* A Python class's operator method (__add__ etc.), entered directly.
+         * The left operand's type and the method's code are guarded; the
+         * right operand is of the same type or an exact int or float, so the
+         * slot would call the method first and nothing else (see
+         * _PyType_BinaryOpDunder). A shim frame (_Py_BinaryOpCleanup)
+         * completes the protocol if the method returns NotImplemented.
+         */
+        op(_BINARY_OP_PY_CHECK_FUNC, (type_version/2, func_version/2, left, right -- left, right, func)) {
+            PyTypeObject *tp = Py_TYPE(PyStackRef_AsPyObjectBorrow(left));
+            PyTypeObject *rtp = Py_TYPE(PyStackRef_AsPyObjectBorrow(right));
+            EXIT_IF(FT_ATOMIC_LOAD_UINT32_RELAXED(tp->tp_version_tag) != type_version);
+            EXIT_IF(rtp != tp && rtp != &PyLong_Type && rtp != &PyFloat_Type);
+            PyObject *func_o = _PyType_LookupRef(tp, _PyType_BinaryOpDunder(tp, oparg));
+            if (func_o != NULL && !(PyFunction_Check(func_o) &&
+                ((PyFunctionObject *)func_o)->func_version == func_version &&
+                _PyThreadState_HasStackSpace(tstate,
+                    ((PyCodeObject *)PyFunction_GET_CODE(func_o))->co_framesize +
+                    _Py_BinaryOpCleanup.co_framesize))) {
+                Py_DECREF(func_o);
+                func_o = NULL;
+            }
+            EXIT_IF(func_o == NULL);
+            func = PyStackRef_FromPyObjectSteal(func_o);
+        }
+
+        /* Tier 2, emitted by the optimizer once both operand types are
+         * known: the method is a constant, since changing the type
+         * invalidates the executor.
+         */
+        tier2 op(_BINARY_OP_PY_LOAD_FUNC, (func_o/4, left, right -- left, right, func)) {
+            PyCodeObject *code = (PyCodeObject *)PyFunction_GET_CODE((PyObject *)func_o);
+            EXIT_IF(!_PyThreadState_HasStackSpace(tstate,
+                code->co_framesize + _Py_BinaryOpCleanup.co_framesize));
+            func = PyStackRef_FromPyObjectNew((PyObject *)func_o);
+        }
+
+        /* The method's frame owns both operands; the shim keeps new
+         * references for the NotImplemented case. */
+        op(_BINARY_OP_PY_INIT_CALL, (left, right, func -- new_frame)) {
+            STAT_INC(BINARY_OP, hit);
+            _PyInterpreterFrame *shim = _PyFrame_PushTrampolineUnchecked(
+                tstate, (PyCodeObject *)&_Py_BinaryOpCleanup, 3, frame);
+            assert(_PyFrame_GetBytecode(shim)[0].op.code == EXIT_BINARY_OP_CHECK);
+            shim->localsplus[0] = PyStackRef_DUP(left);
+            shim->localsplus[1] = PyStackRef_DUP(right);
+            shim->localsplus[2] = PyStackRef_TagInt(oparg);
+            _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, func, 2, shim);
+            pushed_frame->localsplus[0] = left;
+            pushed_frame->localsplus[1] = right;
+            INPUTS_DEAD();
+            frame->return_offset = INSTRUCTION_SIZE;
+            /* Account for the shim frame, as for CALL_ALLOC_AND_ENTER_INIT. */
+            tstate->py_recursion_remaining--;
+            new_frame = PyStackRef_Wrap(pushed_frame);
+        }
+
+        macro(BINARY_OP_PY) =
+            _RECORD_NOS +
+            _RECORD_TOS_TYPE +
+            unused/1 +
+            _CHECK_PEP_523 +
+            _CHECK_RECURSION_REMAINING +
+            _BINARY_OP_PY_CHECK_FUNC +
+            _BINARY_OP_PY_INIT_CALL +
+            _PUSH_FRAME;
+
+        inst(EXIT_BINARY_OP_CHECK, (left, right, nb_op, value -- res)) {
+            _PyStackRef result;
+            if (PyStackRef_AsPyObjectBorrow(value) == Py_NotImplemented) {
+                PyObject *res_o = _PyNumber_BinaryOpAfterNotImplemented(
+                    PyStackRef_AsPyObjectBorrow(left),
+                    PyStackRef_AsPyObjectBorrow(right),
+                    (int)PyStackRef_UntagInt(nb_op));
+                result = res_o == NULL ? PyStackRef_NULL : PyStackRef_FromPyObjectSteal(res_o);
+            }
+            else {
+                result = PyStackRef_DUP(value);
+            }
+            DECREF_INPUTS();
+            ERROR_IF(PyStackRef_IsNull(result));
+            res = result;
+        }
 
         specializing op(_SPECIALIZE_BINARY_SLICE, (container, start, stop -- container, start, stop)) {
             // Placeholder until we implement BINARY_SLICE specialization

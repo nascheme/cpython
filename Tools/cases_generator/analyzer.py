@@ -1165,6 +1165,10 @@ def assign_opcodes(
     # This is an historical oddity.
     instmap["BINARY_OP_INPLACE_ADD_UNICODE"] = 3
 
+    # Only in a static shim code object, never in compiled code: placed in
+    # the unused range below RESUME so that other opcodes keep their numbers.
+    instmap["EXIT_BINARY_OP_CHECK"] = 127
+
     instmap["INSTRUMENTED_LINE"] = 253
     instmap["ENTER_EXECUTOR"] = 254
     instmap["TRACE_RECORD"] = 255
@@ -1184,6 +1188,8 @@ def assign_opcodes(
             continue
         if name in instrumented:
             continue
+        if name == "EXIT_BINARY_OP_CHECK":
+            continue  # Pre-defined above HAVE_ARGUMENT
         if inst.properties.oparg:
             has_arg.append(name)
         else:
@@ -1193,7 +1199,8 @@ def assign_opcodes(
     # Instrumented opcodes are at the end of the valid range
     min_internal = instmap["RESUME"] + 1
     min_instrumented = 254 - len(instrumented)
-    assert min_internal + len(specialized) < min_instrumented
+    # Pre-defined names (BINARY_OP_INPLACE_ADD_UNICODE) take no number here.
+    assert min_internal + len(specialized - instmap.keys()) <= min_instrumented
 
     next_opcode = 1
 
