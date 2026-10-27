@@ -2861,14 +2861,57 @@ unicode_fromformat_arg(_PyUnicodeWriter *writer,
                 default:  len = SPRINT(SIZE_SPEC, "d", SIGNED_TYPE); break;   \
             }
 
-        // Outer switch to handle all the sizes/types
-        switch (sizemod) {
-            case F_LONG:     DO_SPRINTS("l", long, unsigned long); break;
-            case F_LONGLONG: DO_SPRINTS("ll", long long, unsigned long long); break;
-            case F_SIZE:     DO_SPRINTS("z", Py_ssize_t, size_t); break;
-            case F_PTRDIFF:  DO_SPRINTS("t", ptrdiff_t, ptrdiff_t); break;
-            case F_INTMAX:   DO_SPRINTS("j", intmax_t, uintmax_t); break;
-            default:         DO_SPRINTS("", int, unsigned int); break;
+        if (*f == 'd' || *f == 'i' || *f == 'u') {
+            /* Decimal: the digits directly, as sprintf would write them. */
+            uintmax_t u;
+            int negative = 0;
+            if (*f == 'u') {
+                switch (sizemod) {
+                    case F_LONG:     u = va_arg(*vargs, unsigned long); break;
+                    case F_LONGLONG: u = va_arg(*vargs, unsigned long long); break;
+                    case F_SIZE:     u = va_arg(*vargs, size_t); break;
+                    case F_PTRDIFF:  u = (size_t)va_arg(*vargs, ptrdiff_t); break;
+                    case F_INTMAX:   u = va_arg(*vargs, uintmax_t); break;
+                    default:         u = va_arg(*vargs, unsigned int); break;
+                }
+            }
+            else {
+                intmax_t v;
+                switch (sizemod) {
+                    case F_LONG:     v = va_arg(*vargs, long); break;
+                    case F_LONGLONG: v = va_arg(*vargs, long long); break;
+                    case F_SIZE:     v = va_arg(*vargs, Py_ssize_t); break;
+                    case F_PTRDIFF:  v = va_arg(*vargs, ptrdiff_t); break;
+                    case F_INTMAX:   v = va_arg(*vargs, intmax_t); break;
+                    default:         v = va_arg(*vargs, int); break;
+                }
+                negative = v < 0;
+                u = negative ? (uintmax_t)0 - (uintmax_t)v : (uintmax_t)v;
+            }
+            char digits[MAX_INTMAX_CHARS];
+            char *end = digits + sizeof(digits);
+            char *q = end;
+            do {
+                *--q = (char)('0' + u % 10);
+                u /= 10;
+            } while (u != 0);
+            if (negative) {
+                *--q = '-';
+            }
+            len = (int)(end - q);
+            memcpy(buffer, q, len);
+            buffer[len] = '\0';
+        }
+        else {
+            // Outer switch to handle all the sizes/types
+            switch (sizemod) {
+                case F_LONG:     DO_SPRINTS("l", long, unsigned long); break;
+                case F_LONGLONG: DO_SPRINTS("ll", long long, unsigned long long); break;
+                case F_SIZE:     DO_SPRINTS("z", Py_ssize_t, size_t); break;
+                case F_PTRDIFF:  DO_SPRINTS("t", ptrdiff_t, ptrdiff_t); break;
+                case F_INTMAX:   DO_SPRINTS("j", intmax_t, uintmax_t); break;
+                default:         DO_SPRINTS("", int, unsigned int); break;
+            }
         }
         #undef SPRINT
         #undef DO_SPRINTS
