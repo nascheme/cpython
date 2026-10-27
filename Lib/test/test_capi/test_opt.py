@@ -5844,7 +5844,9 @@ class TestUopsOptimization(unittest.TestCase):
         self.assertEqual(res, TIER2_THRESHOLD)
         uops = get_opnames(ex)
 
-        self.assertIn("_MAKE_FUNCTION", uops)
+        # _MAKE_FUNCTION_ENV: the module's __name__ and builtins as
+        # operands.
+        self.assertIn("_MAKE_FUNCTION_ENV", uops)
         self.assertEqual(uops.count("_POP_TOP_NOP"), 2)
 
     def test_iter_check_list(self):

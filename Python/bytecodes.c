@@ -5876,6 +5876,24 @@ dummy_func(
 
         macro(MAKE_FUNCTION) = _MAKE_FUNCTION + POP_TOP;
 
+        /* Tier 2: MAKE_FUNCTION with the module name (or NULL) and the
+         * builtins dict of the frame's globals, which the executor watches,
+         * passed as operands instead of looked up on every call. */
+        tier2 op(_MAKE_FUNCTION_ENV, (module_name/4, builtins_dict/4, codeobj_st -- func, co)) {
+            PyObject *codeobj = PyStackRef_AsPyObjectBorrow(codeobj_st);
+            PyFunctionObject *func_obj = (PyFunctionObject *)
+                _PyFunction_NewWithEnv(codeobj, GLOBALS(), NULL,
+                                       module_name, builtins_dict);
+            if (func_obj == NULL) {
+                ERROR_NO_POP();
+            }
+            co = codeobj_st;
+            DEAD(codeobj_st);
+            _PyFunction_SetVersion(
+                func_obj, ((PyCodeObject *)codeobj)->co_version);
+            func = PyStackRef_FromPyObjectSteal((PyObject *)func_obj);
+        }
+
         inst(SET_FUNCTION_ATTRIBUTE, (attr_st, func_in -- func_out)) {
             PyObject *func = PyStackRef_AsPyObjectBorrow(func_in);
             PyObject *attr = PyStackRef_AsPyObjectSteal(attr_st);

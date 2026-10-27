@@ -6,6 +6,8 @@ build; the trace-content checks need the JIT or the uop interpreter.
 import sys
 import unittest
 
+ITERATIONS = 20000
+HALF = ITERATIONS // 2
 REPEAT = 100   # calls of 100 iterations, enough to trace the loops
 
 
@@ -129,6 +131,41 @@ class FloatIntCompareTests(unittest.TestCase):
             self.assertEqual(count(xs, ints), expected)
         if tier2_enabled():
             self.assertIn("_COMPARE_OP_FLOAT_INT", executor_uops(count))
+
+
+class MakeFunctionTests(unittest.TestCase):
+    """Nested functions made in a trace take the module name and builtins
+    of the current globals, also after they change."""
+
+    def test_module_and_builtins(self):
+        import builtins
+        ns = {"__name__": "mod_a", "__builtins__": builtins}
+        exec("""if 1:
+            def make(n, switch, action):
+                out = []
+                for i in range(n):
+                    if i == switch:
+                        action()
+                    def f():
+                        return len("ab")
+                    out.append((f.__module__, f.__builtins__ is BUILTINS, f()))
+                return out
+            """, ns)
+        ns["BUILTINS"] = builtins.__dict__
+        fake = dict(builtins.__dict__)
+        fake["len"] = lambda x: 99
+
+        def change():
+            ns["__name__"] = "mod_b"
+            ns["__builtins__"] = fake
+
+        out = ns["make"](ITERATIONS, HALF, change)
+        self.assertEqual(out[0], ("mod_a", True, 2))
+        self.assertEqual(out[HALF - 1], ("mod_a", True, 2))
+        self.assertEqual(out[HALF], ("mod_b", False, 99))
+        self.assertEqual(out[-1], ("mod_b", False, 99))
+        if tier2_enabled():
+            self.assertIn("_MAKE_FUNCTION_ENV", executor_uops(ns["make"]))
 
 
 if __name__ == "__main__":

@@ -372,6 +372,7 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_CHECK_IS_NOT_PY_CALLABLE_EX] = HAS_EXIT_FLAG,
     [_CALL_FUNCTION_EX_NON_PY_GENERAL] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_MAKE_FUNCTION] = HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
+    [_MAKE_FUNCTION_ENV] = HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_SET_FUNCTION_ATTRIBUTE] = HAS_ARG_FLAG,
     [_RETURN_GENERATOR] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG | HAS_NEEDS_GUARD_IP_FLAG,
     [_BUILD_SLICE] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
@@ -3487,6 +3488,15 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_MAKE_FUNCTION_ENV] = {
+        .best = { 1, 1, 1, 1 },
+        .entries = {
+            { -1, -1, -1 },
+            { 2, 1, _MAKE_FUNCTION_ENV_r12 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
     [_SET_FUNCTION_ATTRIBUTE] = {
         .best = { 0, 1, 2, 3 },
         .entries = {
@@ -4743,6 +4753,7 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_CHECK_IS_NOT_PY_CALLABLE_EX_r33] = _CHECK_IS_NOT_PY_CALLABLE_EX,
     [_CALL_FUNCTION_EX_NON_PY_GENERAL_r31] = _CALL_FUNCTION_EX_NON_PY_GENERAL,
     [_MAKE_FUNCTION_r12] = _MAKE_FUNCTION,
+    [_MAKE_FUNCTION_ENV_r12] = _MAKE_FUNCTION_ENV,
     [_SET_FUNCTION_ATTRIBUTE_r01] = _SET_FUNCTION_ATTRIBUTE,
     [_SET_FUNCTION_ATTRIBUTE_r11] = _SET_FUNCTION_ATTRIBUTE,
     [_SET_FUNCTION_ATTRIBUTE_r21] = _SET_FUNCTION_ATTRIBUTE,
@@ -5988,6 +5999,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_MAKE_CELL_r00] = "_MAKE_CELL_r00",
     [_MAKE_FUNCTION] = "_MAKE_FUNCTION",
     [_MAKE_FUNCTION_r12] = "_MAKE_FUNCTION_r12",
+    [_MAKE_FUNCTION_ENV] = "_MAKE_FUNCTION_ENV",
+    [_MAKE_FUNCTION_ENV_r12] = "_MAKE_FUNCTION_ENV_r12",
     [_MAKE_HEAP_SAFE] = "_MAKE_HEAP_SAFE",
     [_MAKE_HEAP_SAFE_r01] = "_MAKE_HEAP_SAFE_r01",
     [_MAKE_HEAP_SAFE_r11] = "_MAKE_HEAP_SAFE_r11",
@@ -6972,6 +6985,8 @@ int _PyUop_num_popped(int opcode, int oparg)
         case _CALL_FUNCTION_EX_NON_PY_GENERAL:
             return 4;
         case _MAKE_FUNCTION:
+            return 1;
+        case _MAKE_FUNCTION_ENV:
             return 1;
         case _SET_FUNCTION_ATTRIBUTE:
             return 2;

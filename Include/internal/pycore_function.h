@@ -30,6 +30,10 @@ _PyFunction_IsVersionValid(uint32_t version)
 // Exported for external JIT support
 PyAPI_FUNC(uint32_t) _PyFunction_GetVersionForCurrentState(PyFunctionObject *func);
 PyAPI_FUNC(void) _PyFunction_SetVersion(PyFunctionObject *func, uint32_t version);
+PyAPI_FUNC(PyObject *) _PyFunction_NewWithEnv(PyObject *code, PyObject *globals,
+                                              PyObject *qualname,
+                                              PyObject *module_name,
+                                              PyObject *builtins_dict);
 void _PyFunction_ClearCodeByVersion(uint32_t version);
 
 extern PyObject *_Py_set_function_type_params(

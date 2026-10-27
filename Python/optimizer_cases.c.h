@@ -5269,8 +5269,43 @@
             JitOptRef func;
             JitOptRef co;
             codeobj_st = stack_pointer[-1];
+            PyFunctionObject *f = ctx->frame->func;
+            if (f != NULL && PyDict_CheckExact(f->func_globals) &&
+                get_mutations(f->func_globals) < _Py_MAX_ALLOWED_GLOBALS_MODIFICATIONS) {
+                PyObject *globals = f->func_globals;
+                PyObject *name = PyDict_GetItemWithError(globals, &_Py_ID(__name__));
+                PyObject *bmod = name == NULL ? NULL :
+                PyDict_GetItemWithError(globals, &_Py_ID(__builtins__));
+                PyObject *bdict = bmod == NULL ? NULL :
+                PyModule_Check(bmod) ? PyModule_GetDict(bmod) : bmod;
+                if (bdict != NULL && PyDict_Check(bdict)) {
+                    if (!ctx->frame->globals_watched) {
+                        PyDict_Watch(GLOBALS_WATCHER_ID, globals);
+                        _Py_BloomFilter_Add(dependencies, globals);
+                        ctx->frame->globals_watched = true;
+                    }
+                    ADD_OP(_MAKE_FUNCTION_ENV, 0, (uintptr_t)name);
+                    uop_buffer_last(&ctx->out_buffer)->operand1 = (uintptr_t)bdict;
+                }
+                else {
+                    PyErr_Clear();
+                }
+            }
             func = sym_new_type(ctx, &PyFunction_Type);
             co = codeobj_st;
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-1] = func;
+            stack_pointer[0] = co;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _MAKE_FUNCTION_ENV: {
+            JitOptRef func;
+            JitOptRef co;
+            func = sym_new_not_null(ctx);
+            co = sym_new_not_null(ctx);
             CHECK_STACK_BOUNDS(1);
             stack_pointer[-1] = func;
             stack_pointer[0] = co;

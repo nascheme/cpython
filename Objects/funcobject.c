@@ -156,6 +156,16 @@ _PyFunction_FromConstructor(PyFrameConstructor *constr)
 PyObject *
 PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname)
 {
+    return _PyFunction_NewWithEnv(code, globals, qualname, NULL, NULL);
+}
+
+/* As PyFunction_NewWithQualName, with the module name and builtins dict
+ * already looked up in globals (borrowed, both NULL to look them up here:
+ * the tier-2 optimizer passes the values of a watched globals dict). */
+PyObject *
+_PyFunction_NewWithEnv(PyObject *code, PyObject *globals, PyObject *qualname,
+                       PyObject *module_name, PyObject *builtins_dict)
+{
     assert(globals != NULL);
     assert(PyAnyDict_Check(globals));
     _Py_INCREF_DICT(globals);
@@ -190,13 +200,19 @@ PyFunction_NewWithQualName(PyObject *code, PyObject *globals, PyObject *qualname
     // __module__: Use globals['__name__'] if it exists, or NULL.
     PyObject *module;
     PyObject *builtins = NULL;
-    if (PyDict_GetItemRef(globals, &_Py_ID(__name__), &module) < 0) {
-        goto error;
+    if (builtins_dict != NULL) {
+        module = Py_XNewRef(module_name);
+        builtins = builtins_dict;
+        _Py_INCREF_BUILTINS(builtins);
     }
-
-    builtins = _PyDict_LoadBuiltinsFromGlobals(globals);
-    if (builtins == NULL) {
-        goto error;
+    else {
+        if (PyDict_GetItemRef(globals, &_Py_ID(__name__), &module) < 0) {
+            goto error;
+        }
+        builtins = _PyDict_LoadBuiltinsFromGlobals(globals);
+        if (builtins == NULL) {
+            goto error;
+        }
     }
 
     PyFunctionObject *op = PyObject_GC_New(PyFunctionObject, &PyFunction_Type);

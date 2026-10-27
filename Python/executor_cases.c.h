@@ -20650,6 +20650,43 @@
             break;
         }
 
+        case _MAKE_FUNCTION_ENV_r12: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef codeobj_st;
+            _PyStackRef func;
+            _PyStackRef co;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            codeobj_st = _stack_item_0;
+            PyObject *module_name = (PyObject *)CURRENT_OPERAND0_64();
+            PyObject *builtins_dict = (PyObject *)CURRENT_OPERAND1_64();
+            PyObject *codeobj = PyStackRef_AsPyObjectBorrow(codeobj_st);
+            stack_pointer[0] = codeobj_st;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            PyFunctionObject *func_obj = (PyFunctionObject *)
+            _PyFunction_NewWithEnv(codeobj, GLOBALS(), NULL,
+                                       module_name, builtins_dict);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            if (func_obj == NULL) {
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_ERROR();
+            }
+            co = codeobj_st;
+            _PyFunction_SetVersion(
+                                   func_obj, ((PyCodeObject *)codeobj)->co_version);
+            func = PyStackRef_FromPyObjectSteal((PyObject *)func_obj);
+            _tos_cache1 = co;
+            _tos_cache0 = func;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(2);
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _SET_FUNCTION_ATTRIBUTE_r01: {
             CHECK_CURRENT_CACHED_VALUES(0);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
