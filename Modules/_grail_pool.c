@@ -218,6 +218,22 @@ now_ns(void)
     return t;
 }
 
+/* Called from many workers, a function's reference count would be written
+ * by each of them on every call. Deferred reference counting avoids that;
+ * the cost is that the function, and what it captures, is freed by the GC
+ * rather than when its last reference goes. Module-level functions are
+ * deferred already; this matters for nested functions and lambdas. */
+static int
+defer_function(PyObject *func)
+{
+#ifdef Py_GIL_DISABLED
+    if (PyFunction_Check(func)) {
+        return PyUnstable_Object_EnableDeferredRefcount(func);
+    }
+#endif
+    return 0;
+}
+
 /* ---- pool core ---------------------------------------------------------- */
 
 static void
@@ -1198,6 +1214,7 @@ pool_map(PyObject *op, PyObject *const *args, Py_ssize_t nargs, PyObject *kwname
         return PyErr_NoMemory();
     }
     job->refcnt = 1;
+    defer_function(args[0]);
     job->func = Py_NewRef(args[0]);
     job->nargs = nargs - 1;
     job->buffersize = buffersize;
@@ -1582,6 +1599,7 @@ scope_spawn(PyObject *op, PyObject *const *args, Py_ssize_t nargsf,
         PyMem_Free(task);
         return NULL;
     }
+    defer_function(args[0]);
     task->func = Py_NewRef(args[0]);
     task->nargs = nfuncargs;
     for (Py_ssize_t i = 0; i < nfuncargs; i++) {
@@ -1846,6 +1864,19 @@ static PyType_Spec results_spec = {
     results_type_slots
 };
 
+static PyObject *
+pool_defer_refcount(PyObject *module, PyObject *func)
+{
+    return PyBool_FromLong(defer_function(func));
+}
+
+static PyMethodDef pool_module_methods[] = {
+    {"_defer_refcount", pool_defer_refcount, METH_O,
+     "Enable deferred reference counting on a Python function shared by\n"
+     "pool workers; return whether it was newly enabled."},
+    {NULL}
+};
+
 static int
 pool_module_traverse(PyObject *module, visitproc visit, void *arg)
 {
@@ -1901,6 +1932,7 @@ static struct PyModuleDef pool_module = {
     PyModuleDef_HEAD_INIT,
     .m_name = "_grail_pool",
     .m_size = sizeof(PoolState),
+    .m_methods = pool_module_methods,
     .m_slots = pool_module_slots,
     .m_traverse = pool_module_traverse,
     .m_clear = pool_module_clear,

@@ -22,12 +22,13 @@ from _grail_atom import Atom
 from _grail_vector import PVector
 from _grail_numvec import FloatVector, IntVector
 from _grail_pool import Pool
+from ._parallel import pmap, parallel_reduce
 
 backend = _core.backend
 __all__ = ["record", "field", "replace", "generic", "ops", "repr", "eq", "hash",
            "record_fields", "record_values", "is_value_record", "substitutable",
            "PMap", "PSet", "PVector", "FloatVector", "IntVector", "Atom",
-           "Pool", "pool"]
+           "Pool", "pool", "pmap", "parallel_reduce"]
 
 _MISSING = object()
 _Field = _namedtuple("_Field", "default factory")

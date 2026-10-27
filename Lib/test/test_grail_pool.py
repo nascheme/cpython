@@ -476,6 +476,130 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(proc.stdout, "interrupted True\n")
 
 
+class ParallelHelperTests(unittest.TestCase):
+    def setUp(self):
+        self.pool = Pool(4)
+        self.addCleanup(self.pool.shutdown)
+
+    def test_pmap(self):
+        for n in (0, 1, 2, 5, 1000):
+            for chunk in (None, 1, 3, 2000):
+                with self.subTest(n=n, chunk=chunk):
+                    got = grail.pmap(lambda x: x * 2, range(n), chunk=chunk,
+                                     pool=self.pool)
+                    self.assertEqual(got, [x * 2 for x in range(n)])
+        self.assertEqual(grail.pmap(abs, iter([-1, -2])), [1, 2])
+        self.assertEqual(grail.pmap(abs, (-3,)), [3])
+
+    def test_pmap_default_pool(self):
+        self.assertEqual(grail.pmap(abs, [-1, -2, -3]), [1, 2, 3])
+
+    def test_pmap_uses_the_pool_for_slow_items(self):
+        idents = set()
+        def f(x):
+            idents.add(threading.get_ident())
+            spin(1000)
+            return x
+        self.assertEqual(grail.pmap(f, range(40), pool=self.pool), list(range(40)))
+        self.assertGreater(len(idents - {threading.get_ident()}), 1)
+
+    def test_pmap_error(self):
+        def f(x):
+            if x in (30, 700):
+                raise ValueError(x)
+            return x
+        for chunk in (None, 1, 50):
+            with self.assertRaises(ValueError) as cm:
+                grail.pmap(f, range(1000), chunk=chunk, pool=self.pool)
+            self.assertEqual(cm.exception.args, (30,))
+
+    def test_bad_chunk(self):
+        for helper in (lambda **kw: grail.pmap(abs, [1], **kw),
+                       lambda **kw: grail.parallel_reduce(max, max, [1], 0, **kw)):
+            with self.assertRaises(ValueError):
+                helper(chunk=0)
+            with self.assertRaises(TypeError):
+                helper(chunk=1.5)
+
+    def test_parallel_reduce(self):
+        add = lambda a, b: a + b
+        for n in (0, 1, 2, 63, 64, 65, 10000):
+            for chunk in (None, 1, 7):
+                with self.subTest(n=n, chunk=chunk):
+                    got = grail.parallel_reduce(add, add, range(n), 0,
+                                                chunk=chunk, pool=self.pool)
+                    self.assertEqual(got, sum(range(n)))
+        self.assertEqual(grail.parallel_reduce(add, add, [], "init"), "init")
+
+    def test_parallel_reduce_order(self):
+        # Neither fold nor combine is commutative: results stay in order.
+        got = grail.parallel_reduce(lambda acc, x: acc + (x,),
+                                    lambda a, b: a + b,
+                                    range(500), (), chunk=9, pool=self.pool)
+        self.assertEqual(got, tuple(range(500)))
+
+    def test_parallel_reduce_with_pmap_init(self):
+        def fold(m, word):
+            return m.set(word, m.get(word, 0) + 1)
+        def merge(a, b):
+            for k, v in b.items():
+                a = a.set(k, a.get(k, 0) + v)
+            return a
+        words = ["a", "b", "c", "a"] * 1000
+        got = grail.parallel_reduce(fold, merge, words, grail.PMap(), pool=self.pool)
+        self.assertEqual(dict(got), {"a": 2000, "b": 1000, "c": 1000})
+
+    def test_parallel_reduce_deterministic_partition(self):
+        import random
+        rng = random.Random(1)
+        xs = [rng.uniform(-1e10, 1e10) for _ in range(20000)]
+        add = lambda a, b: a + b
+        results = set()
+        for n_threads in (1, 3, 8):
+            with Pool(n_threads) as pool:
+                for _ in range(3):
+                    results.add(grail.parallel_reduce(add, add, xs, 0.0, pool=pool))
+        self.assertEqual(len(results), 1)
+        # The default partition is 64 chunks, folded and then combined as a
+        # balanced tree of adjacent results.
+        size = -(-len(xs) // 64)
+        partial = []
+        for i in range(0, len(xs), size):
+            acc = 0.0
+            for x in xs[i:i + size]:
+                acc += x        # not sum(): it compensates on 3.12+
+            partial.append(acc)
+        while len(partial) > 1:
+            odd = partial[-1:] if len(partial) % 2 else []
+            partial = [partial[i] + partial[i + 1]
+                       for i in range(0, len(partial) - 1, 2)] + odd
+        self.assertEqual(results, {partial[0]})
+
+    def test_parallel_reduce_tree_shape(self):
+        # A non-associative combine shows the tree: 5 chunks of 1.
+        got = grail.parallel_reduce(lambda acc, x: x, lambda a, b: (a, b),
+                                    range(5), None, chunk=1, pool=self.pool)
+        self.assertEqual(got, (((0, 1), (2, 3)), 4))
+
+    def test_parallel_reduce_errors(self):
+        def fold(acc, x):
+            if x == 77:
+                raise KeyError(x)
+            return acc + x
+        with self.assertRaises(KeyError):
+            grail.parallel_reduce(fold, max, range(1000), 0, pool=self.pool)
+        def combine(a, b):
+            raise IndexError
+        with self.assertRaises(IndexError):
+            grail.parallel_reduce(max, combine, range(1000), 0, pool=self.pool)
+
+    def test_helpers_nest_in_tasks(self):
+        def row(y):
+            return sum(grail.pmap(lambda x: x * y, range(50), chunk=5, pool=self.pool))
+        self.assertEqual(grail.pmap(row, range(20), chunk=2, pool=self.pool),
+                         [y * 1225 for y in range(20)])
+
+
 class SharedPoolTests(unittest.TestCase):
     def test_shared_pool(self):
         self.assertIs(grail.pool(), grail.pool())
