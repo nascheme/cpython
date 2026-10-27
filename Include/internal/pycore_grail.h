@@ -153,6 +153,10 @@ _PyGrail_IsKernel(PyObject *obj)
     return Py_TYPE(obj)->tp_dealloc == _PyGrail_KernelDealloc;
 }
 PyAPI_FUNC(PyObject *) _PyGrail_KernelApply(PyObject *, PyObject *, PyObject *);
+/* Tier-2 fused element-wise float arithmetic (see recordobject.c). */
+PyAPI_FUNC(Py_ssize_t) _PyGrail_FloatRecordFieldCount(PyTypeObject *);
+PyAPI_FUNC(PyObject *) _PyGrail_ElementwiseFloat(PyTypeObject *, int, int,
+                                                 PyObject *, PyObject *, PyObject *);
 PyAPI_FUNC(PyObject *) _PyGrail_Substitutable(PyObject *, PyObject *);
 PyAPI_FUNC(PyObject *) _PyGrail_DefaultRepr(PyObject *, PyObject *);
 PyAPI_FUNC(PyObject *) _PyGrail_DefaultEq(PyObject *, PyObject *);

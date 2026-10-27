@@ -263,7 +263,8 @@ class FoldedDispatchTests(unittest.TestCase):
         self.assertEqual(m["loop_known"](ITERATIONS, 1.0, 2.0), ITERATIONS * 9.0)
         uops = executor_uops(m["loop_known"])
         self.assertIn("_GRAIL_CALL_GENERIC_FOLDED", uops)
-        self.assertIn("_GRAIL_BINARY_LOAD_IMPL", uops)
+        # The element-wise implementation is fused (see ElementwiseFusionTests).
+        self.assertTrue({"_GRAIL_BINARY_LOAD_IMPL", "_GRAIL_ELEMENTWISE_FLOAT"} & uops)
         self.assertNotIn("_GRAIL_CALL_GENERIC_SELECT_TIER_TWO", uops)
         self.assertNotIn("_GRAIL_BINARY_CHECK_FUNC", uops)
 
@@ -343,8 +344,8 @@ class TypedFieldTests(unittest.TestCase):
         V, R = m["V"], m["R"]
         self.assertEqual(m["loop"]([R(V(1.0, 2.0), V(3.0, 4.0))]), ITERATIONS * 8.0)
         uops = executor_uops(m["loop"])
-        self.assertIn("_LOAD_ATTR_RECORD_TYPED", uops)
-        self.assertIn("_GRAIL_BINARY_LOAD_IMPL", uops)
+        self.assertTrue({"_LOAD_ATTR_RECORD_TYPED", "_LOAD_ATTR_RECORD_TYPED_BORROW"} & uops)
+        self.assertTrue({"_GRAIL_BINARY_LOAD_IMPL", "_GRAIL_ELEMENTWISE_FLOAT"} & uops)
         self.assertNotIn("_GRAIL_BINARY_CHECK_FUNC", uops)
 
     @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
@@ -489,6 +490,242 @@ class BorrowedFieldTests(unittest.TestCase):
             assert counts["_LOAD_ATTR_RECORD_TYPED"] + counts["_LOAD_ATTR_RECORD"] == 2, counts
         """
         assert_python_ok("-c", code, PYTHON_GRAIL_JIT_BORROW_FIELDS="0")
+
+
+# Element-wise operator implementations fused into _GRAIL_ELEMENTWISE_FLOAT.
+FUSE = """
+import grail
+from grail import ops
+
+@grail.record
+class V:
+    x: float
+    y: float
+
+@grail.record
+class W:
+    x: float
+    y: float
+
+@grail.record
+class P:  # not all float
+    x: float
+    n: int
+
+@ops.add.impl
+def _(a: V, b: V) -> V:
+    return V(a.x + b.x, a.y + b.y)
+
+@ops.sub.impl
+def _(a: V, b: V) -> V:
+    return V(a.x - b.x, a.y - b.y)
+
+@ops.mul.impl
+def _(a: V, k: float) -> V:
+    return V(a.x * k, a.y * k)
+
+@ops.mul.impl
+def _(k: float, a: V) -> V:
+    return V(k * a.x, k * a.y)
+
+# Shapes that must not be fused.
+@ops.add.impl
+def _(a: W, b: W) -> W:
+    return W(a.x + b.x, a.y - b.y)      # different ops
+
+@ops.sub.impl
+def _(a: W, b: W) -> W:
+    return W(a.x - b.y, a.y - b.x)      # crossed fields
+
+@ops.mul.impl
+def _(a: W, k: float) -> W:
+    return W(a.x * k * k, a.y * k)      # nested arithmetic
+
+def ops_loop(n, a, b, k):
+    sx = sy = 0.0
+    for i in range(n):
+        s = (a + b) - b * k + k * a
+        sx += s.x
+        sy += s.y
+    return sx, sy
+
+def w_loop(n, a, b, k):
+    sx = sy = 0.0
+    for i in range(n):
+        s = (a + b) - b * k
+        sx += s.x
+        sy += s.y
+    return sx, sy
+
+def chain(n, a, b, k):
+    # Every intermediate is a unique temporary, so results are reused.
+    for i in range(n):
+        a = (a + b * k) - b * k
+    return a
+
+def from_list(n, vs, b):
+    # Operand types come from a list: guarded, not known.
+    t = 0.0
+    for i in range(n):
+        t += (vs[i % len(vs)] + b).x
+    return t
+
+def build(n, x, y, b):
+    # V(x, y) is a unique temporary whose floats x and y are shared.
+    t = 0.0
+    for i in range(n):
+        t += (V(x, y) + b).x
+    return t
+
+def keep(n, a, b, out):
+    for i in range(n):
+        s = a + b
+        out.append(s)
+        a = s + b
+    return a
+"""
+
+
+def load_fuse():
+    namespace = {"__name__": "grail_jit_fuse"}
+    exec(FUSE, namespace)
+    return namespace
+
+
+def ops_loop_expected(n, ax, ay, bx, by, k):
+    sx = sy = 0.0
+    for _ in range(n):
+        sx += ((ax + bx) - bx * k) + k * ax
+        sy += ((ay + by) - by * k) + k * ay
+    return sx, sy
+
+
+class ElementwiseFusionTests(unittest.TestCase):
+    def test_results(self):
+        m = load_fuse()
+        V, W = m["V"], m["W"]
+        self.assertEqual(m["ops_loop"](ITERATIONS, V(1.5, 2.25), V(0.5, -3.0), 1.25),
+                         ops_loop_expected(ITERATIONS, 1.5, 2.25, 0.5, -3.0, 1.25))
+        # W's implementations are evaluated as written.
+        a, b = W(1.5, 2.25), W(0.5, -3.0)
+        s = W(a.x + b.x, a.y - b.y)
+        t = W(b.x * 1.25 * 1.25, b.y * 1.25)
+        u = W(s.x - t.y, s.y - t.x)
+        self.assertEqual(m["w_loop"](ITERATIONS, a, b, 1.25),
+                         (ITERATIONS * u.x, ITERATIONS * u.y))
+
+    def test_chain_reuses_temporaries(self):
+        m = load_fuse()
+        V = m["V"]
+        a, b = V(1.0, 2.0), V(0.25, 0.5)
+        r = m["chain"](ITERATIONS, a, b, 2.0)
+        x, y = 1.0, 2.0
+        for _ in range(ITERATIONS):
+            x = (x + 0.25 * 2.0) - 0.25 * 2.0
+            y = (y + 0.5 * 2.0) - 0.5 * 2.0
+        self.assertEqual((r.x, r.y), (x, y))
+        self.assertEqual((a.x, a.y, b.x, b.y), (1.0, 2.0, 0.25, 0.5))
+        self.assertEqual(r, V(x, y))
+        self.assertEqual(hash(r), hash(V(x, y)))
+
+    def test_shared_values_unchanged(self):
+        m = load_fuse()
+        V = m["V"]
+        x, y = float("1.5"), float("2.5")
+        b = V(0.25, 0.5)
+        self.assertEqual(m["build"](ITERATIONS, x, y, b), ITERATIONS * 1.75)
+        self.assertEqual((x, y), (1.5, 2.5))
+        out = []
+        a = V(1.0, 1.0)
+        r = m["keep"](100, a, b, out)
+        self.assertEqual(a, V(1.0, 1.0))
+        self.assertEqual(out, [V(1.0 + 0.25 * (2 * i + 1), 1.0 + 0.5 * (2 * i + 1))
+                               for i in range(100)])
+        self.assertEqual(r, V(1.0 + 0.25 * 200, 1.0 + 0.5 * 200))
+        for _ in range(REPEAT):
+            out.clear()
+            m["keep"](100, a, b, out)
+        self.assertEqual(out[-1], V(1.0 + 0.25 * 199, 1.0 + 0.5 * 199))
+
+    def test_polymorphic_and_nonconforming(self):
+        m = load_fuse()
+        V, W = m["V"], m["W"]
+        b = V(1.0, 2.0)
+        self.assertEqual(m["from_list"](ITERATIONS, [V(1.0, 0.0)], b), ITERATIONS * 2.0)
+        # An int field: nonconforming, so the fused uop exits.
+        self.assertEqual(m["from_list"](ITERATIONS, [V(1.0, 0.0), V(3, 0.0)], b),
+                         HALF * 2.0 + HALF * 4.0)
+        self.assertEqual(m["from_list"](ITERATIONS, [V(3, 0.0)], b), ITERATIONS * 4.0)
+        # The other operand a W: its own implementation, or no implementation.
+        with self.assertRaises(TypeError):
+            m["from_list"](ITERATIONS, [V(1.0, 0.0), W(1.0, 0.0)], b)
+        bw = W(1.0, 2.0)
+        self.assertEqual(m["from_list"](ITERATIONS, [W(1.0, 0.0)], bw), ITERATIONS * 2.0)
+
+    def test_global_rebound_while_hot(self):
+        m = load_fuse()
+        V, W = m["V"], m["W"]
+
+        def loop(n, a, b):
+            types = set()
+            for i in range(n):
+                if i == HALF:
+                    m["V"] = W  # the implementations now build W
+                types.add(type(a + b))
+            return types
+
+        self.assertEqual(loop(ITERATIONS, V(1.0, 2.0), V(3.0, 4.0)), {V, W})
+
+    def test_override_while_hot(self):
+        m = load_fuse()
+        V = m["V"]
+
+        def loop(n, a, b):
+            t = 0.0
+            for i in range(n):
+                if i == HALF:
+                    grail.ops.add.override((V, V), lambda a, b: V(a.x * b.x, a.y * b.y))
+                t += (a + b).x
+            return t
+
+        self.assertEqual(loop(ITERATIONS, V(2.0, 1.0), V(3.0, 1.0)),
+                         HALF * 5.0 + HALF * 6.0)
+
+    @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
+    def test_fused_uops(self):
+        m = load_fuse()
+        V, W = m["V"], m["W"]
+        m["ops_loop"](ITERATIONS, V(1.5, 2.25), V(0.5, -3.0), 1.25)
+        counts = executor_uop_counts(m["ops_loop"])
+        self.assertEqual(counts["_GRAIL_ELEMENTWISE_FLOAT"], 5, counts)
+        self.assertEqual(counts["_PUSH_FRAME"], 0, counts)
+        m["w_loop"](ITERATIONS, W(1.5, 2.25), W(0.5, -3.0), 1.25)
+        counts = executor_uop_counts(m["w_loop"])
+        self.assertEqual(counts["_GRAIL_ELEMENTWISE_FLOAT"], 0, counts)
+        self.assertEqual(counts["_PUSH_FRAME"], 3, counts)
+        # Fresh implementations: after the warmup above, the shared + could
+        # get its own function-entry trace, where this loop's trace would stop.
+        m = load_fuse()
+        V = m["V"]
+        m["from_list"](ITERATIONS, [V(1.0, 0.0)], V(1.0, 2.0))
+        counts = executor_uop_counts(m["from_list"])
+        self.assertEqual(counts["_GRAIL_ELEMENTWISE_FLOAT"], 1, counts)
+
+    @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
+    def test_fuse_ablation(self):
+        from test.support.script_helper import assert_python_ok
+        code = f"""if 1:
+            import sys
+            sys.path.insert(0, {repr(__file__.rsplit("/", 1)[0])})
+            from test.test_grail_jit import load_fuse, executor_uop_counts
+            m = load_fuse()
+            V = m["V"]
+            m["ops_loop"](20000, V(1.5, 2.25), V(0.5, -3.0), 1.25)
+            counts = executor_uop_counts(m["ops_loop"])
+            assert counts["_GRAIL_ELEMENTWISE_FLOAT"] == 0, counts
+        """
+        assert_python_ok("-c", code, PYTHON_GRAIL_JIT_FUSE_ELEMENTWISE="0")
+
 
 if __name__ == "__main__":
     unittest.main()

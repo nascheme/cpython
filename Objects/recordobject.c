@@ -773,6 +773,97 @@ done:
     return result;
 }
 
+/* Number of fields of a record type whose plans are all exactly float, or
+ * -1. Plans are frozen, so the tier-2 optimizer can rely on the answer. */
+Py_ssize_t
+_PyGrail_FloatRecordFieldCount(PyTypeObject *type)
+{
+    if (!_PyGrail_IsRecordTypeFast(type)) {
+        return -1;
+    }
+    PyObject *plans = schema_part(type, 1);
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(plans); i++) {
+        if (PyTuple_GET_ITEM(plans, i) != (PyObject *)&PyFloat_Type) {
+            return -1;
+        }
+    }
+    return PyTuple_GET_SIZE(plans);
+}
+
+/* Tier 2: an inlined operator implementation the optimizer recognized as
+ * element-wise float arithmetic on a record type whose fields are all float
+ * (the kinds of the kernels above; scalars are exact floats). The trace
+ * guarantees the operand types and that every record operand conforms, so
+ * each field is computed on doubles exactly as the Python implementation
+ * does. reuse, if not NULL, is a record operand whose only reference the
+ * caller owns: its fields are overwritten (in place for floats nothing
+ * else references) and it is returned, borrowed. Otherwise the result is a
+ * new conforming record. */
+PyObject *
+_PyGrail_ElementwiseFloat(PyTypeObject *type, int op, int kind,
+                          PyObject *a, PyObject *b, PyObject *reuse)
+{
+    assert(Py_IS_TYPE(kind == 2 ? b : a, type));
+    assert(kind == 0 ? Py_IS_TYPE(b, type) :
+           PyFloat_CheckExact(kind == 1 ? b : a));
+    RecordObject *rec = (RecordObject *)(kind == 2 ? b : a);
+    PyObject **x = rec->fields;
+    PyObject **y = kind == 0 ? ((RecordObject *)b)->fields : NULL;
+    double scalar = kind == 1 ? PyFloat_AS_DOUBLE(b) :
+                    kind == 2 ? PyFloat_AS_DOUBLE(a) : 0.0;
+    Py_ssize_t n = record_count((PyObject *)rec);
+    assert(rec->conforming && (y == NULL || ((RecordObject *)b)->conforming));
+    if (reuse != NULL) {
+        assert(reuse == a || reuse == b);
+        assert(Py_IS_TYPE(reuse, type) && _PyObject_IsUniquelyReferenced(reuse));
+        RecordObject *self = (RecordObject *)reuse;
+        for (Py_ssize_t i = 0; i < n; i++) {
+            double field = PyFloat_AS_DOUBLE(x[i]);
+            double partner = y != NULL ? PyFloat_AS_DOUBLE(y[i]) : scalar;
+            double value = kind == 2 ? kernel_double_op(op, partner, field) :
+                                       kernel_double_op(op, field, partner);
+            PyObject *old = self->fields[i];
+            if (_PyObject_IsUniquelyReferenced(old)) {
+                ((PyFloatObject *)old)->ob_fval = value;
+                continue;
+            }
+            PyObject *f = PyFloat_FromDouble(value);
+            if (f == NULL) {
+                /* Fields 0..i-1 changed, but nothing else can see them. */
+                return NULL;
+            }
+            self->fields[i] = f;
+            Py_DECREF(old);  /* referenced elsewhere: not freed */
+        }
+        self->hash_tag = 0;
+        return reuse;
+    }
+    RecordObject *self = record_alloc(type, n);
+    if (self == NULL) {
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < n; i++) {
+        double field = PyFloat_AS_DOUBLE(x[i]);
+        double partner = y != NULL ? PyFloat_AS_DOUBLE(y[i]) : scalar;
+        PyObject *f = PyFloat_FromDouble(kind == 2 ?
+            kernel_double_op(op, partner, field) :
+            kernel_double_op(op, field, partner));
+        if (f == NULL) {
+            for (Py_ssize_t j = 0; j < i; j++) {
+                Py_DECREF(self->fields[j]);
+            }
+            record_free(self, type);
+            _Py_DECREF_TYPE(type);
+            return NULL;
+        }
+        self->fields[i] = f;
+    }
+    /* Every field is a new exact float: conforming by construction. */
+    self->conforming = 1;
+    _PyObject_GC_TRACK(self);
+    return (PyObject *)self;
+}
+
 void
 _PyGrail_KernelDealloc(PyObject *self)
 {

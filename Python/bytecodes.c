@@ -1314,6 +1314,65 @@ dummy_func(
             res = result;
         }
 
+        /* Tier 2, emitted by the optimizer in place of an inlined
+         * BINARY_OP_GRAIL implementation whose body is element-wise float
+         * arithmetic on an all-float record type (oparg: op | kind << 2, as
+         * for the kernels). It checks the exact operand types (the selection
+         * is a constant for them) and that record operands conform. A record
+         * operand that only this stack reference holds is overwritten and
+         * becomes the result.
+         */
+        tier2 op(_GRAIL_ELEMENTWISE_FLOAT, (type/4, left, right -- res, l, r)) {
+            PyObject *left_o = PyStackRef_AsPyObjectBorrow(left);
+            PyObject *right_o = PyStackRef_AsPyObjectBorrow(right);
+            int kind = oparg >> 2;
+            if (kind == 2) {
+                EXIT_IF(!PyFloat_CheckExact(left_o));
+            }
+            else {
+                EXIT_IF(Py_TYPE(left_o) != (PyTypeObject *)type);
+                EXIT_IF(!((RecordObject *)left_o)->conforming);
+            }
+            if (kind == 1) {
+                EXIT_IF(!PyFloat_CheckExact(right_o));
+            }
+            else {
+                EXIT_IF(Py_TYPE(right_o) != (PyTypeObject *)type);
+                EXIT_IF(!((RecordObject *)right_o)->conforming);
+            }
+            PyObject *reuse = NULL;
+            if (kind != 2 && PyStackRef_RefcountOnObject(left) &&
+                _PyObject_IsUniquelyReferenced(left_o)) {
+                reuse = left_o;
+            }
+            else if (kind != 1 && PyStackRef_RefcountOnObject(right) &&
+                     _PyObject_IsUniquelyReferenced(right_o)) {
+                reuse = right_o;
+            }
+            STAT_INC(BINARY_OP, hit);
+            PyObject *res_o = _PyGrail_ElementwiseFloat(
+                (PyTypeObject *)type, oparg & 3, kind, left_o, right_o, reuse);
+            if (res_o == NULL) {
+                ERROR_NO_POP();
+            }
+            if (reuse == left_o) {
+                res = left;
+                l = PyStackRef_NULL;
+                r = right;
+            }
+            else if (reuse == right_o) {
+                res = right;
+                l = left;
+                r = PyStackRef_NULL;
+            }
+            else {
+                res = PyStackRef_FromPyObjectSteal(res_o);
+                l = left;
+                r = right;
+            }
+            INPUTS_DEAD();
+        }
+
         specializing op(_SPECIALIZE_BINARY_SLICE, (container, start, stop -- container, start, stop)) {
             // Placeholder until we implement BINARY_SLICE specialization
             #if ENABLE_SPECIALIZATION
