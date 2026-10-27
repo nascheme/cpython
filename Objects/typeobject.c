@@ -6392,6 +6392,26 @@ _PyType_LookupStackRefAndVersion(PyTypeObject *type, PyObject *name, _PyStackRef
         return entry->version;
     }
 #endif
+#ifndef Py_GIL_DISABLED
+    /* A name built at run time (getattr(obj, "visit_" + kind)) is a new
+     * string each time, so it never matches an entry by identity. Such
+     * names are cached in a second slot chosen by the string's hash and
+     * compared by value. */
+    if (PyUnicode_CheckExact(name) && !PyUnicode_CHECK_INTERNED(name) &&
+        type->tp_version_tag != 0 && MCACHE_CACHEABLE_NAME(name)) {
+        Py_hash_t nh = PyObject_Hash(name);  /* an exact str: cannot fail */
+        entry = &cache->hashtable[
+            MCACHE_HASH(type->tp_version_tag, (size_t)nh ^ ((size_t)nh >> 32))];
+        if (entry->version == type->tp_version_tag &&
+            entry->name != Py_None &&
+            PyUnstable_Unicode_GET_CACHED_HASH(entry->name) == nh &&
+            _PyUnicode_Equal(entry->name, name)) {
+            *out = entry->value ? PyStackRef_FromPyObjectNew(entry->value)
+                                : PyStackRef_NULL;
+            return entry->version;
+        }
+    }
+#endif
     OBJECT_STAT_INC_COND(type_cache_misses, !is_dunder_name(name));
     OBJECT_STAT_INC_COND(type_cache_dunder_misses, is_dunder_name(name));
 

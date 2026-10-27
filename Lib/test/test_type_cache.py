@@ -1,6 +1,7 @@
 """ Tests for the internal type cache in CPython. """
 import collections.abc
 import dis
+import sys
 import unittest
 import warnings
 from test import support
@@ -135,6 +136,33 @@ class TypeCacheTests(unittest.TestCase):
 
         self.assertEqual(type_get_version(Parent), 0)
         self.assertEqual(type_get_version(Child), 0)
+
+    def test_names_built_at_run_time(self):
+        # Names that are new strings each time are cached by value.
+        class Base:
+            def visit_a(self):
+                return "a"
+
+        class C(Base):
+            pass
+
+        def look(obj, kind):
+            name = "visit_" + kind
+            self.assertIsNot(name, sys.intern(name))
+            return getattr(obj, name, None)
+
+        c = C()
+        for _ in range(3):
+            self.assertEqual(look(c, "a")(), "a")
+            self.assertIsNone(look(c, "b"))
+        Base.visit_b = lambda self: "b"
+        C.visit_a = lambda self: "A"
+        for _ in range(3):
+            self.assertEqual(look(c, "a")(), "A")
+            self.assertEqual(look(c, "b")(), "b")
+        del C.visit_a, Base.visit_b
+        self.assertEqual(look(c, "a")(), "a")
+        self.assertIsNone(look(c, "b"))
 
 @support.cpython_only
 class TypeCacheWithSpecializationTests(unittest.TestCase):
