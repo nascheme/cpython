@@ -5,7 +5,9 @@ with the free-threaded build as the primary target.  Values can be shared
 between threads without locks, and the interpreter can rely on their
 immutability when it specializes code.
 
-Only free-threaded builds (`--disable-gil`) are supported.  The Windows build
+The free-threaded build (`--disable-gil`) is the primary target.  The default
+(GIL) build also works, mainly for JIT experiments: record construction,
+registered operators and generic calls are traced in tier 2.  The Windows build
 has not been integrated.
 
 ## What it provides
@@ -39,7 +41,9 @@ The `grail` module provides:
   compare-and-set and an exact-int `add`.
 - **Pool**: `grail.Pool` and the shared `grail.pool()`, a C thread pool
   whose `map` has low per-task overhead (API from Quansight's
-  spinningjenny).
+  spinningjenny), with scoped task spawning (`pool.scope()`,
+  `Scope.spawn`, work stealing) and the `grail.pmap` and
+  `grail.parallel_reduce` helpers (`Lib/grail/_parallel.py`).
 - Introspection: `record_fields`, `record_values`, `is_value_record`,
   `substitutable`.
 
