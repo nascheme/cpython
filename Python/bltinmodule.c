@@ -2058,6 +2058,34 @@ min_max(PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames, int op)
         return NULL;
     }
 
+    /* Two compact ints or floats: the comparison directly. As in the
+       loop below, the second wins only if it compares strictly smaller
+       (min) or larger (max), so a NaN or a tie keeps the first. */
+    if (nargs == 2 && kwnames == NULL) {
+        PyObject *a = args[0], *b = args[1];
+        int second;
+        if (_PyLong_CheckExactAndCompact(a) && _PyLong_CheckExactAndCompact(b)) {
+            Py_ssize_t x = _PyLong_CompactValue((PyLongObject *)a);
+            Py_ssize_t y = _PyLong_CompactValue((PyLongObject *)b);
+            second = op == Py_LT ? y < x : y > x;
+        }
+        else if ((PyFloat_CheckExact(a) || _PyLong_CheckExactAndCompact(a)) &&
+                 (PyFloat_CheckExact(b) || _PyLong_CheckExactAndCompact(b))) {
+            /* Floats, or a float and a compact int, which a double holds
+               exactly. */
+            double x = PyFloat_CheckExact(a) ? PyFloat_AS_DOUBLE(a)
+                : (double)_PyLong_CompactValue((PyLongObject *)a);
+            double y = PyFloat_CheckExact(b) ? PyFloat_AS_DOUBLE(b)
+                : (double)_PyLong_CompactValue((PyLongObject *)b);
+            second = op == Py_LT ? y < x : y > x;
+        }
+        else {
+            goto general;
+        }
+        return Py_NewRef(second ? b : a);
+    }
+  general:
+
     if (kwnames != NULL && !_PyArg_ParseStackAndKeywords(args + nargs, 0, kwnames, _parser,
                                                          &keyfunc, &defaultval)) {
         return NULL;
