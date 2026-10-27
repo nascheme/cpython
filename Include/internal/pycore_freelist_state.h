@@ -35,7 +35,7 @@ extern "C" {
 #  define Py_pymethodobjects_MAXFREELIST 20
 #  define Py_grail_records_MAXSAVESIZE 10   // Largest record (fields) to save
 #  define Py_grail_records_MAXFREELIST 100  // Records of each size to save
-#  define Py_grail_drafts_MAXFREELIST 16    // grail.mutate drafts of each kind
+#  define Py_grail_drafts_MAXFREELIST 100   // grail.mutate drafts of each kind
 #  define Py_grail_vectors_MAXFREELIST 100  // exact grail.PVector objects
 
 // A generic freelist of either PyObjects or other data structures.
