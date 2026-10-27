@@ -254,5 +254,37 @@ class ShiftAndFormatTests(unittest.TestCase):
             ns["fmt"]([("%d", "x")])
 
 
+class ContainsTests(unittest.TestCase):
+    def test_tuple_and_str(self):
+        ns = {}
+        exec("""if 1:
+            def run(xs):
+                out = []
+                for x in xs:
+                    out.append((x in (2, 5, "a", 2.5, None), x not in (7, "b")))
+                return out
+            def chars(cs):
+                return [c in "aeiou" for c in cs]
+            """, ns)
+
+        class Eq:
+            def __eq__(self, other):
+                return other == 5
+            __hash__ = None
+
+        nan = float("nan")
+        xs = [2, 5, 7, "a", "b", 2.5, 2.0, None, True, nan, Eq(), 2**70] * 10
+        from operator import contains
+        expected = [(contains((2, 5, "a", 2.5, None), x),
+                     not contains((7, "b"), x)) for x in xs]
+        for _ in range(REPEAT):
+            self.assertEqual(ns["run"](xs), expected)
+        for _ in range(REPEAT):
+            self.assertEqual(ns["chars"]("hello world"),
+                             [c in "aeiou" for c in "hello world"])
+        with self.assertRaises(TypeError):
+            ns["chars"](["a", 1])
+
+
 if __name__ == "__main__":
     unittest.main()

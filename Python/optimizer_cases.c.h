@@ -3316,6 +3316,44 @@
                 ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
                 break;
             }
+            if (sym_matches_type(right, &PyTuple_Type)) {
+                ADD_OP(_CONTAINS_OP_TUPLE, oparg, 0);
+            }
+            else if (sym_matches_type(right, &PyUnicode_Type)) {
+                ADD_OP(_CONTAINS_OP_STR, oparg, 0);
+            }
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-2] = b;
+            stack_pointer[-1] = l;
+            stack_pointer[0] = r;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _CONTAINS_OP_TUPLE: {
+            JitOptRef b;
+            JitOptRef l;
+            JitOptRef r;
+            b = sym_new_not_null(ctx);
+            l = sym_new_not_null(ctx);
+            r = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-2] = b;
+            stack_pointer[-1] = l;
+            stack_pointer[0] = r;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _CONTAINS_OP_STR: {
+            JitOptRef b;
+            JitOptRef l;
+            JitOptRef r;
+            b = sym_new_not_null(ctx);
+            l = sym_new_not_null(ctx);
+            r = sym_new_not_null(ctx);
             CHECK_STACK_BOUNDS(1);
             stack_pointer[-2] = b;
             stack_pointer[-1] = l;

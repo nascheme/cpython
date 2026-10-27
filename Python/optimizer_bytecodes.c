@@ -865,6 +865,12 @@ dummy_func(void) {
         l = left;
         r = right;
         REPLACE_OPCODE_IF_EVALUATES_PURE(left, right, b);
+        if (sym_matches_type(right, &PyTuple_Type)) {
+            ADD_OP(_CONTAINS_OP_TUPLE, oparg, 0);
+        }
+        else if (sym_matches_type(right, &PyUnicode_Type)) {
+            ADD_OP(_CONTAINS_OP_STR, oparg, 0);
+        }
     }
 
     op(_CONTAINS_OP_SET, (left, right -- b, l, r)) {

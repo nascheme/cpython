@@ -13724,6 +13724,105 @@
             break;
         }
 
+        case _CONTAINS_OP_TUPLE_r23: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef right;
+            _PyStackRef left;
+            _PyStackRef b;
+            _PyStackRef l;
+            _PyStackRef r;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            oparg = CURRENT_OPARG();
+            right = _stack_item_1;
+            left = _stack_item_0;
+            PyObject *el = PyStackRef_AsPyObjectBorrow(left);
+            PyObject *tup = PyStackRef_AsPyObjectBorrow(right);
+            assert(PyTuple_CheckExact(tup));
+            PyTypeObject *et = Py_TYPE(el);
+            int res = 0;
+            for (Py_ssize_t i = 0; res == 0 && i < PyTuple_GET_SIZE(tup); i++) {
+                PyObject *item = PyTuple_GET_ITEM(tup, i);
+                if (item == el) {
+                    res = 1;
+                }
+                else if (Py_TYPE(item) == et && et == &PyLong_Type &&
+                         _PyLong_BothAreCompact((PyLongObject *)item, (PyLongObject *)el)) {
+                    res = _PyLong_CompactValue((PyLongObject *)item) ==
+                    _PyLong_CompactValue((PyLongObject *)el);
+                }
+                else if (Py_TYPE(item) == et && et == &PyUnicode_Type) {
+                    res = _PyUnicode_Equal(item, el);
+                }
+                else {
+                    stack_pointer[0] = left;
+                    stack_pointer[1] = right;
+                    stack_pointer += 2;
+                    ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    res = PyObject_RichCompareBool(item, el, Py_EQ);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                    stack_pointer += -2;
+                }
+            }
+            if (res < 0) {
+                stack_pointer[0] = left;
+                stack_pointer[1] = right;
+                stack_pointer += 2;
+                ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_ERROR();
+            }
+            b = (res ^ oparg) ? PyStackRef_True : PyStackRef_False;
+            l = left;
+            r = right;
+            _tos_cache2 = r;
+            _tos_cache1 = l;
+            _tos_cache0 = b;
+            SET_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _CONTAINS_OP_STR_r23: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef right;
+            _PyStackRef left;
+            _PyStackRef b;
+            _PyStackRef l;
+            _PyStackRef r;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            oparg = CURRENT_OPARG();
+            right = _stack_item_1;
+            left = _stack_item_0;
+            stack_pointer[0] = left;
+            stack_pointer[1] = right;
+            stack_pointer += 2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            int res = PyUnicode_Contains(PyStackRef_AsPyObjectBorrow(right),
+                PyStackRef_AsPyObjectBorrow(left));
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            if (res < 0) {
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_ERROR();
+            }
+            b = (res ^ oparg) ? PyStackRef_True : PyStackRef_False;
+            l = left;
+            r = right;
+            _tos_cache2 = r;
+            _tos_cache1 = l;
+            _tos_cache0 = b;
+            SET_CURRENT_CACHED_VALUES(3);
+            stack_pointer += -2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _GUARD_TOS_ANY_SET_r01: {
             CHECK_CURRENT_CACHED_VALUES(0);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());

@@ -251,6 +251,8 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_COMPARE_OP_STR] = HAS_ARG_FLAG,
     [_IS_OP] = HAS_ARG_FLAG,
     [_CONTAINS_OP] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
+    [_CONTAINS_OP_TUPLE] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
+    [_CONTAINS_OP_STR] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_GUARD_TOS_ANY_SET] = HAS_EXIT_FLAG,
     [_GUARD_TOS_SET] = HAS_EXIT_FLAG,
     [_GUARD_TOS_FROZENSET] = HAS_EXIT_FLAG,
@@ -2399,6 +2401,24 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_CONTAINS_OP_TUPLE] = {
+        .best = { 2, 2, 2, 2 },
+        .entries = {
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { 3, 2, _CONTAINS_OP_TUPLE_r23 },
+            { -1, -1, -1 },
+        },
+    },
+    [_CONTAINS_OP_STR] = {
+        .best = { 2, 2, 2, 2 },
+        .entries = {
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { 3, 2, _CONTAINS_OP_STR_r23 },
+            { -1, -1, -1 },
+        },
+    },
     [_GUARD_TOS_ANY_SET] = {
         .best = { 0, 1, 2, 3 },
         .entries = {
@@ -4513,6 +4533,8 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_IS_OP_r13] = _IS_OP,
     [_IS_OP_r23] = _IS_OP,
     [_CONTAINS_OP_r23] = _CONTAINS_OP,
+    [_CONTAINS_OP_TUPLE_r23] = _CONTAINS_OP_TUPLE,
+    [_CONTAINS_OP_STR_r23] = _CONTAINS_OP_STR,
     [_GUARD_TOS_ANY_SET_r01] = _GUARD_TOS_ANY_SET,
     [_GUARD_TOS_ANY_SET_r11] = _GUARD_TOS_ANY_SET,
     [_GUARD_TOS_ANY_SET_r22] = _GUARD_TOS_ANY_SET,
@@ -5252,6 +5274,10 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_CONTAINS_OP_DICT_r23] = "_CONTAINS_OP_DICT_r23",
     [_CONTAINS_OP_SET] = "_CONTAINS_OP_SET",
     [_CONTAINS_OP_SET_r23] = "_CONTAINS_OP_SET_r23",
+    [_CONTAINS_OP_STR] = "_CONTAINS_OP_STR",
+    [_CONTAINS_OP_STR_r23] = "_CONTAINS_OP_STR_r23",
+    [_CONTAINS_OP_TUPLE] = "_CONTAINS_OP_TUPLE",
+    [_CONTAINS_OP_TUPLE_r23] = "_CONTAINS_OP_TUPLE_r23",
     [_CONVERT_VALUE] = "_CONVERT_VALUE",
     [_CONVERT_VALUE_r11] = "_CONVERT_VALUE_r11",
     [_COPY] = "_COPY",
@@ -6743,6 +6769,10 @@ int _PyUop_num_popped(int opcode, int oparg)
         case _IS_OP:
             return 2;
         case _CONTAINS_OP:
+            return 2;
+        case _CONTAINS_OP_TUPLE:
+            return 2;
+        case _CONTAINS_OP_STR:
             return 2;
         case _GUARD_TOS_ANY_SET:
             return 0;

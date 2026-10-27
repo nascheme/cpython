@@ -3399,6 +3399,53 @@ dummy_func(
             INPUTS_DEAD();
         }
 
+        /* Tier 2, for a container the optimizer knows is an exact tuple:
+         * tuple_contains, comparing exact compact ints and strs inline. */
+        tier2 op(_CONTAINS_OP_TUPLE, (left, right -- b, l, r)) {
+            PyObject *el = PyStackRef_AsPyObjectBorrow(left);
+            PyObject *tup = PyStackRef_AsPyObjectBorrow(right);
+            assert(PyTuple_CheckExact(tup));
+            PyTypeObject *et = Py_TYPE(el);
+            int res = 0;
+            for (Py_ssize_t i = 0; res == 0 && i < PyTuple_GET_SIZE(tup); i++) {
+                PyObject *item = PyTuple_GET_ITEM(tup, i);
+                if (item == el) {
+                    res = 1;
+                }
+                else if (Py_TYPE(item) == et && et == &PyLong_Type &&
+                         _PyLong_BothAreCompact((PyLongObject *)item, (PyLongObject *)el)) {
+                    res = _PyLong_CompactValue((PyLongObject *)item) ==
+                          _PyLong_CompactValue((PyLongObject *)el);
+                }
+                else if (Py_TYPE(item) == et && et == &PyUnicode_Type) {
+                    res = _PyUnicode_Equal(item, el);
+                }
+                else {
+                    res = PyObject_RichCompareBool(item, el, Py_EQ);
+                }
+            }
+            if (res < 0) {
+                ERROR_NO_POP();
+            }
+            b = (res ^ oparg) ? PyStackRef_True : PyStackRef_False;
+            l = left;
+            r = right;
+            INPUTS_DEAD();
+        }
+
+        /* Tier 2, for a container known to be an exact str. */
+        tier2 op(_CONTAINS_OP_STR, (left, right -- b, l, r)) {
+            int res = PyUnicode_Contains(PyStackRef_AsPyObjectBorrow(right),
+                                         PyStackRef_AsPyObjectBorrow(left));
+            if (res < 0) {
+                ERROR_NO_POP();
+            }
+            b = (res ^ oparg) ? PyStackRef_True : PyStackRef_False;
+            l = left;
+            r = right;
+            INPUTS_DEAD();
+        }
+
         specializing op(_SPECIALIZE_CONTAINS_OP, (counter/1, left, right -- left, right)) {
             #if ENABLE_SPECIALIZATION
             if (ADAPTIVE_COUNTER_TRIGGERS(counter)) {
