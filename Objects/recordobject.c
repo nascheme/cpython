@@ -1192,17 +1192,23 @@ record_vectorcall_general(PyObject *callable, PyObject *const *args,
                      type->tp_name, n);
         return NULL;
     }
+    /* values are borrowed (record_finish takes its own references), except
+     * those made by default factories, which are marked in made. */
     PyObject *small[8] = {NULL};
+    char small_made[8] = {0};
     PyObject **values = small;
+    char *made = small_made;
     if (n > (Py_ssize_t)Py_ARRAY_LENGTH(small)) {
-        values = PyMem_Calloc(n, sizeof(PyObject *));
+        values = PyMem_Calloc(n, sizeof(PyObject *) + 1);
         if (values == NULL) {
             return PyErr_NoMemory();
         }
+        made = (char *)(values + n);
     }
     PyObject *result = NULL;
+    int factories = 0;
     for (Py_ssize_t i = 0; i < nargs; i++) {
-        values[i] = Py_NewRef(args[i]);
+        values[i] = args[i];
     }
     if (kwnames != NULL) {
         for (Py_ssize_t k = 0; k < PyTuple_GET_SIZE(kwnames); k++) {
@@ -1219,7 +1225,7 @@ record_vectorcall_general(PyObject *callable, PyObject *const *args,
                 PyErr_Format(PyExc_TypeError, "multiple values for field %R", key);
                 goto done;
             }
-            values[i] = Py_NewRef(args[nargs + k]);
+            values[i] = args[nargs + k];
         }
     }
     for (Py_ssize_t i = 0; i < n; i++) {
@@ -1234,15 +1240,24 @@ record_vectorcall_general(PyObject *callable, PyObject *const *args,
                          PyTuple_GET_ITEM(names, i));
             goto done;
         }
-        values[i] = kind == 2 ? PyObject_CallNoArgs(value) : Py_NewRef(value);
-        if (values[i] == NULL) {
-            goto done;
+        if (kind == 2) {
+            value = PyObject_CallNoArgs(value);
+            if (value == NULL) {
+                goto done;
+            }
+            made[i] = 1;
+            factories = 1;
         }
+        values[i] = value;
     }
     result = record_finish(type, values);
 done:
-    for (Py_ssize_t i = 0; i < n; i++) {
-        Py_XDECREF(values[i]);
+    if (factories) {
+        for (Py_ssize_t i = 0; i < n; i++) {
+            if (made[i]) {
+                Py_DECREF(values[i]);
+            }
+        }
     }
     if (values != small) {
         PyMem_Free(values);
