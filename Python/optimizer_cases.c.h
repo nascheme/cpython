@@ -2969,7 +2969,14 @@
                 ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
                 break;
             }
-            if (oparg & 16) {
+            PyObject *rconst = sym_get_const(ctx, right);
+            if (sym_matches_type(left, &PyFloat_Type) && rconst != NULL &&
+                PyLong_CheckExact(rconst) && _PyLong_IsCompact((PyLongObject *)rconst)) {
+                intptr_t ival = (intptr_t)_PyLong_CompactValue((PyLongObject *)rconst);
+                ADD_OP(_COMPARE_OP_FLOAT_INT_CONST, oparg, (uintptr_t)ival);
+                res = sym_new_type(ctx, &PyBool_Type);
+            }
+            else if (oparg & 16) {
                 res = sym_new_type(ctx, &PyBool_Type);
             }
             else {
@@ -3048,6 +3055,16 @@
             stack_pointer[-1] = l;
             stack_pointer[0] = r;
             stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _COMPARE_OP_FLOAT_INT_CONST: {
+            JitOptRef res;
+            res = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(-1);
+            stack_pointer[-2] = res;
+            stack_pointer += -1;
             ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
             break;
         }

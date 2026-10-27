@@ -766,7 +766,15 @@ dummy_func(void) {
         // Comparison between bytes and str or int is not impacted by this optimization as bytes
         // is not a safe type (due to its ability to raise a warning during comparisons).
         REPLACE_OPCODE_IF_EVALUATES_PURE(left, right, res);
-        if (oparg & 16) {
+        PyObject *rconst = sym_get_const(ctx, right);
+        if (sym_matches_type(left, &PyFloat_Type) && rconst != NULL &&
+            PyLong_CheckExact(rconst) && _PyLong_IsCompact((PyLongObject *)rconst)) {
+            // A float against a constant like 0: compare as doubles.
+            intptr_t ival = (intptr_t)_PyLong_CompactValue((PyLongObject *)rconst);
+            ADD_OP(_COMPARE_OP_FLOAT_INT_CONST, oparg, (uintptr_t)ival);
+            res = sym_new_type(ctx, &PyBool_Type);
+        }
+        else if (oparg & 16) {
             res = sym_new_type(ctx, &PyBool_Type);
         }
         else {

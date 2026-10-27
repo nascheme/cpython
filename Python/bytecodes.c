@@ -3276,6 +3276,17 @@ dummy_func(
             // It's always a bool, so we don't care about oparg & 16.
         }
 
+        /* Tier 2: an exact float compared with a constant compact int,
+         * passed as the operand. A compact int converts to a double
+         * exactly, so this is float_richcompare's result. */
+        tier2 op(_COMPARE_OP_FLOAT_INT_CONST, (ival/4, left, right -- res)) {
+            double dleft = PyFloat_AS_DOUBLE(PyStackRef_AsPyObjectBorrow(left));
+            double dright = (double)(intptr_t)ival;
+            int sign_ish = COMPARISON_BIT(dleft, dright);
+            DECREF_INPUTS();
+            res = (sign_ish & oparg) ? PyStackRef_True : PyStackRef_False;
+        }
+
         // Similar to COMPARE_OP_FLOAT
         op(_COMPARE_OP_INT, (left, right -- res, l, r)) {
             PyObject *left_o = PyStackRef_AsPyObjectBorrow(left);
