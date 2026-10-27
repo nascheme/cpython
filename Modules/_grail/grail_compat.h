@@ -18,6 +18,7 @@
 #ifdef Py_BUILD_CORE
 #  include "internal/pycore_object.h"                // _Py_DECREF_TYPE()
 #  include "internal/pycore_pyatomic_ft_wrappers.h"  // FT_ATOMIC_*
+#  include "internal/pycore_tuple.h"                 // _PyTuple_Recycle()
 #endif
 
 #include <stdint.h>
@@ -87,6 +88,21 @@ grail_popcount32(uint32_t x)
 
 
 /* (a, b), stealing both references; NULL (and both released) on error. */
+/* Before reusing a tuple nothing else references: reset its hash cache
+   and re-track it with the garbage collector. */
+static inline void
+grail_tuple_recycle(PyObject *op)
+{
+#ifdef Py_BUILD_CORE
+    _PyTuple_Recycle(op);
+#else
+    ((PyTupleObject *)op)->ob_hash = -1;
+    if (!PyObject_GC_IsTracked(op)) {
+        PyObject_GC_Track(op);
+    }
+#endif
+}
+
 static inline PyObject *
 grail_tuple_from_pair_steal(PyObject *a, PyObject *b)
 {

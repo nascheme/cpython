@@ -383,6 +383,7 @@ typedef struct {
     GrailHamtObject *root;          /* NULL once exhausted. */
     GrailHamtIteratorState state;   /* Borrowed nodes of root. */
     int kind;
+    PyObject *result;               /* Items: last pair, reused if unshared. */
 } PDSIterator;
 
 static int
@@ -390,6 +391,7 @@ iterator_traverse(PyObject *op, visitproc visit, void *arg)
 {
     Py_VISIT(Py_TYPE(op));
     Py_VISIT(((PDSIterator *)op)->root);
+    Py_VISIT(((PDSIterator *)op)->result);
     return 0;
 }
 
@@ -399,6 +401,7 @@ iterator_dealloc(PyObject *op)
     PyTypeObject *type = Py_TYPE(op);
     PyObject_GC_UnTrack(op);
     Py_XDECREF(((PDSIterator *)op)->root);
+    Py_XDECREF(((PDSIterator *)op)->result);
     type->tp_free(op);
     GRAIL_DECREF_TYPE(type);  // pairs with tp_alloc's per-thread type reference
 }
@@ -441,8 +444,31 @@ iterator_next(PyObject *op)
     case ITER_VALUES:
         return value;
     default:
-        return grail_tuple_from_pair_steal(key, value);
+        break;
     }
+#ifndef Py_GIL_DISABLED
+    /* As dict items iteration: reuse the previous pair if nothing else
+     * holds it (the caller unpacked it). The GIL serializes the check. */
+    PyObject *result = it->result;
+    if (result != NULL && Py_REFCNT(result) == 1) {
+        PyObject *old_key = PyTuple_GET_ITEM(result, 0);
+        PyObject *old_value = PyTuple_GET_ITEM(result, 1);
+        PyTuple_SET_ITEM(result, 0, key);
+        PyTuple_SET_ITEM(result, 1, value);
+        Py_INCREF(result);
+        Py_DECREF(old_key);
+        Py_DECREF(old_value);
+        grail_tuple_recycle(result);
+        return result;
+    }
+    result = grail_tuple_from_pair_steal(key, value);
+    if (result != NULL) {
+        Py_XSETREF(it->result, Py_NewRef(result));
+    }
+    return result;
+#else
+    return grail_tuple_from_pair_steal(key, value);
+#endif
 }
 static PyObject *
 new_iterator(PyObject *op, int kind)

@@ -265,6 +265,29 @@ class MapTests(unittest.TestCase):
         self.assertIn("...", repr(m))
 
 
+class ItemIterationTests(unittest.TestCase):
+    def test_items_pairs(self):
+        m = PMap({i: str(i) for i in range(100)})
+        # Pairs kept by the caller stay intact; unpacked ones may be reused.
+        kept = list(m.items())
+        self.assertEqual(sorted(kept), [(i, str(i)) for i in range(100)])
+        hashes = {}
+        for pair in m.items():
+            hashes[pair[0]] = hash(pair)
+        for k, v in m.items():
+            self.assertEqual(hashes[k], hash((k, v)))
+        seen = set()
+        for pair in m.items():
+            self.assertEqual(hash(pair), hash((pair[0], pair[1])))
+            seen.add(pair)
+        self.assertEqual(seen, set(kept))
+        it = iter(m.items())
+        first = next(it)
+        second = next(it)
+        self.assertIsNot(first, second)
+        self.assertEqual(first, (first[0], str(first[0])))
+
+
 class SetTests(unittest.TestCase):
     def test_basics(self):
         a = PSet([1, 2, 2])
