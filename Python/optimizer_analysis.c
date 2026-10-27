@@ -367,6 +367,44 @@ optimize_to_bool(
     return 0;
 }
 
+/* For COMPARE_OP: true if one operand is an exact float and the other a
+ * compact int, known or as recorded while tracing (then guarded here).
+ * Mixed float/int comparisons do not specialize in tier 1. */
+static bool
+float_int_operands(JitOptContext *ctx, _PyUOpInstruction *this_instr,
+                   JitOptRef left, JitOptRef right)
+{
+    PyTypeObject *lt = sym_has_type(left) ? sym_get_type(left)
+                                          : sym_get_probable_type(left);
+    PyTypeObject *rt = sym_has_type(right) ? sym_get_type(right)
+                                           : sym_get_probable_type(right);
+    bool float_left = lt == &PyFloat_Type && rt == &PyLong_Type;
+    if (!float_left && !(lt == &PyLong_Type && rt == &PyFloat_Type)) {
+        return false;
+    }
+    if (float_left) {
+        if (!sym_has_type(left)) {
+            ADD_OP(_GUARD_NOS_FLOAT, 0, 0);
+            sym_set_type(left, &PyFloat_Type);
+        }
+        if (!sym_is_compact_int(right)) {
+            ADD_OP(_GUARD_TOS_INT, 0, 0);
+            sym_set_compact_int(right);
+        }
+    }
+    else {
+        if (!sym_is_compact_int(left)) {
+            ADD_OP(_GUARD_NOS_INT, 0, 0);
+            sym_set_compact_int(left);
+        }
+        if (!sym_has_type(right)) {
+            ADD_OP(_GUARD_TOS_FLOAT, 0, 0);
+            sym_set_type(right, &PyFloat_Type);
+        }
+    }
+    return true;
+}
+
 static void
 optimize_dict_known_hash(
     JitOptContext *ctx, _PyBloomFilter *dependencies, _PyUOpInstruction *this_instr,

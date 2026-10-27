@@ -786,6 +786,12 @@ dummy_func(void) {
             ADD_OP(_COMPARE_OP_FLOAT_INT_CONST, oparg, (uintptr_t)ival);
             res = sym_new_type(ctx, &PyBool_Type);
         }
+        else if (float_int_operands(ctx, this_instr, left, right)) {
+            // A float and an int, such as `x < n` or `0 <= x`.
+            ADD_OP(_COMPARE_OP_FLOAT_INT, oparg,
+                   sym_matches_type(left, &PyFloat_Type));
+            res = sym_new_type(ctx, &PyBool_Type);
+        }
         else if (oparg & 16) {
             res = sym_new_type(ctx, &PyBool_Type);
         }

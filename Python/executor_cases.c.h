@@ -13465,6 +13465,52 @@
             break;
         }
 
+        case _COMPARE_OP_FLOAT_INT_r21: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef right;
+            _PyStackRef left;
+            _PyStackRef res;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            oparg = CURRENT_OPARG();
+            right = _stack_item_1;
+            left = _stack_item_0;
+            uint16_t float_left = (uint16_t)CURRENT_OPERAND0_16();
+            PyObject *left_o = PyStackRef_AsPyObjectBorrow(left);
+            PyObject *right_o = PyStackRef_AsPyObjectBorrow(right);
+            double dleft, dright;
+            if (float_left) {
+                assert(_PyLong_IsCompact((PyLongObject *)right_o));
+                dleft = PyFloat_AS_DOUBLE(left_o);
+                dright = (double)_PyLong_CompactValue((PyLongObject *)right_o);
+            }
+            else {
+                assert(_PyLong_IsCompact((PyLongObject *)left_o));
+                dleft = (double)_PyLong_CompactValue((PyLongObject *)left_o);
+                dright = PyFloat_AS_DOUBLE(right_o);
+            }
+            int sign_ish = COMPARISON_BIT(dleft, dright);
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            _PyStackRef tmp = right;
+            right = PyStackRef_NULL;
+            stack_pointer[0] = left;
+            stack_pointer[1] = right;
+            PyStackRef_CLOSE(tmp);
+            tmp = left;
+            left = PyStackRef_NULL;
+            stack_pointer[0] = left;
+            PyStackRef_CLOSE(tmp);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            res = (sign_ish & oparg) ? PyStackRef_True : PyStackRef_False;
+            _tos_cache0 = res;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _COMPARE_OP_INT_r23: {
             CHECK_CURRENT_CACHED_VALUES(2);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());

@@ -102,5 +102,34 @@ class TupleTruthTests(unittest.TestCase):
             self.assertEqual(count(mixed), 40 + 500)
 
 
+class FloatIntCompareTests(unittest.TestCase):
+    """A known float compared with a known compact int, in either order."""
+
+    def test_results(self):
+        ns = {}
+        exec("""if 1:
+            def count(xs, ns):
+                t = 0
+                for x in xs:
+                    y = x * 1.0
+                    for n in ns:
+                        m = n + 0
+                        t += ((y < m) + 2 * (m <= y) + 4 * (y > m) +
+                              8 * (m >= y) + 16 * (y == m) + 32 * (m != y))
+                return t
+            """, ns)
+        count = ns["count"]
+        from operator import lt, le, gt, ge, eq, ne
+        xs = [0.0, -0.0, 0.5, -7.0, 7.0, 1073741823.0, 1e300, float("inf"),
+              float("-inf"), float("nan")]
+        ints = [0, 7, -7, 1073741823, -1073741823]
+        expected = sum(lt(x, n) + 2 * le(n, x) + 4 * gt(x, n) + 8 * ge(n, x) +
+                       16 * eq(x, n) + 32 * ne(n, x) for x in xs for n in ints)
+        for _ in range(REPEAT):
+            self.assertEqual(count(xs, ints), expected)
+        if tier2_enabled():
+            self.assertIn("_COMPARE_OP_FLOAT_INT", executor_uops(count))
+
+
 if __name__ == "__main__":
     unittest.main()

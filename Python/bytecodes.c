@@ -3257,7 +3257,7 @@ dummy_func(
             }
         }
 
-        macro(COMPARE_OP) = _SPECIALIZE_COMPARE_OP + _COMPARE_OP;
+        macro(COMPARE_OP) = _SPECIALIZE_COMPARE_OP + _RECORD_TOS_TYPE + _RECORD_NOS_TYPE + _COMPARE_OP;
 
         macro(COMPARE_OP_FLOAT) =
             _GUARD_TOS_FLOAT + _GUARD_NOS_FLOAT + unused/1 + _COMPARE_OP_FLOAT + _POP_TOP_FLOAT + _POP_TOP_FLOAT;
@@ -3291,6 +3291,28 @@ dummy_func(
         tier2 op(_COMPARE_OP_FLOAT_INT_CONST, (ival/4, left, right -- res)) {
             double dleft = PyFloat_AS_DOUBLE(PyStackRef_AsPyObjectBorrow(left));
             double dright = (double)(intptr_t)ival;
+            int sign_ish = COMPARISON_BIT(dleft, dright);
+            DECREF_INPUTS();
+            res = (sign_ish & oparg) ? PyStackRef_True : PyStackRef_False;
+        }
+
+        /* Tier 2: an exact float and a compact int known to the optimizer,
+         * in either order (float_left). A compact int converts to a double
+         * exactly. */
+        tier2 op(_COMPARE_OP_FLOAT_INT, (float_left/1, left, right -- res)) {
+            PyObject *left_o = PyStackRef_AsPyObjectBorrow(left);
+            PyObject *right_o = PyStackRef_AsPyObjectBorrow(right);
+            double dleft, dright;
+            if (float_left) {
+                assert(_PyLong_IsCompact((PyLongObject *)right_o));
+                dleft = PyFloat_AS_DOUBLE(left_o);
+                dright = (double)_PyLong_CompactValue((PyLongObject *)right_o);
+            }
+            else {
+                assert(_PyLong_IsCompact((PyLongObject *)left_o));
+                dleft = (double)_PyLong_CompactValue((PyLongObject *)left_o);
+                dright = PyFloat_AS_DOUBLE(right_o);
+            }
             int sign_ish = COMPARISON_BIT(dleft, dright);
             DECREF_INPUTS();
             res = (sign_ish & oparg) ? PyStackRef_True : PyStackRef_False;
