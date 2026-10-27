@@ -972,6 +972,18 @@ double_round(double x, int ndigits) {
     PyObject *result = NULL;
     _Py_SET_53BIT_PRECISION_HEADER;
 
+    /* 1 to 9 digits of a moderate x: the rounded decimal is m / 10**ndigits
+       and the correctly rounded division gives the double nearest to it,
+       as _Py_dg_strtod would. */
+    if (1 <= ndigits && ndigits <= 9) {
+        static const double pow10[] = {1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6,
+                                       1e7, 1e8, 1e9};
+        int64_t m;
+        if (_Py_round_scaled_exact(fabs(x), pow10[ndigits], &m)) {
+            return PyFloat_FromDouble(copysign((double)m / pow10[ndigits], x));
+        }
+    }
+
     /* round to a decimal string */
     _Py_SET_53BIT_PRECISION_START;
     buf = _Py_dg_dtoa(x, 3, ndigits, &decpt, &sign, &buf_end);

@@ -198,6 +198,31 @@ extern void _Py_set_387controlword(unsigned short);
 #endif
 
 
+/* Round ad * scale (ad >= 0, scale a power of 10 up to 1e22, so exact)
+ * to the nearest integer, half to even, as a correctly rounded decimal
+ * conversion would: the exact product is prod + err (fma), and
+ * prod - floor(prod) - 0.5 is a multiple of ulp(prod), larger than
+ * 2 * |err| when nonzero, so the comparison with one half is exact.
+ * Returns 0 (and leaves *n alone) unless ad * scale < 1e15. */
+static inline int
+_Py_round_scaled_exact(double ad, double scale, int64_t *n)
+{
+    double prod = ad * scale;
+    if (!(prod < 1e15)) {   /* also NaN and infinities */
+        return 0;
+    }
+    double err = fma(ad, scale, -prod);
+    double fl = floor(prod);
+    double frac = prod - fl;
+    int64_t r = (int64_t)fl;
+    /* frac == 0 with err < 0 (just below the integer) rounds to fl. */
+    if (frac > 0.5 || (frac == 0.5 && (err > 0 || (err == 0 && (r & 1))))) {
+        r++;
+    }
+    *n = r;
+    return 1;
+}
+
 #ifdef __cplusplus
 }
 #endif

@@ -1235,10 +1235,8 @@ format_float_short(double d, char format_code,
 
 
 /* Fixed-point formatting ('f', precision 1 to 9) of a finite d with
- * |d| * 10**precision < 1e15, without dtoa. The exact product
- * |d| * 10**precision is prod + err (fma; 10**precision is exact), and
- * prod - floor(prod) - 0.5 is a multiple of ulp(prod) > 2 * |err|, so the
- * rounding to an integer n (half to even, as dtoa) is decided exactly.
+ * |d| * 10**precision < 1e15, without dtoa: the digits of
+ * _Py_round_scaled_exact(|d|, 10**precision).
  * Returns 0 if not applicable; otherwise 1, with *out the new string or
  * NULL and MemoryError set. */
 static int
@@ -1253,19 +1251,9 @@ format_fixed_fast(double d, int precision, int always_add_sign,
     if (precision < 1 || precision > 9) {
         return 0;
     }
-    double ad = fabs(d);
-    double scale = pow10[precision];
-    double prod = ad * scale;
-    if (!(prod < 1e15)) {   /* also rejects NaN and infinities */
+    int64_t n;
+    if (!_Py_round_scaled_exact(fabs(d), pow10[precision], &n)) {
         return 0;
-    }
-    double err = fma(ad, scale, -prod);
-    double fl = floor(prod);
-    double frac = prod - fl;
-    int64_t n = (int64_t)fl;
-    /* frac == 0 with err < 0 (just below the integer) rounds up to fl. */
-    if (frac > 0.5 || (frac == 0.5 && (err > 0 || (err == 0 && (n & 1))))) {
-        n++;
     }
     char buf[40];
     char *end = buf + sizeof(buf);
