@@ -267,6 +267,10 @@ struct _specialization_cache {
     PyObject *getitem;
     uint32_t getitem_version;
     PyObject *init;
+    // isinstance()'s view of the type (see _PyType_HasDefaultClassAttr),
+    // valid while the type's version tag is isinstance_version.
+    uint32_t isinstance_version;
+    uint32_t isinstance_flags;
 };
 
 /* The *real* layout of a type object when allocated on the heap */

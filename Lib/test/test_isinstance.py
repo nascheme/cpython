@@ -357,6 +357,40 @@ class TestIsInstanceIsSubclass(unittest.TestCase):
         with support.infinite_recursion(25):
             self.assertRaises(RecursionError, issubclass, X(), int)
 
+    def test_class_changes_after_use(self):
+        # isinstance() caches what it knows about a class; changes to the
+        # class or its bases must be seen.
+        class Meta(type):
+            pass
+        class Base:
+            pass
+        class C(Base, metaclass=Meta):
+            pass
+        class D:
+            pass
+        for _ in range(3):
+            self.assertFalse(isinstance(C(), D))
+            self.assertFalse(isinstance(D(), C))
+            self.assertFalse(issubclass(D, C))
+        class Shadow:
+            __class__ = property(lambda self: D)
+        C.__bases__ = (Shadow,)
+        self.assertTrue(isinstance(C(), D))
+        C.__bases__ = (Base,)
+        self.assertFalse(isinstance(C(), D))
+        C.__getattribute__ = lambda self, name: (
+            D if name == "__class__" else object.__getattribute__(self, name))
+        self.assertTrue(isinstance(C(), D))
+        del C.__getattribute__
+        self.assertFalse(isinstance(C(), D))
+        Meta.__instancecheck__ = lambda cls, inst: True
+        Meta.__subclasscheck__ = lambda cls, sub: True
+        self.assertTrue(isinstance(D(), C))
+        self.assertTrue(issubclass(D, C))
+        del Meta.__instancecheck__, Meta.__subclasscheck__
+        self.assertFalse(isinstance(D(), C))
+        self.assertFalse(issubclass(D, C))
+
 
 def blowstack(fxn, arg, compare_to):
     # Make sure that calling isinstance with a deeply nested tuple for its
