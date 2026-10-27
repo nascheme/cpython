@@ -294,6 +294,48 @@ class FoldedDispatchTests(unittest.TestCase):
         self.assertEqual(loop(ITERATIONS, V(1.0, 2.0), V(3.0, 4.0)), ITERATIONS * 24.0)
         self.assertEqual(loop(ITERATIONS, W(1.0, 2.0), W(3.0, 4.0)), ITERATIONS * -5.0)
 
+    def test_operator_sole_pair_speculation(self):
+        ns = {}
+        exec("""if 1:
+            import grail
+
+            @grail.record
+            class M:
+                amount: int
+                currency: str
+
+            @grail.record
+            class N:
+                amount: int
+
+            @grail.ops.add.impl
+            def _(a: M, b: M):
+                return M(a.amount + b.amount, a.currency)
+
+            def shared(a, b):
+                return N(a.amount + b.amount + 1000)
+
+            grail.ops.add.register((N, N), shared)
+            grail.ops.add.register((N, M), shared)
+
+            def total(start, items):
+                acc = start
+                for v in items:
+                    acc = acc + v
+                return acc
+            """, ns)
+        M, N, total = ns["M"], ns["N"], ns["total"]
+        ms = [M(i, "EUR") for i in range(100)]
+        for _ in range(REPEAT):
+            self.assertEqual(total(M(0, "EUR"), ms), M(4950, "EUR"))
+        if tier2_enabled():
+            self.assertIn("_GRAIL_BINARY_LOAD_IMPL", executor_uops(total))
+        ns_ = [N(i) for i in range(100)]
+        for _ in range(REPEAT):
+            self.assertEqual(total(N(0), ns_), N(4950 + 100 * 1000))
+            self.assertEqual(total(N(0), [N(1), M(2, "x")] * 3),
+                             N(3 + 6 + 6000))
+
     def test_sole_registration_speculation(self):
         # An argument of unknown type: the fold guards on the only type
         # registered for the traced implementation, unless the

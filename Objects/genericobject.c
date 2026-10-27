@@ -241,6 +241,28 @@ _PyGrail_BinaryOpLookup(PyTypeObject *left, PyTypeObject *right, int oparg)
     return exact_lookup((GenericObject *)op, types);
 }
 
+/* For the tier-2 optimizer: 1 if impl is registered for exactly one pair
+ * of the operator. Operator registration is by exact pair, so then no
+ * other operand types select it. */
+int
+_PyGrail_BinaryOpSoleImpl(int oparg, PyObject *impl)
+{
+    PyObject *op = _PyGrail_BinaryOpGeneric(oparg);
+    if (op == NULL) {
+        return 0;
+    }
+    PyObject *table = ((GenericObject *)op)->table;
+    if (table == NULL) {
+        return 0;
+    }
+    int count = 0;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(table); i += 3) {
+        count += PyTuple_GET_ITEM(table, i) != Py_None &&
+                 PyTuple_GET_ITEM(table, i + 2) == impl;
+    }
+    return count == 1;
+}
+
 static PyObject *
 dispatch_key(PyObject *const *types, Py_ssize_t arity)
 {

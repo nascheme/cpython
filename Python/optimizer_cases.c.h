@@ -1408,6 +1408,24 @@
             }
             bool left_known = sym_get_type(left) == left_type;
             bool right_known = sym_get_type(right) == right_type;
+            if (impl_o != NULL && grail_fold_dispatch() && !(left_known && right_known) &&
+                _PyGrail_BinaryOpSoleImpl(oparg, impl_o) &&
+                (left_type->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(left_type)) &&
+                (right_type->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(right_type))) {
+                if (!left_known) {
+                    ADD_OP(_GUARD_NOS_OBJ_TYPE_VERSION, 0, left_type->tp_version_tag);
+                    sym_set_type(left, left_type);
+                    watch_type(left_type, dependencies);
+                    left_known = true;
+                }
+                if (!right_known) {
+                    ADD_OP(_GUARD_TYPE_VERSION, 0, right_type->tp_version_tag);
+                    sym_set_type(right, right_type);
+                    sym_set_type_version(right, right_type->tp_version_tag);
+                    watch_type(right_type, dependencies);
+                    right_known = true;
+                }
+            }
             if (impl_o != NULL && grail_fold_dispatch() && left_known && right_known) {
                 ADD_OP(_GRAIL_BINARY_LOAD_IMPL, oparg, (uintptr_t)impl_o);
                 _Py_BloomFilter_Add(dependencies, _PyGrail_BinaryOpGeneric(oparg));

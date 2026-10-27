@@ -697,9 +697,29 @@ dummy_func(void) {
         }
         bool left_known = sym_get_type(left) == left_type;
         bool right_known = sym_get_type(right) == right_type;
-        // Fold only when the trace already knows both types: new type
-        // guards fail at sites where several operand types share one
-        // implementation, which the func_version check accepts.
+        // Fold when the trace already knows both types. Guarding recorded
+        // types would fail at sites where several operand types share one
+        // implementation (which the func_version check accepts), so only
+        // an implementation registered for a single pair is guarded: any
+        // other pair selects another implementation anyway.
+        if (impl_o != NULL && grail_fold_dispatch() && !(left_known && right_known) &&
+            _PyGrail_BinaryOpSoleImpl(oparg, impl_o) &&
+            (left_type->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(left_type)) &&
+            (right_type->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(right_type))) {
+            if (!left_known) {
+                ADD_OP(_GUARD_NOS_OBJ_TYPE_VERSION, 0, left_type->tp_version_tag);
+                sym_set_type(left, left_type);
+                watch_type(left_type, dependencies);
+                left_known = true;
+            }
+            if (!right_known) {
+                ADD_OP(_GUARD_TYPE_VERSION, 0, right_type->tp_version_tag);
+                sym_set_type(right, right_type);
+                sym_set_type_version(right, right_type->tp_version_tag);
+                watch_type(right_type, dependencies);
+                right_known = true;
+            }
+        }
         if (impl_o != NULL && grail_fold_dispatch() && left_known && right_known) {
             // Constant for these operand types: registration invalidates
             // the executor.
