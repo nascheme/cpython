@@ -1124,6 +1124,39 @@ class SubscriptTests(unittest.TestCase):
         self.assertEqual(total(v, [True, 2]), 3)
 
 
+class DraftStoreTests(unittest.TestCase):
+    def test_draft_item_assignment(self):
+        ns = {}
+        exec("""if 1:
+            def fill(d, idx, value):
+                for i in idx:
+                    d[i] = value + i
+            """, ns)
+        fill = ns["fill"]
+        v = grail.PVector(range(100))
+        idx = list(range(-100, 100))
+        for _ in range(REPEAT):
+            with grail.mutate(v) as d:
+                fill(d, idx, 1000)
+            r = grail.finish(d)
+            self.assertEqual(list(r), [1000 + i for i in range(100)])
+        if tier2_enabled():
+            self.assertIn("_STORE_SUBSCR_SSIZE_ITEM", executor_uops(fill))
+        self.assertEqual(list(v), list(range(100)))
+        with grail.mutate(v) as d:
+            with self.assertRaises(IndexError):
+                fill(d, [0, 100], 0)
+            with grail.mutate(v) as other:
+                pass
+            with self.assertRaises(ValueError):
+                d[0] = grail.mutate(v)
+        with self.assertRaises(RuntimeError):
+            fill(d, [0], 0)
+        lst = list(range(100))
+        fill(lst, idx, 0)
+        self.assertEqual(lst, list(range(100)))
+
+
 class DraftGuardTests(unittest.TestCase):
     def test_closed_draft_in_trace(self):
         ns = {}

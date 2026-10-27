@@ -24,6 +24,7 @@
 #endif
 
 #include "Python.h"
+#include "internal/pycore_code.h"    // _PySpecialize_RegisterAssItem()
 #include "internal/pycore_grail.h"   // RecordObject, _PyGrail_RecordWithValues()
 #include "internal/pycore_freelist.h" // _Py_FREELIST_POP_MEM()
 #include "internal/pycore_moduleobject.h" // _PyModule_GetState()
@@ -762,6 +763,34 @@ vector_draft_ass_subscript(PyObject *self, PyObject *key, PyObject *value)
     return vector_draft_put(v, i, value);
 }
 
+/* draft[i] = value for an int i (_STORE_SUBSCR_SSIZE_ITEM, registered
+ * with the optimizer): vector_draft_ass_subscript without the index
+ * protocol. */
+static int
+vector_draft_ass_item(PyObject *self, Py_ssize_t i, PyObject *value)
+{
+    VectorDraft *v = (VectorDraft *)self;
+    RootObject *root = v->head.root;
+    if (check(root) < 0) {
+        return -1;
+    }
+    Py_ssize_t n = vector_draft_len(v);
+    if (i < 0) {
+        i += n;
+    }
+    if (i < 0 || i >= n) {
+        PyErr_SetString(PyExc_IndexError, "draft index out of range");
+        return -1;
+    }
+    if (storable(root, value) < 0) {
+        return -1;
+    }
+    if (i >= v->base_len) {
+        return PyList_SetItem(v->tail, i - v->base_len, Py_NewRef(value));
+    }
+    return vector_draft_put(v, i, value);
+}
+
 static int
 vector_draft_tail(VectorDraft *v)
 {
@@ -1377,6 +1406,7 @@ draft_exec(PyObject *module)
     _PyGrail_RegisterRecordDraft(record_draft_getattro, draft_dealloc,
                                  record_draft_load);
     _PyGrail_RegisterDraftSubscript(vector_draft_subscript, vector_draft_item);
+    _PySpecialize_RegisterAssItem(vector_draft_ass_subscript, vector_draft_ass_item);
     _PyGrail_RegisterDraftWith(draft_enter, (void *)draft_exit);
     return 0;
 }
