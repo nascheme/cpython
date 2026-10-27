@@ -4,6 +4,7 @@
 #include "internal/pycore_code.h"      // _Py_GetBaseCodeUnit()
 #include "internal/pycore_interpframe.h"  // _PyFrame_GetCode()
 #include "internal/pycore_opcode_metadata.h"  // _PyOpcode_Caches
+#include "internal/pycore_floatobject.h"  // _PyFloat_ExactDealloc()
 #include "internal/pycore_freelist.h"  // _Py_FREELIST_PUSH()
 #include "internal/pycore_grail.h"
 #include "internal/pycore_object.h"  // _Py_DECREF_TYPE()
@@ -1110,7 +1111,21 @@ record_dealloc(RecordObject *self)
     PyTypeObject *type = Py_TYPE(self);
     PyObject_GC_UnTrack(self);
     Py_TRASHCAN_BEGIN(self, record_dealloc);
-    record_clear(self);
+    /* As record_clear, but float fields (the common numeric case) are
+     * released without the generic deallocation dispatch. Fields are NULL
+     * after tp_clear. */
+    for (Py_ssize_t i = 0; i < record_count((PyObject *)self); i++) {
+        PyObject *field = self->fields[i];
+        if (field == NULL) {
+            continue;
+        }
+        if (PyFloat_CheckExact(field)) {
+            _Py_DECREF_SPECIALIZED(field, _PyFloat_ExactDealloc);
+        }
+        else {
+            Py_DECREF(field);
+        }
+    }
     record_free(self, type);
     /* Pairs with the per-thread type reference taken at allocation; a plain
      * Py_DECREF would contend on the shared type refcount across threads. */
