@@ -194,7 +194,7 @@ new_draft(DraftState *st, RootObject *root, PyObject *base, int kind)
     d->owner = root == NULL ? _PyThreadState_GET() : NULL;
     d->state = ROOT_OPEN;
     d->building = 0;
-    PyObject_GC_Track(d);
+    _PyObject_GC_TRACK(d);
     return (PyObject *)d;
 }
 
@@ -328,20 +328,29 @@ record_draft_clear(PyObject *op)
     return 0;
 }
 
+static int vector_draft_clear(PyObject *op);
+static int map_draft_clear(PyObject *op);
+
 static void
 draft_dealloc(PyObject *op)
 {
     PyTypeObject *tp = Py_TYPE(op);
     DraftState *st = DRAFT(op)->st;
-    PyObject_GC_UnTrack(op);
-    (void)tp->tp_clear(op);
+    if (_PyObject_GC_IS_TRACKED(op)) {
+        _PyObject_GC_UNTRACK(op);
+    }
     int slot = -1;
     if (tp == st->record_draft_type) {
+        (void)record_draft_clear(op);
         Py_ssize_t n = ((RecordDraft *)op)->n;
         slot = n <= Py_grail_records_MAXSAVESIZE ? (int)n : -1;
     }
     else if (tp == st->vector_draft_type) {
+        (void)vector_draft_clear(op);
         slot = VECTOR_DRAFT_FREELIST;
+    }
+    else {
+        (void)map_draft_clear(op);
     }
     /* Drafts have no pre-header and PyObject_GC_Del as tp_free, like
      * records; a parked draft has the placeholder type. */
@@ -356,7 +365,9 @@ draft_dealloc(PyObject *op)
     else {
         tp->tp_free(op);
     }
-    Py_DECREF(tp);
+    /* Pairs with the per-thread type reference taken at allocation, as for
+     * records; Py_DECREF would use the type's shared refcount. */
+    _Py_DECREF_TYPE(tp);
 }
 
 static int
