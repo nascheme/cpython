@@ -194,5 +194,28 @@ assert expected in {i.opname for i in dis.get_instructions(read, adaptive=True)}
                              PYTHON_GRAIL_RECORD_LOADS=setting)
 
 
+@requires_specialization
+class VectorSubscriptTests(unittest.TestCase):
+    def test_int_subscript(self):
+        def get(v, i):
+            return v[i]
+
+        v = grail.PVector(range(40))
+        for _ in range(1000):
+            get(v, 3)
+        self.assertIn("BINARY_OP_EXTEND",
+                      {i.opname for i in dis.get_instructions(get, adaptive=True)})
+        self.assertEqual([get(v, i) for i in (0, 31, 32, 39, -1, -40)],
+                         [0, 31, 32, 39, 39, 0])
+        for i in (40, -41, 2**100):
+            with self.assertRaises(IndexError):
+                get(v, i)
+        self.assertEqual(get(v, slice(1, 3)), grail.PVector([1, 2]))
+        self.assertEqual(get((5, 6), 1), 6)
+        self.assertEqual(get(grail.PVector(), slice(None)), grail.PVector())
+        with self.assertRaises(IndexError):
+            get(grail.PVector(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

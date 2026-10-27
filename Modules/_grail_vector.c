@@ -7,6 +7,7 @@
 #endif
 
 #include "Python.h"
+#include "internal/pycore_code.h"    // _PySpecialize_RegisterIntSubscript()
 #include "internal/pycore_long.h"    // _PyLong_IsCompact()
 #include "internal/pycore_modsupport.h"  // _PyArg_CheckPositional()
 #include "internal/pycore_object.h"  // _Py_DECREF_TYPE()
@@ -174,6 +175,16 @@ vector_item(PyObject *op, Py_ssize_t index)
         return NULL;
     }
     return Py_NewRef(vector_borrow(self, index));
+}
+
+/* v[i] for a small exact int i (BINARY_OP_EXTEND). */
+static PyObject *
+vector_item_normalized(PyObject *op, Py_ssize_t index)
+{
+    if (index < 0) {
+        index += ((Vector *)op)->count;
+    }
+    return vector_item(op, index);
 }
 
 /* A PVector index as a Py_ssize_t (not yet normalized); a small exact int
@@ -1444,6 +1455,7 @@ module_exec(PyObject *module)
         return -1;
     }
     Py_DECREF(registered);
+    _PySpecialize_RegisterIntSubscript(vector_subscript, vector_item_normalized);
     return PyModule_AddObjectRef(module, "PVector", (PyObject *)state->vector_type);
 }
 
