@@ -1234,6 +1234,72 @@ format_float_short(double d, char format_code,
 }
 
 
+/* Fixed-point formatting ('f', precision 1 to 9) of a finite d with
+ * |d| * 10**precision < 1e15, without dtoa. The exact product
+ * |d| * 10**precision is prod + err (fma; 10**precision is exact), and
+ * prod - floor(prod) - 0.5 is a multiple of ulp(prod) > 2 * |err|, so the
+ * rounding to an integer n (half to even, as dtoa) is decided exactly.
+ * Returns 0 if not applicable; otherwise 1, with *out the new string or
+ * NULL and MemoryError set. */
+static int
+format_fixed_fast(double d, int precision, int always_add_sign,
+                  int no_negative_zero, char **out)
+{
+    static const double pow10[] = {1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6,
+                                   1e7, 1e8, 1e9};
+    static const int64_t ipow10[] = {1, 10, 100, 1000, 10000, 100000,
+                                     1000000, 10000000, 100000000,
+                                     1000000000};
+    if (precision < 1 || precision > 9) {
+        return 0;
+    }
+    double ad = fabs(d);
+    double scale = pow10[precision];
+    double prod = ad * scale;
+    if (!(prod < 1e15)) {   /* also rejects NaN and infinities */
+        return 0;
+    }
+    double err = fma(ad, scale, -prod);
+    double fl = floor(prod);
+    double frac = prod - fl;
+    int64_t n = (int64_t)fl;
+    /* frac == 0 with err < 0 (just below the integer) rounds up to fl. */
+    if (frac > 0.5 || (frac == 0.5 && (err > 0 || (err == 0 && (n & 1))))) {
+        n++;
+    }
+    char buf[40];
+    char *end = buf + sizeof(buf);
+    char *q = end;
+    int64_t ipart = n / ipow10[precision];
+    int64_t fpart = n % ipow10[precision];
+    for (int i = 0; i < precision; i++) {
+        *--q = (char)('0' + fpart % 10);
+        fpart /= 10;
+    }
+    *--q = '.';
+    do {
+        *--q = (char)('0' + ipart % 10);
+        ipart /= 10;
+    } while (ipart != 0);
+    if (signbit(d) && !(no_negative_zero && n == 0)) {
+        *--q = '-';
+    }
+    else if (always_add_sign) {
+        *--q = '+';
+    }
+    size_t len = end - q;
+    char *result = PyMem_Malloc(len + 1);
+    if (result == NULL) {
+        PyErr_NoMemory();
+    }
+    else {
+        memcpy(result, q, len);
+        result[len] = '\0';
+    }
+    *out = result;
+    return 1;
+}
+
 char * PyOS_double_to_string(double val,
                                          char format_code,
                                          int precision,
@@ -1270,6 +1336,16 @@ char * PyOS_double_to_string(double val,
         _Py_FALLTHROUGH;
     case 'f':
         mode = 3;
+        if (!(flags & Py_DTSF_ALT)) {
+            char *out;
+            if (format_fixed_fast(val, precision, flags & Py_DTSF_SIGN,
+                                  flags & Py_DTSF_NO_NEG_0, &out)) {
+                if (out != NULL && type != NULL) {
+                    *type = Py_DTST_FINITE;
+                }
+                return out;
+            }
+        }
         break;
 
     /* general */
