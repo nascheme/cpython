@@ -3586,6 +3586,27 @@ list___init___impl(PyListObject *self, PyObject *iterable)
     return 0;
 }
 
+/* A new list of n items (new references), allocated as extending an empty
+ * list would. */
+static PyObject *
+list_from_items(PyObject *const *src, Py_ssize_t n)
+{
+    PyObject *list = PyList_New(0);
+    if (list == NULL || n == 0) {
+        return list;
+    }
+    if (list_preallocate_exact((PyListObject *)list, n) < 0) {
+        Py_DECREF(list);
+        return NULL;
+    }
+    PyObject **dst = ((PyListObject *)list)->ob_item;
+    for (Py_ssize_t i = 0; i < n; i++) {
+        dst[i] = Py_NewRef(src[i]);
+    }
+    Py_SET_SIZE(list, n);
+    return list;
+}
+
 static PyObject *
 list_vectorcall(PyObject *type, PyObject * const*args,
                 size_t nargsf, PyObject *kwnames)
@@ -3599,27 +3620,20 @@ list_vectorcall(PyObject *type, PyObject * const*args,
     }
 
     /* list() of an exact tuple or list: a new list from its items (and the
-       list freelist), without allocating an empty list and extending it. */
+       list freelist), without allocating an empty list and extending it.
+       Allocated as list.extend() would (list_preallocate_exact). */
     if (type == (PyObject *)&PyList_Type && nargs == 1) {
         PyObject *arg = args[0];
         if (PyTuple_CheckExact(arg)) {
-            Py_ssize_t n = PyTuple_GET_SIZE(arg);
-            if (n == 0) {
-                return PyList_New(0);
-            }
-            PyObject *list = list_new_prealloc(n);
-            if (list != NULL) {
-                PyObject **src = _PyTuple_ITEMS(arg);
-                PyObject **dst = ((PyListObject *)list)->ob_item;
-                for (Py_ssize_t i = 0; i < n; i++) {
-                    dst[i] = Py_NewRef(src[i]);
-                }
-                Py_SET_SIZE(list, n);
-            }
-            return list;
+            return list_from_items(_PyTuple_ITEMS(arg), PyTuple_GET_SIZE(arg));
         }
         if (PyList_CheckExact(arg)) {
-            return PyList_GetSlice(arg, 0, PY_SSIZE_T_MAX);
+            PyObject *list;
+            Py_BEGIN_CRITICAL_SECTION(arg);
+            list = list_from_items(((PyListObject *)arg)->ob_item,
+                                   Py_SIZE(arg));
+            Py_END_CRITICAL_SECTION();
+            return list;
         }
     }
 
