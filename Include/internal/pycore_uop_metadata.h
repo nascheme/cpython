@@ -146,6 +146,7 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_BINARY_OP_PY_LOAD_FUNC] = HAS_EXIT_FLAG,
     [_BINARY_OP_PY_INIT_CALL] = HAS_ARG_FLAG,
     [_EXIT_BINARY_OP_CHECK] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
+    [_GRAIL_FLOAT_PROGRAM] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_GRAIL_ELEMENTWISE_FLOAT] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_BINARY_SLICE] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_STORE_SLICE] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
@@ -1483,6 +1484,15 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
             { -1, -1, -1 },
             { 1, 3, _EXIT_BINARY_OP_CHECK_r31 },
+        },
+    },
+    [_GRAIL_FLOAT_PROGRAM] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 1, 0, _GRAIL_FLOAT_PROGRAM_r01 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
         },
     },
     [_GRAIL_ELEMENTWISE_FLOAT] = {
@@ -4623,6 +4633,7 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_BINARY_OP_PY_LOAD_FUNC_r23] = _BINARY_OP_PY_LOAD_FUNC,
     [_BINARY_OP_PY_INIT_CALL_r31] = _BINARY_OP_PY_INIT_CALL,
     [_EXIT_BINARY_OP_CHECK_r31] = _EXIT_BINARY_OP_CHECK,
+    [_GRAIL_FLOAT_PROGRAM_r01] = _GRAIL_FLOAT_PROGRAM,
     [_GRAIL_ELEMENTWISE_FLOAT_r23] = _GRAIL_ELEMENTWISE_FLOAT,
     [_BINARY_SLICE_r31] = _BINARY_SLICE,
     [_STORE_SLICE_r30] = _STORE_SLICE,
@@ -5746,6 +5757,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_GRAIL_CALL_GENERIC_SELECT_TIER_TWO_r00] = "_GRAIL_CALL_GENERIC_SELECT_TIER_TWO_r00",
     [_GRAIL_ELEMENTWISE_FLOAT] = "_GRAIL_ELEMENTWISE_FLOAT",
     [_GRAIL_ELEMENTWISE_FLOAT_r23] = "_GRAIL_ELEMENTWISE_FLOAT_r23",
+    [_GRAIL_FLOAT_PROGRAM] = "_GRAIL_FLOAT_PROGRAM",
+    [_GRAIL_FLOAT_PROGRAM_r01] = "_GRAIL_FLOAT_PROGRAM_r01",
     [_GUARD_3OS_ASYNC_GEN_ASEND] = "_GUARD_3OS_ASYNC_GEN_ASEND",
     [_GUARD_3OS_ASYNC_GEN_ASEND_r03] = "_GUARD_3OS_ASYNC_GEN_ASEND_r03",
     [_GUARD_3OS_ASYNC_GEN_ASEND_r13] = "_GUARD_3OS_ASYNC_GEN_ASEND_r13",
@@ -6978,6 +6991,8 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 3;
         case _EXIT_BINARY_OP_CHECK:
             return 4;
+        case _GRAIL_FLOAT_PROGRAM:
+            return 2 + oparg;
         case _GRAIL_ELEMENTWISE_FLOAT:
             return 2;
         case _BINARY_SLICE:

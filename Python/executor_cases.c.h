@@ -7629,6 +7629,58 @@
             break;
         }
 
+        case _GRAIL_FLOAT_PROGRAM_r01: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef *args;
+            _PyStackRef self_or_null;
+            _PyStackRef callable;
+            _PyStackRef res;
+            oparg = CURRENT_OPARG();
+            args = &stack_pointer[-oparg];
+            self_or_null = stack_pointer[-1 - oparg];
+            callable = stack_pointer[-2 - oparg];
+            PyObject *program = (PyObject *)CURRENT_OPERAND0_64();
+            const _PyGrailFloatProgram *prog = (const _PyGrailFloatProgram *)program;
+            assert(prog->nargs == oparg && PyStackRef_IsNull(self_or_null));
+            if (!_PyGrail_FloatProgramArgsOk(prog, args)) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            STAT_INC(CALL, hit);
+            PyObject *res_o = PyFloat_FromDouble(_PyGrail_FloatProgramEval(prog, args));
+            if (res_o == NULL) {
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_ERROR();
+            }
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            _PyStackRef tmp;
+            for (int _i = oparg; --_i >= 0;) {
+                tmp = args[_i];
+                args[_i] = PyStackRef_NULL;
+                PyStackRef_CLOSE(tmp);
+            }
+            tmp = self_or_null;
+            self_or_null = PyStackRef_NULL;
+            stack_pointer[-1 - oparg] = self_or_null;
+            PyStackRef_XCLOSE(tmp);
+            tmp = callable;
+            callable = PyStackRef_NULL;
+            stack_pointer[-2 - oparg] = callable;
+            PyStackRef_CLOSE(tmp);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            stack_pointer += -2 - oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            res = PyStackRef_FromPyObjectSteal(res_o);
+            _tos_cache0 = res;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _GRAIL_ELEMENTWISE_FLOAT_r23: {
             CHECK_CURRENT_CACHED_VALUES(2);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());

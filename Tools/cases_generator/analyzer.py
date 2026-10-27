@@ -516,6 +516,8 @@ NON_ESCAPING_FUNCTIONS = (
     "_PyGrail_IsKernel",
     "_PyGrail_BinaryOpLookup",
     "_PyGrail_GenericSelect",
+    "_PyGrail_FloatProgramArgsOk",
+    "_PyGrail_FloatProgramEval",
     "PyCFunction_GET_FLAGS",
     "PyCFunction_GET_FUNCTION",
     "PyCFunction_GET_SELF",

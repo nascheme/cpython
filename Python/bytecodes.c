@@ -1314,6 +1314,24 @@ dummy_func(
             res = result;
         }
 
+        /* Tier 2, emitted by the optimizer in place of an inlined call of a
+         * Python function whose body returns a float expression over float
+         * fields of record arguments and float arguments (an interned
+         * _PyGrailFloatProgram). It checks the argument types itself.
+         */
+        tier2 op(_GRAIL_FLOAT_PROGRAM, (program/4, callable, self_or_null, args[oparg] -- res)) {
+            const _PyGrailFloatProgram *prog = (const _PyGrailFloatProgram *)program;
+            assert(prog->nargs == oparg && PyStackRef_IsNull(self_or_null));
+            EXIT_IF(!_PyGrail_FloatProgramArgsOk(prog, args));
+            STAT_INC(CALL, hit);
+            PyObject *res_o = PyFloat_FromDouble(_PyGrail_FloatProgramEval(prog, args));
+            if (res_o == NULL) {
+                ERROR_NO_POP();
+            }
+            DECREF_INPUTS();
+            res = PyStackRef_FromPyObjectSteal(res_o);
+        }
+
         /* Tier 2, emitted by the optimizer in place of an inlined
          * BINARY_OP_GRAIL implementation whose body is element-wise float
          * arithmetic on an all-float record type (oparg: op | kind << 2, as

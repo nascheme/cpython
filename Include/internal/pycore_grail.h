@@ -157,6 +157,29 @@ PyAPI_FUNC(PyObject *) _PyGrail_KernelApply(PyObject *, PyObject *, PyObject *);
 PyAPI_FUNC(Py_ssize_t) _PyGrail_FloatRecordFieldCount(PyTypeObject *);
 PyAPI_FUNC(PyObject *) _PyGrail_ElementwiseFloat(PyTypeObject *, int, int,
                                                  PyObject *, PyObject *, PyObject *);
+/* Tier-2 fused float expressions over the arguments of a call (see
+ * recordobject.c): a postfix program of bytes. LOAD is 0b00aaffff (argument
+ * a; field f of a record argument, or the float argument itself for f == 15),
+ * then ADD, SUB and MUL are 1, 2 and 3 in the top two bits. Interned
+ * programs live for the rest of the process. */
+#define _PyGrail_FLOAT_PROGRAM_MAX 48
+#define _PyGrail_FLOAT_PROGRAM_ARGS 4
+#define _PyGrail_FLOAT_SCALAR 15
+typedef struct {
+    /* Exact type of each argument: an all-float record type, or float. */
+    PyTypeObject *types[_PyGrail_FLOAT_PROGRAM_ARGS];
+    uint8_t nargs;
+    uint8_t len;
+    uint8_t code[_PyGrail_FLOAT_PROGRAM_MAX];
+} _PyGrailFloatProgram;
+PyAPI_FUNC(const _PyGrailFloatProgram *) _PyGrail_InternFloatProgram(
+    const _PyGrailFloatProgram *);
+#ifdef Py_BUILD_CORE
+PyAPI_FUNC(int) _PyGrail_FloatProgramArgsOk(const _PyGrailFloatProgram *,
+                                            _PyStackRef *);
+PyAPI_FUNC(double) _PyGrail_FloatProgramEval(const _PyGrailFloatProgram *,
+                                             _PyStackRef *);
+#endif
 PyAPI_FUNC(PyObject *) _PyGrail_Substitutable(PyObject *, PyObject *);
 PyAPI_FUNC(PyObject *) _PyGrail_DefaultRepr(PyObject *, PyObject *);
 PyAPI_FUNC(PyObject *) _PyGrail_DefaultEq(PyObject *, PyObject *);

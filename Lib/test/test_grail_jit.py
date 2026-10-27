@@ -727,5 +727,140 @@ class ElementwiseFusionTests(unittest.TestCase):
         assert_python_ok("-c", code, PYTHON_GRAIL_JIT_FUSE_ELEMENTWISE="0")
 
 
+
+# Calls of float-expression functions fused into _GRAIL_FLOAT_PROGRAM.
+FLOAT_CALLS = """
+import grail
+
+@grail.record
+class V:
+    x: float
+    y: float
+    z: float
+
+def dot(a, b):
+    return a.x * b.x + a.y * b.y + a.z * b.z
+
+def mixed(a, k, b):
+    return (a.x - k) * b.y - k * (a.z + b.x)
+
+def local(a, b):
+    t = a.x * b.x      # a local: not fused
+    return t + a.y
+
+def divide(a, b):
+    return a.x / b.x   # not specialized: not fused
+
+def dot_loop(n, a, b):
+    t = 0.0
+    for i in range(n):
+        t += dot(a, b)
+    return t
+
+def mixed_loop(n, a, k, b):
+    t = 0.0
+    for i in range(n):
+        t += mixed(a, k, b)
+    return t
+
+def other_loop(n, a, b):
+    t = 0.0
+    for i in range(n):
+        t += local(a, b) + divide(a, b)
+    return t
+
+def switch_loop(n, a, b, switch, action):
+    t = 0.0
+    for i in range(n):
+        if i == switch:
+            action()
+        t += dot(a, b)
+    return t
+
+def list_loop(n, vs, b):
+    t = 0.0
+    for i in range(n):
+        v = vs[i % len(vs)]
+        t += dot(v, b)
+    return t
+"""
+
+
+def load_float_calls():
+    namespace = {"__name__": "grail_jit_float_calls"}
+    exec(FLOAT_CALLS, namespace)
+    return namespace
+
+
+class FloatCallFusionTests(unittest.TestCase):
+    def test_results(self):
+        m = load_float_calls()
+        V = m["V"]
+        a, b = V(1.5, -2.25, 0.1), V(0.3, 7.0, -1e300)
+        d = a.x * b.x + a.y * b.y + a.z * b.z
+        self.assertEqual(m["dot_loop"](ITERATIONS, a, b), sum_repeat(d, ITERATIONS))
+        k = 0.7
+        e = (a.x - k) * b.y - k * (a.z + b.x)
+        self.assertEqual(m["mixed_loop"](ITERATIONS, a, k, b), sum_repeat(e, ITERATIONS))
+        f = (a.x * b.x + a.y) + a.x / b.x
+        self.assertEqual(m["other_loop"](ITERATIONS, a, b), sum_repeat(f, ITERATIONS))
+
+    def test_nonconforming_and_types(self):
+        m = load_float_calls()
+        V = m["V"]
+        b = V(1.0, 2.0, 3.0)
+        good, ints = V(1.0, 1.0, 1.0), V(1, 1.0, 1.0)
+        self.assertEqual(m["list_loop"](ITERATIONS, [good], b), ITERATIONS * 6.0)
+        self.assertEqual(m["list_loop"](ITERATIONS, [good, ints], b), ITERATIONS * 6.0)
+        self.assertEqual(type(m["dot"](ints, b)), float)
+        # A non-record argument with the same attributes.
+        class P:
+            x = y = z = 1.0
+        self.assertEqual(m["list_loop"](ITERATIONS, [good, P()], b), ITERATIONS * 6.0)
+
+    def test_code_change_and_rebind_while_hot(self):
+        m = load_float_calls()
+        V = m["V"]
+        a, b = V(1.0, 2.0, 3.0), V(1.0, 1.0, 1.0)
+
+        def change_code():
+            m["dot"].__code__ = (lambda a, b: a.x - b.x).__code__
+
+        self.assertEqual(m["switch_loop"](ITERATIONS, a, b, HALF, change_code),
+                         HALF * 6.0 + HALF * 0.0)
+        m = load_float_calls()
+        V = m["V"]
+        a, b = V(1.0, 2.0, 3.0), V(1.0, 1.0, 1.0)
+
+        def rebind():
+            m["dot"] = lambda a, b: a.z * b.z
+
+        self.assertEqual(m["switch_loop"](ITERATIONS, a, b, HALF, rebind),
+                         HALF * 6.0 + HALF * 3.0)
+
+    @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
+    def test_fused_uops(self):
+        m = load_float_calls()
+        V = m["V"]
+        a, b = V(1.5, -2.25, 0.1), V(0.3, 7.0, 2.0)
+        m["dot_loop"](ITERATIONS, a, b)
+        counts = executor_uop_counts(m["dot_loop"])
+        self.assertEqual(counts["_GRAIL_FLOAT_PROGRAM"], 1, counts)
+        self.assertEqual(counts["_PUSH_FRAME"], 0, counts)
+        m["mixed_loop"](ITERATIONS, a, 0.5, b)
+        counts = executor_uop_counts(m["mixed_loop"])
+        self.assertEqual(counts["_GRAIL_FLOAT_PROGRAM"], 1, counts)
+        m["other_loop"](ITERATIONS, a, b)
+        counts = executor_uop_counts(m["other_loop"])
+        self.assertEqual(counts["_GRAIL_FLOAT_PROGRAM"], 0, counts)
+
+
+def sum_repeat(value, n):
+    t = 0.0
+    for _ in range(n):
+        t += value
+    return t
+
+
 if __name__ == "__main__":
     unittest.main()

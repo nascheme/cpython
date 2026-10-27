@@ -821,79 +821,71 @@ grail_fuse_elementwise_enabled(void)
     return value == NULL || strcmp(value, "0") != 0;
 }
 
-/* Abstract values of the callee's stack. A term is an argument (scalar
- * use, field -1) or a field of an argument. */
-enum { EW_OTHER, EW_NULL, EW_ARG, EW_FIELD, EW_BINOP, EW_CONST, EW_RESULT };
-
-typedef struct {
-    int arg, field;
-} GrailEwTerm;
+/* Abstract values of the callee's stack. An EW_EXPR is a float computed
+ * from the arguments, as a postfix _PyGrailFloatProgram fragment. */
+enum { EW_OTHER, EW_NULL, EW_ARG, EW_EXPR, EW_CONST, EW_RESULT };
 
 typedef struct {
     int tag;
-    int op;                 /* EW_BINOP: 0-2 for + - * */
-    GrailEwTerm term;       /* EW_ARG, EW_FIELD */
-    GrailEwTerm x, y;       /* EW_BINOP operands */
-    PyObject *obj;          /* EW_CONST */
+    int arg;                /* EW_ARG */
+    PyObject *obj;          /* EW_CONST; EW_RESULT: the record type */
+    int len;                /* EW_EXPR */
+    uint8_t code[_PyGrail_FLOAT_PROGRAM_MAX];
 } GrailEwValue;
 
-#define GRAIL_EW_STACK 24
+#define GRAIL_EW_STACK 16
 #define EW_FAIL() do { DPRINTF(2, "grail fuse: no (line %d)\n", __LINE__); return 0; } while (0)
 
-static bool
-grail_ew_term_is(GrailEwTerm t, int arg, int field)
+#define EW_LOAD(ARG, FIELD) ((uint8_t)(((ARG) << 4) | (FIELD)))
+#define EW_OP(OP) ((uint8_t)(((OP) + 1) << 6))   /* OP 0-2: + - * */
+
+/* The element-wise shape of a CALL_RECORD argument i: field i of argument
+ * 0 or 1 combined with field i of the other or with it as a scalar.
+ * Returns the kind (0-2) and sets *op, or returns -1. */
+static int
+grail_ew_kind(const GrailEwValue *v, int i, int *op)
 {
-    return t.arg == arg && t.field == field;
+    if (v->tag != EW_EXPR || v->len != 3 || (v->code[2] >> 6) == 0) {
+        return -1;
+    }
+    *op = (v->code[2] >> 6) - 1;
+    uint8_t x = v->code[0], y = v->code[1];
+    if (x == EW_LOAD(0, i) && y == EW_LOAD(1, i)) {
+        return 0;
+    }
+    if (x == EW_LOAD(0, i) && y == EW_LOAD(1, _PyGrail_FLOAT_SCALAR)) {
+        return 1;
+    }
+    if (x == EW_LOAD(0, _PyGrail_FLOAT_SCALAR) && y == EW_LOAD(1, i)) {
+        return 2;
+    }
+    return -1;
 }
 
-/* Returns the number of trace entries consumed (from this_instr, the
- * _GRAIL_BINARY_CHECK_FUNC) and emits the fused form, or returns 0 and emits
- * nothing. */
+/* Interpret an inlined callee abstractly, from the first uop after its
+ * _PUSH_FRAME up to its return. Arguments have the exact types in types[]
+ * (records need all-float fields to be loaded from); a NULL entry is
+ * learned from the callee's recorded types and float guards (the fused uops
+ * check argument types). On success, *result is
+ * the returned value (EW_EXPR, or EW_RESULT for a record built from
+ * EW_EXPR fields: its fields are checked to be element-wise) and *end is
+ * the first trace entry after the return. */
 static int
-grail_fuse_elementwise(JitOptContext *ctx, _PyUOpInstruction *this_instr,
-                       _PyUOpInstruction *trace_end, JitOptRef **stack_pointer_p,
-                       _PyBloomFilter *dependencies)
+grail_scan_callee(_PyUOpInstruction *p, _PyUOpInstruction *trace_end,
+                  PyObject *globals, PyTypeObject **types, int nargs,
+                  GrailEwValue *result, _PyUOpInstruction **end)
 {
-    JitOptRef *stack_pointer = *stack_pointer_p;
-    if (!grail_fuse_elementwise_enabled() || !grail_fold_dispatch() ||
-        STACK_LEVEL() < 2) {
-        EW_FAIL();
-    }
-    JitOptRef left = stack_pointer[-2];
-    JitOptRef right = stack_pointer[-1];
-    PyTypeObject *types[2] = {sym_get_type(left), sym_get_type(right)};
-    for (int k = 0; k < 2; k++) {
-        if (types[k] == NULL) {
-            types[k] = sym_get_probable_type(k == 0 ? left : right);
-        }
-        if (types[k] == NULL) {
-            EW_FAIL();
-        }
-    }
-    PyObject *impl = _PyGrail_BinaryOpLookup(types[0], types[1], this_instr->oparg);
-    if (impl == NULL || !PyFunction_Check(impl) ||
-        ((PyFunctionObject *)impl)->func_version != this_instr->operand0) {
-        EW_FAIL();
-    }
-    PyObject *globals = ((PyFunctionObject *)impl)->func_globals;
-
-    /* Interpret the inlined callee abstractly, up to its return. */
-    _PyUOpInstruction *p = this_instr + 1;
-    if (p + 1 >= trace_end || p[0].opcode != _GRAIL_BINARY_INIT_CALL ||
-        p[1].opcode != _PUSH_FRAME) {
-        EW_FAIL();
-    }
-    p += 2;
     GrailEwValue stack[GRAIL_EW_STACK];
     int sp = 0;
-    PyTypeObject *record_type = NULL;
 #define EW_PUSH(V) do { if (sp >= GRAIL_EW_STACK) EW_FAIL(); stack[sp++] = (V); } while (0)
 #define EW_NEED(N) do { if (sp < (N)) EW_FAIL(); } while (0)
     for (;; p++) {
         if (p >= trace_end) {
             EW_FAIL();
         }
-        GrailEwValue v = {0};
+        GrailEwValue v;
+        v.tag = EW_OTHER;
+        v.len = 0;
         int opcode = p->opcode;
         switch (opcode) {
             case _CHECK_VALIDITY:
@@ -902,17 +894,22 @@ grail_fuse_elementwise(JitOptContext *ctx, _PyUOpInstruction *this_instr,
             case _TIER2_RESUME_CHECK:
             case _MAKE_HEAP_SAFE:
             case _RECORD_CODE:
-            case _RECORD_TOS_TYPE:
             case _GUARD_IP__PUSH_FRAME:
             case _GUARD_CODE_VERSION__PUSH_FRAME:
                 continue;
+            case _RECORD_TOS_TYPE:
+                if (sp > 0 && stack[sp - 1].tag == EW_ARG &&
+                    types[stack[sp - 1].arg] == NULL) {
+                    types[stack[sp - 1].arg] = (PyTypeObject *)p->operand0;
+                }
+                continue;
             case _LOAD_FAST:
             case _LOAD_FAST_BORROW:
-                if (p->oparg > 1) {
+                if (p->oparg >= nargs) {
                     EW_FAIL();
                 }
                 v.tag = EW_ARG;
-                v.term = (GrailEwTerm){p->oparg, -1};
+                v.arg = p->oparg;
                 EW_PUSH(v);
                 continue;
             case _PUSH_NULL:
@@ -939,12 +936,11 @@ grail_fuse_elementwise(JitOptContext *ctx, _PyUOpInstruction *this_instr,
                 EW_PUSH(v);  /* _PUSH_NULL_CONDITIONAL follows */
                 continue;
             }
-            case _GUARD_TYPE_VERSION:
-            case _GUARD_NOS_TYPE_VERSION: {
-                EW_NEED(2);
-                GrailEwValue *g = &stack[sp - (opcode == _GUARD_TYPE_VERSION ? 1 : 2)];
-                if (g->tag != EW_ARG ||
-                    types[g->term.arg]->tp_version_tag != (uint32_t)p->operand0) {
+            case _GUARD_TYPE_VERSION: {
+                EW_NEED(1);
+                GrailEwValue *g = &stack[sp - 1];
+                if (g->tag != EW_ARG || types[g->arg] == NULL ||
+                    types[g->arg]->tp_version_tag != (uint32_t)p->operand0) {
                     EW_FAIL();
                 }
                 continue;
@@ -953,9 +949,11 @@ grail_fuse_elementwise(JitOptContext *ctx, _PyUOpInstruction *this_instr,
             case _GUARD_NOS_FLOAT: {
                 EW_NEED(2);
                 GrailEwValue *g = &stack[sp - (opcode == _GUARD_TOS_FLOAT ? 1 : 2)];
-                /* A field is float once its record is checked to conform. */
-                if (g->tag != EW_FIELD &&
-                    !(g->tag == EW_ARG && types[g->term.arg] == &PyFloat_Type)) {
+                if (g->tag == EW_ARG && types[g->arg] == NULL) {
+                    types[g->arg] = &PyFloat_Type;
+                }
+                if (g->tag != EW_EXPR &&
+                    !(g->tag == EW_ARG && types[g->arg] == &PyFloat_Type)) {
                     EW_FAIL();
                 }
                 continue;
@@ -972,9 +970,15 @@ grail_fuse_elementwise(JitOptContext *ctx, _PyUOpInstruction *this_instr,
                     offset % (Py_ssize_t)sizeof(PyObject *) != 0) {
                     EW_FAIL();
                 }
-                v.tag = EW_FIELD;
-                v.term = (GrailEwTerm){owner.term.arg,
-                                       (int)(offset / (Py_ssize_t)sizeof(PyObject *))};
+                Py_ssize_t field = offset / (Py_ssize_t)sizeof(PyObject *);
+                /* A field of a conforming all-float record is a float. */
+                if (field >= _PyGrail_FLOAT_SCALAR || types[owner.arg] == NULL ||
+                    field >= _PyGrail_FloatRecordFieldCount(types[owner.arg])) {
+                    EW_FAIL();
+                }
+                v.tag = EW_EXPR;
+                v.len = 1;
+                v.code[0] = EW_LOAD(owner.arg, (int)field);
                 stack[sp - 1] = v;
                 EW_PUSH(owner);
                 continue;
@@ -990,15 +994,32 @@ grail_fuse_elementwise(JitOptContext *ctx, _PyUOpInstruction *this_instr,
             case _BINARY_OP_MULTIPLY_FLOAT: {
                 EW_NEED(2);
                 GrailEwValue x = stack[sp - 2], y = stack[sp - 1];
-                if ((x.tag != EW_ARG && x.tag != EW_FIELD) ||
-                    (y.tag != EW_ARG && y.tag != EW_FIELD)) {
+                v.tag = EW_EXPR;
+                GrailEwValue *operands[2] = {&x, &y};
+                for (int k = 0; k < 2; k++) {
+                    GrailEwValue *o = operands[k];
+                    if (o->tag == EW_ARG && types[o->arg] == &PyFloat_Type) {
+                        if (v.len + 1 > _PyGrail_FLOAT_PROGRAM_MAX) {
+                            EW_FAIL();
+                        }
+                        v.code[v.len++] = EW_LOAD(o->arg, _PyGrail_FLOAT_SCALAR);
+                    }
+                    else if (o->tag == EW_EXPR) {
+                        if (v.len + o->len > _PyGrail_FLOAT_PROGRAM_MAX) {
+                            EW_FAIL();
+                        }
+                        memcpy(v.code + v.len, o->code, o->len);
+                        v.len += o->len;
+                    }
+                    else {
+                        EW_FAIL();
+                    }
+                }
+                if (v.len + 1 > _PyGrail_FLOAT_PROGRAM_MAX) {
                     EW_FAIL();
                 }
-                v.tag = EW_BINOP;
-                v.op = opcode == _BINARY_OP_ADD_FLOAT ? 0 :
-                       opcode == _BINARY_OP_SUBTRACT_FLOAT ? 1 : 2;
-                v.x = x.term;
-                v.y = y.term;
+                v.code[v.len++] = EW_OP(opcode == _BINARY_OP_ADD_FLOAT ? 0 :
+                                        opcode == _BINARY_OP_SUBTRACT_FLOAT ? 1 : 2);
                 stack[sp - 2] = v;
                 stack[sp - 1] = x;
                 EW_PUSH(y);
@@ -1010,37 +1031,29 @@ grail_fuse_elementwise(JitOptContext *ctx, _PyUOpInstruction *this_instr,
                 int n = p->oparg;
                 EW_NEED(n + 2);
                 GrailEwValue callable = stack[sp - n - 2];
-                if (record_type != NULL || callable.tag != EW_CONST ||
+                if (n == 0 || callable.tag != EW_CONST ||
                     stack[sp - n - 1].tag != EW_NULL ||
                     !PyType_Check(callable.obj) ||
                     _PyGrail_FloatRecordFieldCount((PyTypeObject *)callable.obj) != n ||
                     !_PyGrail_IsPositionalRecordCall(callable.obj, n)) {
                     EW_FAIL();
                 }
-                record_type = (PyTypeObject *)callable.obj;
-                /* Check the arguments now; they are popped below. */
-                GrailEwValue *args = &stack[sp - n];
+                /* Only element-wise records: the same op and kind on every
+                 * field. */
                 int op = -1, kind = -1;
                 for (int i = 0; i < n; i++) {
-                    GrailEwValue a = args[i];
-                    if (a.tag != EW_BINOP || (op >= 0 && a.op != op)) {
-                        EW_FAIL();
-                    }
-                    op = a.op;
-                    int k = grail_ew_term_is(a.x, 0, i) && grail_ew_term_is(a.y, 1, i) ? 0 :
-                            grail_ew_term_is(a.x, 0, i) && grail_ew_term_is(a.y, 1, -1) ? 1 :
-                            grail_ew_term_is(a.x, 0, -1) && grail_ew_term_is(a.y, 1, i) ? 2 : -1;
-                    if (k < 0 || (kind >= 0 && k != kind)) {
+                    int o;
+                    int k = grail_ew_kind(&stack[sp - n + i], i, &o);
+                    if (k < 0 || (kind >= 0 && (k != kind || o != op))) {
                         EW_FAIL();
                     }
                     kind = k;
-                }
-                if (n == 0) {
-                    EW_FAIL();
+                    op = o;
                 }
                 sp -= n + 2;
                 v.tag = EW_RESULT;
-                v.op = op | (kind << 2);
+                v.obj = callable.obj;
+                v.arg = op | (kind << 2);
                 EW_PUSH(v);
                 EW_PUSH(callable);
                 continue;
@@ -1055,19 +1068,10 @@ grail_fuse_elementwise(JitOptContext *ctx, _PyUOpInstruction *this_instr,
     }
 #undef EW_PUSH
 #undef EW_NEED
-    if (sp != 1 || stack[0].tag != EW_RESULT) {
+    if (sp != 1 || (stack[0].tag != EW_RESULT && stack[0].tag != EW_EXPR)) {
         EW_FAIL();
     }
-    int ew_oparg = stack[0].op;
-    int kind = ew_oparg >> 2;
-    /* The operand types the shape needs: kind 0 (R, R), 1 (R, float),
-     * 2 (float, R). */
-    PyTypeObject *want[2] = {kind == 2 ? &PyFloat_Type : record_type,
-                             kind == 1 ? &PyFloat_Type : record_type};
-    if (types[0] != want[0] || types[1] != want[1] ||
-        record_type->tp_version_tag == 0) {
-        EW_FAIL();
-    }
+    *result = stack[0];
     /* Skip the return's own checks: the caller continues after them. */
     p++;
     while (p < trace_end && (p->opcode == _RECORD_CODE ||
@@ -1078,12 +1082,77 @@ grail_fuse_elementwise(JitOptContext *ctx, _PyUOpInstruction *this_instr,
     if (p >= trace_end) {
         EW_FAIL();
     }
+    *end = p;
+    return 1;
+}
 
-    /* Emit. The frame push needs no recursion check any more. */
+/* The frame push needs no recursion check any more. */
+static void
+grail_drop_recursion_check(JitOptContext *ctx)
+{
     if (ctx->out_buffer.next > ctx->out_buffer.start &&
         ctx->out_buffer.next[-1].opcode == _CHECK_RECURSION_REMAINING) {
         ctx->out_buffer.next--;
     }
+}
+
+/* The exact type of an operand: known, or as observed while tracing (the
+ * fused uops check it). */
+static PyTypeObject *
+grail_operand_type(JitOptRef ref)
+{
+    PyTypeObject *type = sym_get_type(ref);
+    return type != NULL ? type : sym_get_probable_type(ref);
+}
+
+/* Returns the number of trace entries consumed (from this_instr, the
+ * _GRAIL_BINARY_CHECK_FUNC) and emits the fused form, or returns 0 and emits
+ * nothing. */
+static int
+grail_fuse_elementwise(JitOptContext *ctx, _PyUOpInstruction *this_instr,
+                       _PyUOpInstruction *trace_end, JitOptRef **stack_pointer_p,
+                       _PyBloomFilter *dependencies)
+{
+    JitOptRef *stack_pointer = *stack_pointer_p;
+    if (!grail_fuse_elementwise_enabled() || !grail_fold_dispatch() ||
+        STACK_LEVEL() < 2) {
+        EW_FAIL();
+    }
+    JitOptRef left = stack_pointer[-2];
+    JitOptRef right = stack_pointer[-1];
+    PyTypeObject *types[2] = {grail_operand_type(left), grail_operand_type(right)};
+    if (types[0] == NULL || types[1] == NULL) {
+        EW_FAIL();
+    }
+    PyObject *impl = _PyGrail_BinaryOpLookup(types[0], types[1], this_instr->oparg);
+    if (impl == NULL || !PyFunction_Check(impl) ||
+        ((PyFunctionObject *)impl)->func_version != this_instr->operand0) {
+        EW_FAIL();
+    }
+    PyObject *globals = ((PyFunctionObject *)impl)->func_globals;
+    _PyUOpInstruction *p = this_instr + 1;
+    if (p + 1 >= trace_end || p[0].opcode != _GRAIL_BINARY_INIT_CALL ||
+        p[1].opcode != _PUSH_FRAME) {
+        EW_FAIL();
+    }
+    GrailEwValue result;
+    _PyUOpInstruction *end;
+    if (!grail_scan_callee(p + 2, trace_end, globals, types, 2, &result, &end) ||
+        result.tag != EW_RESULT) {
+        EW_FAIL();
+    }
+    PyTypeObject *record_type = (PyTypeObject *)result.obj;
+    int ew_oparg = result.arg;
+    int kind = ew_oparg >> 2;
+    /* The operand types the shape needs: kind 0 (R, R), 1 (R, float),
+     * 2 (float, R). */
+    PyTypeObject *want[2] = {kind == 2 ? &PyFloat_Type : record_type,
+                             kind == 1 ? &PyFloat_Type : record_type};
+    if (types[0] != want[0] || types[1] != want[1]) {
+        EW_FAIL();
+    }
+
+    grail_drop_recursion_check(ctx);
     /* The uop checks the operand types itself. */
     sym_set_type(left, types[0]);
     sym_set_type(right, types[1]);
@@ -1101,7 +1170,108 @@ grail_fuse_elementwise(JitOptContext *ctx, _PyUOpInstruction *this_instr,
     stack_pointer[-2] = res;
     stack_pointer -= 1;
     *stack_pointer_p = stack_pointer;
-    return (int)(p - this_instr);
+    return (int)(end - this_instr);
+}
+
+/* A call of a Python function (CALL_PY_EXACT_ARGS, from its
+ * _CHECK_FUNCTION_VERSION) whose inlined body returns a float expression
+ * over float fields of record arguments and float arguments, such as
+ *
+ *     def dot(a: Vec3, b: Vec3) -> float:
+ *         return a.x * b.x + a.y * b.y + a.z * b.z
+ *
+ * becomes _GRAIL_FLOAT_PROGRAM: no frame, the expression evaluated on
+ * doubles in the same order. The function is the trace's (its version is
+ * checked, or it is a constant under invalidation). Same return convention
+ * as grail_fuse_elementwise. Disabled with the element-wise fusion. */
+static int
+grail_fuse_float_call(JitOptContext *ctx, _PyUOpInstruction *this_instr,
+                      _PyUOpInstruction *trace_end, JitOptRef **stack_pointer_p,
+                      _PyBloomFilter *dependencies)
+{
+    JitOptRef *stack_pointer = *stack_pointer_p;
+    int nargs = this_instr->oparg;
+    if (!grail_fuse_elementwise_enabled() || nargs < 1 ||
+        nargs > _PyGrail_FLOAT_PROGRAM_ARGS || STACK_LEVEL() < nargs + 2) {
+        EW_FAIL();
+    }
+    JitOptRef callable = stack_pointer[-nargs - 2];
+    JitOptRef self_or_null = stack_pointer[-nargs - 1];
+    if (!sym_is_null(self_or_null)) {
+        EW_FAIL();
+    }
+    PyObject *func = sym_get_const(ctx, callable);
+    bool known = func != NULL;
+    if (func == NULL) {
+        func = sym_get_probable_value(callable);
+    }
+    if (func == NULL || !PyFunction_Check(func) ||
+        ((PyFunctionObject *)func)->func_version != (uint32_t)this_instr->operand0) {
+        EW_FAIL();
+    }
+    PyCodeObject *code = (PyCodeObject *)PyFunction_GET_CODE(func);
+    if (code->co_argcount != nargs || code->co_nlocalsplus != nargs ||
+        (code->co_flags & (CO_GENERATOR | CO_COROUTINE | CO_ASYNC_GENERATOR))) {
+        EW_FAIL();
+    }
+    _PyGrailFloatProgram program;
+    memset(&program, 0, sizeof(program));
+    program.nargs = (uint8_t)nargs;
+    for (int i = 0; i < nargs; i++) {
+        program.types[i] = grail_operand_type(stack_pointer[-nargs + i]);
+    }
+    /* The call's own checks, then the frame push. */
+    _PyUOpInstruction *p = this_instr + 1;
+    for (;; p++) {
+        if (p >= trace_end) {
+            EW_FAIL();
+        }
+        int op = p->opcode;
+        if (op == _PUSH_FRAME) {
+            break;
+        }
+        if (op != _CHECK_FUNCTION_EXACT_ARGS && op != _CHECK_STACK_SPACE &&
+            op != _CHECK_RECURSION_REMAINING && op != _INIT_CALL_PY_EXACT_ARGS &&
+            op != _SAVE_RETURN_OFFSET) {
+            EW_FAIL();
+        }
+    }
+    GrailEwValue result;
+    _PyUOpInstruction *end;
+    if (!grail_scan_callee(p + 1, trace_end, ((PyFunctionObject *)func)->func_globals,
+                           program.types, nargs, &result, &end) ||
+        result.tag != EW_EXPR) {
+        EW_FAIL();
+    }
+    for (int i = 0; i < nargs; i++) {
+        PyTypeObject *type = program.types[i];
+        if (type == NULL ||
+            (type != &PyFloat_Type && _PyGrail_FloatRecordFieldCount(type) < 0)) {
+            EW_FAIL();
+        }
+    }
+    program.len = (uint8_t)result.len;
+    memcpy(program.code, result.code, result.len);
+    const _PyGrailFloatProgram *interned = _PyGrail_InternFloatProgram(&program);
+    if (interned == NULL) {
+        EW_FAIL();
+    }
+
+    if (!known) {
+        ADD_OP(_CHECK_FUNCTION_VERSION, nargs, this_instr->operand0);
+    }
+    ADD_OP(_GRAIL_FLOAT_PROGRAM, nargs, (uintptr_t)interned);
+    _Py_BloomFilter_Add(dependencies, func);
+    PyObject *globals = ((PyFunctionObject *)func)->func_globals;
+    PyDict_Watch(GLOBALS_WATCHER_ID, globals);
+    _Py_BloomFilter_Add(dependencies, globals);
+    for (int i = 0; i < nargs; i++) {
+        sym_set_type(stack_pointer[-nargs + i], program.types[i]);
+    }
+    stack_pointer -= nargs + 1;
+    stack_pointer[-1] = PyJitRef_MakeUnique(sym_new_type(ctx, &PyFloat_Type));
+    *stack_pointer_p = stack_pointer;
+    return (int)(end - this_instr);
 }
 
 /* >0 (length) for success, 0 for not ready, clears all possible errors. */
@@ -1170,6 +1340,10 @@ optimize_uops(
         if (opcode == _GRAIL_BINARY_CHECK_FUNC) {
             fused = grail_fuse_elementwise(ctx, this_instr, trace + trace_len,
                                            &stack_pointer, dependencies);
+        }
+        else if (opcode == _CHECK_FUNCTION_VERSION) {
+            fused = grail_fuse_float_call(ctx, this_instr, trace + trace_len,
+                                          &stack_pointer, dependencies);
         }
         if (fused) {
             i += fused - 1;

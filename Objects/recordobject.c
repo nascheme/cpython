@@ -865,6 +865,98 @@ _PyGrail_ElementwiseFloat(PyTypeObject *type, int op, int kind,
     return (PyObject *)self;
 }
 
+static PyMutex float_programs_mutex;
+static const _PyGrailFloatProgram *float_programs[512];
+static int float_programs_count;
+
+/* A persistent copy of program (types referenced), or NULL when the table
+ * is full. The optimizer passes it to _GRAIL_FLOAT_PROGRAM as a constant. */
+const _PyGrailFloatProgram *
+_PyGrail_InternFloatProgram(const _PyGrailFloatProgram *program)
+{
+    _PyGrailFloatProgram key;
+    memset(&key, 0, sizeof(key));
+    memcpy(key.types, program->types, sizeof(key.types));
+    key.nargs = program->nargs;
+    key.len = program->len;
+    memcpy(key.code, program->code, program->len);
+    const _PyGrailFloatProgram *result = NULL;
+    PyMutex_Lock(&float_programs_mutex);
+    for (int i = 0; i < float_programs_count; i++) {
+        if (memcmp(float_programs[i], &key, sizeof(key)) == 0) {
+            result = float_programs[i];
+            goto done;
+        }
+    }
+    if (float_programs_count < (int)Py_ARRAY_LENGTH(float_programs)) {
+        _PyGrailFloatProgram *copy = PyMem_RawMalloc(sizeof(key));
+        if (copy != NULL) {
+            *copy = key;
+            for (int i = 0; i < key.nargs; i++) {
+                Py_INCREF(key.types[i]);
+            }
+            float_programs[float_programs_count++] = copy;
+            result = copy;
+        }
+    }
+done:
+    PyMutex_Unlock(&float_programs_mutex);
+    return result;
+}
+
+/* The arguments have the program's exact types and record arguments
+ * conform, so every field it loads is an exact float. */
+int
+_PyGrail_FloatProgramArgsOk(const _PyGrailFloatProgram *program,
+                            _PyStackRef *args)
+{
+    for (int i = 0; i < program->nargs; i++) {
+        PyObject *arg = PyStackRef_AsPyObjectBorrow(args[i]);
+        PyTypeObject *type = program->types[i];
+        if (Py_TYPE(arg) != type ||
+            (type != &PyFloat_Type && !((RecordObject *)arg)->conforming)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* One float operation per program step, in program order, so the result is
+ * bit for bit what the Python function computes. */
+double
+_PyGrail_FloatProgramEval(const _PyGrailFloatProgram *program,
+                          _PyStackRef *args)
+{
+    double stack[_PyGrail_FLOAT_PROGRAM_MAX];
+    int sp = 0;
+    for (int i = 0; i < program->len; i++) {
+        uint8_t c = program->code[i];
+        switch (c >> 6) {
+            case 0: {
+                PyObject *arg = PyStackRef_AsPyObjectBorrow(args[(c >> 4) & 3]);
+                int field = c & 15;
+                stack[sp++] = PyFloat_AS_DOUBLE(field == _PyGrail_FLOAT_SCALAR ? arg :
+                                                ((RecordObject *)arg)->fields[field]);
+                break;
+            }
+            case 1:
+                sp--;
+                stack[sp - 1] = stack[sp - 1] + stack[sp];
+                break;
+            case 2:
+                sp--;
+                stack[sp - 1] = stack[sp - 1] - stack[sp];
+                break;
+            default:
+                sp--;
+                stack[sp - 1] = stack[sp - 1] * stack[sp];
+                break;
+        }
+    }
+    assert(sp == 1);
+    return stack[0];
+}
+
 void
 _PyGrail_KernelDealloc(PyObject *self)
 {
