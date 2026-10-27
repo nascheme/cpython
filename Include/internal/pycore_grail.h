@@ -304,6 +304,13 @@ typedef struct {
     uint8_t nargs;
     uint8_t len;
     uint8_t code[_PyGrail_FLOAT_PROGRAM_MAX];
+    /* Set at interning, not part of the key: a program that is a sum of
+     * products, l0 * r0 +/- l1 * r1 +/- ... (left to right), has npairs > 0
+     * and its operands' load codes in pairs; bit k of negate subtracts
+     * product k. */
+    uint8_t npairs;
+    uint16_t negate;
+    uint8_t pairs[_PyGrail_FLOAT_PROGRAM_MAX / 3][2];
 } _PyGrailFloatProgram;
 PyAPI_FUNC(const _PyGrailFloatProgram *) _PyGrail_InternFloatProgram(
     const _PyGrailFloatProgram *);

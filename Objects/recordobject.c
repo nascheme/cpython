@@ -890,6 +890,43 @@ static PyMutex float_programs_mutex;
 static const _PyGrailFloatProgram *float_programs[512];
 static int float_programs_count;
 
+#define FLOAT_PROGRAM_KEY_SIZE offsetof(_PyGrailFloatProgram, npairs)
+
+enum { FP_LOAD, FP_ADD, FP_SUB, FP_MUL };
+
+/* Recognize l0 * r0 (+|- l1 * r1)*: the loads of each product, in order. */
+static void
+float_program_pairs(_PyGrailFloatProgram *program)
+{
+    const uint8_t *code = program->code;
+    int len = program->len, n = 0;
+    uint16_t negate = 0;
+    for (int i = 0; i + 2 < len; ) {
+        if (code[i] >> 6 != FP_LOAD || code[i + 1] >> 6 != FP_LOAD ||
+            code[i + 2] >> 6 != FP_MUL || n >= 16) {
+            return;
+        }
+        program->pairs[n][0] = code[i];
+        program->pairs[n][1] = code[i + 1];
+        i += 3;
+        if (n > 0) {
+            if (i >= len || (code[i] >> 6 != FP_ADD && code[i] >> 6 != FP_SUB)) {
+                return;
+            }
+            if (code[i] >> 6 == FP_SUB) {
+                negate |= 1 << n;
+            }
+            i++;
+        }
+        n++;
+        if (i == len) {
+            program->npairs = (uint8_t)n;
+            program->negate = negate;
+            return;
+        }
+    }
+}
+
 /* A persistent copy of program (types referenced), or NULL when the table
  * is full. The optimizer passes it to _GRAIL_FLOAT_PROGRAM as a constant. */
 const _PyGrailFloatProgram *
@@ -904,7 +941,7 @@ _PyGrail_InternFloatProgram(const _PyGrailFloatProgram *program)
     const _PyGrailFloatProgram *result = NULL;
     PyMutex_Lock(&float_programs_mutex);
     for (int i = 0; i < float_programs_count; i++) {
-        if (memcmp(float_programs[i], &key, sizeof(key)) == 0) {
+        if (memcmp(float_programs[i], &key, FLOAT_PROGRAM_KEY_SIZE) == 0) {
             result = float_programs[i];
             goto done;
         }
@@ -913,6 +950,7 @@ _PyGrail_InternFloatProgram(const _PyGrailFloatProgram *program)
         _PyGrailFloatProgram *copy = PyMem_RawMalloc(sizeof(key));
         if (copy != NULL) {
             *copy = key;
+            float_program_pairs(copy);
             for (int i = 0; i < key.nargs; i++) {
                 Py_INCREF(key.types[i]);
             }
@@ -944,10 +982,30 @@ _PyGrail_FloatProgramArgsOk(const _PyGrailFloatProgram *program,
 
 /* One float operation per program step, in program order, so the result is
  * bit for bit what the Python function computes. */
+static inline double
+float_program_load(uint8_t c, _PyStackRef *args)
+{
+    PyObject *arg = PyStackRef_AsPyObjectBorrow(args[(c >> 4) & 3]);
+    int field = c & 15;
+    return PyFloat_AS_DOUBLE(field == _PyGrail_FLOAT_SCALAR ? arg :
+                             ((RecordObject *)arg)->fields[field]);
+}
+
 double
 _PyGrail_FloatProgramEval(const _PyGrailFloatProgram *program,
                           _PyStackRef *args)
 {
+    if (program->npairs) {
+        const uint8_t (*pairs)[2] = program->pairs;
+        double acc = float_program_load(pairs[0][0], args) *
+                     float_program_load(pairs[0][1], args);
+        for (int k = 1; k < program->npairs; k++) {
+            double p = float_program_load(pairs[k][0], args) *
+                       float_program_load(pairs[k][1], args);
+            acc = (program->negate >> k) & 1 ? acc - p : acc + p;
+        }
+        return acc;
+    }
     double stack[_PyGrail_FLOAT_PROGRAM_MAX];
     int sp = 0;
     for (int i = 0; i < program->len; i++) {

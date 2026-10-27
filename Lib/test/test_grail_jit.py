@@ -744,6 +744,15 @@ def dot(a, b):
 def mixed(a, k, b):
     return (a.x - k) * b.y - k * (a.z + b.x)
 
+def products(a, k, b):
+    return a.x * b.y - a.y * b.x + k * a.z - b.z * k
+
+def products_loop(n, a, k, b):
+    t = 0.0
+    for i in range(n):
+        t += products(a, k, b)
+    return t
+
 def local(a, b):
     t = a.x * b.x      # a local: not fused
     return t + a.y
@@ -804,6 +813,13 @@ class FloatCallFusionTests(unittest.TestCase):
         self.assertEqual(m["mixed_loop"](ITERATIONS, a, k, b), sum_repeat(e, ITERATIONS))
         f = (a.x * b.x + a.y) + a.x / b.x
         self.assertEqual(m["other_loop"](ITERATIONS, a, b), sum_repeat(f, ITERATIONS))
+        # A sum of products, evaluated left to right (1e300 cancels).
+        g = a.x * b.y - a.y * b.x + k * a.z - b.z * k
+        self.assertEqual(m["products"](a, k, b), g)
+        self.assertEqual(m["products_loop"](ITERATIONS, a, k, b), sum_repeat(g, ITERATIONS))
+        c = V(1e300, 3.0, -1e300)
+        g = c.x * b.y - c.y * b.x + k * c.z - b.z * k
+        self.assertEqual(m["products_loop"](ITERATIONS, c, k, b), sum_repeat(g, ITERATIONS))
 
     def test_nonconforming_and_types(self):
         m = load_float_calls()
@@ -853,6 +869,9 @@ class FloatCallFusionTests(unittest.TestCase):
         m["other_loop"](ITERATIONS, a, b)
         counts = executor_uop_counts(m["other_loop"])
         self.assertEqual(counts["_GRAIL_FLOAT_PROGRAM"], 0, counts)
+        m["products_loop"](ITERATIONS, a, 0.5, b)
+        counts = executor_uop_counts(m["products_loop"])
+        self.assertEqual(counts["_GRAIL_FLOAT_PROGRAM"], 1, counts)
 
 
 # Records rebuilt from values known to conform (_CALL_RECORD_CHECKED).
