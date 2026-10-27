@@ -3,6 +3,7 @@
 #include "Python.h"
 #include "pycore_cell.h"          // PyCell_GetRef()
 #include "pycore_modsupport.h"    // _PyArg_NoKeywords()
+#include "pycore_freelist.h"      // _Py_FREELIST_POP()
 #include "pycore_object.h"
 
 #define _PyCell_CAST(op) _Py_CAST(PyCellObject*, (op))
@@ -12,9 +13,12 @@ PyCell_New(PyObject *obj)
 {
     PyCellObject *op;
 
-    op = (PyCellObject *)PyObject_GC_New(PyCellObject, &PyCell_Type);
-    if (op == NULL)
-        return NULL;
+    op = _Py_FREELIST_POP(PyCellObject, cells);
+    if (op == NULL) {
+        op = (PyCellObject *)PyObject_GC_New(PyCellObject, &PyCell_Type);
+        if (op == NULL)
+            return NULL;
+    }
     op->ob_ref = Py_XNewRef(obj);
 
     _PyObject_GC_TRACK(op);
@@ -79,7 +83,7 @@ cell_dealloc(PyObject *self)
     PyCellObject *op = _PyCell_CAST(self);
     _PyObject_GC_UNTRACK(op);
     Py_XDECREF(op->ob_ref);
-    PyObject_GC_Del(op);
+    _Py_FREELIST_FREE(cells, op, PyObject_GC_Del);
 }
 
 static PyObject *

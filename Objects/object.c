@@ -942,6 +942,8 @@ _PyObject_ClearFreeLists(struct _Py_freelists *freelists, int is_finalization)
     clear_freelist(&freelists->ranges, is_finalization, free_object);
     clear_freelist(&freelists->range_iters, is_finalization, free_object);
     clear_freelist(&freelists->contexts, is_finalization, free_object);
+    clear_freelist(&freelists->funcs, is_finalization, free_object);
+    clear_freelist(&freelists->cells, is_finalization, free_object);
     clear_freelist(&freelists->async_gens, is_finalization, free_object);
     clear_freelist(&freelists->async_gen_asends, is_finalization, free_object);
     clear_freelist(&freelists->futureiters, is_finalization, free_object);

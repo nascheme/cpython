@@ -19,6 +19,8 @@ extern "C" {
 #  define Py_complexes_MAXFREELIST 100
 #  define Py_ints_MAXFREELIST 100
 #  define Py_slices_MAXFREELIST 1
+#  define Py_funcs_MAXFREELIST 32      // function objects (closures)
+#  define Py_cells_MAXFREELIST 64
 #  define Py_ranges_MAXFREELIST 6
 #  define Py_range_iters_MAXFREELIST 6
 #  define Py_contexts_MAXFREELIST 255
@@ -54,6 +56,8 @@ struct _Py_freelists {
     struct _Py_freelist dicts;
     struct _Py_freelist dictkeys;
     struct _Py_freelist slices;
+    struct _Py_freelist funcs;
+    struct _Py_freelist cells;
     struct _Py_freelist ranges;
     struct _Py_freelist range_iters;
     struct _Py_freelist contexts;

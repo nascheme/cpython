@@ -6,6 +6,7 @@
 #include "pycore_function.h"      // _PyFunction_Vectorcall
 #include "pycore_long.h"          // _PyLong_GetOne()
 #include "pycore_modsupport.h"    // _PyArg_NoKeywords()
+#include "pycore_freelist.h"      // _Py_FREELIST_POP()
 #include "pycore_object.h"        // _PyObject_GC_UNTRACK()
 #include "pycore_object_deferred.h" // _PyObject_SetDeferredRefcount()
 #include "pycore_optimizer.h"       // _Py_Executors_InvalidateDependency()
@@ -215,9 +216,12 @@ _PyFunction_NewWithEnv(PyObject *code, PyObject *globals, PyObject *qualname,
         }
     }
 
-    PyFunctionObject *op = PyObject_GC_New(PyFunctionObject, &PyFunction_Type);
+    PyFunctionObject *op = _Py_FREELIST_POP(PyFunctionObject, funcs);
     if (op == NULL) {
-        goto error;
+        op = PyObject_GC_New(PyFunctionObject, &PyFunction_Type);
+        if (op == NULL) {
+            goto error;
+        }
     }
     /* Note: No failures from this point on, since func_dealloc() does not
        expect a partially-created object. */
@@ -1246,7 +1250,12 @@ func_dealloc(PyObject *self)
     _Py_DECREF_CODE((PyCodeObject *)op->func_code);
     Py_DECREF(op->func_name);
     Py_DECREF(op->func_qualname);
+#ifdef Py_GIL_DISABLED
+    /* A recycled function would keep its deferred reference count state. */
     PyObject_GC_Del(op);
+#else
+    _Py_FREELIST_FREE(funcs, op, PyObject_GC_Del);
+#endif
 }
 
 static PyObject*
