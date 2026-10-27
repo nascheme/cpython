@@ -1806,11 +1806,52 @@ static PyMethodDef copy_replace_def = {
     copy_replace__doc__
 };
 
+/* grail.replace(record, /, **changes): copy.replace for Grail records only. */
+static PyObject *
+grail_replace(PyObject *module, PyObject *const *args, Py_ssize_t nargs,
+              PyObject *kwnames)
+{
+    if (nargs != 1) {
+        PyErr_Format(PyExc_TypeError,
+                     "replace() takes exactly one positional argument (%zd given)",
+                     nargs);
+        return NULL;
+    }
+    if (!_PyGrail_IsRecordType((PyObject *)Py_TYPE(args[0]))) {
+        PyErr_SetString(PyExc_TypeError, "replace() requires a Grail record");
+        return NULL;
+    }
+    return record_replace_impl(args[0], args + 1, kwnames);
+}
+
+PyDoc_STRVAR(grail_replace__doc__,
+"replace($module, obj, /, **changes)\n"
+"--\n"
+"\n"
+"Return a Grail record with the supplied fields replaced.\n"
+"\n"
+"Unchanged fields are shared, and defaults and factories are not replayed.");
+
+static PyMethodDef grail_replace_def = {
+    "replace", _PyCFunction_CAST(grail_replace), METH_FASTCALL | METH_KEYWORDS,
+    grail_replace__doc__
+};
+
 /* Lib/copy.py uses _grail.replace, which reports module "copy", when present.
  * PYTHON_GRAIL_COPY_REPLACE=0 leaves it out, so copy.replace stays Python. */
 int
 _PyGrail_AddCopyReplace(PyObject *module)
 {
+    PyObject *grail_modname = PyUnicode_FromString("grail");
+    if (grail_modname == NULL) {
+        return -1;
+    }
+    PyObject *record_replace_func = PyCFunction_NewEx(&grail_replace_def, module,
+                                                      grail_modname);
+    Py_DECREF(grail_modname);
+    if (PyModule_Add(module, "replace_record", record_replace_func) < 0) {
+        return -1;
+    }
     const char *env = Py_GETENV("PYTHON_GRAIL_COPY_REPLACE");
     if (env != NULL && strcmp(env, "0") == 0) {
         return 0;

@@ -195,15 +195,7 @@ def _derive(record_type, deriving):
             generic.register(pair, make(record_type, op, kind))
 
 
-def replace(obj, /, **changes):
-    """Return a Grail record with the supplied fields replaced.
-
-    Unchanged fields are shared, and defaults and factories are not replayed.
-    """
-    cls = type(obj)
-    if not _core._is_record_type(cls):
-        raise TypeError("replace() requires a Grail record")
-    return cls.__replace__(obj, **changes)
+replace = _core.replace_record
 
 
 def record_fields(record_type):
