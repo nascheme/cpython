@@ -193,5 +193,31 @@ class BytesSubscriptTests(unittest.TestCase):
             total(ba, list(range(99, -1, -1)) + [99], ba.clear)
 
 
+class IntDivisionTests(unittest.TestCase):
+    def test_remainder_and_floor_division(self):
+        ns = {}
+        exec("""if 1:
+            def run(pairs):
+                out = []
+                for a, b in pairs:
+                    q = a // b
+                    r = a % b
+                    a //= b
+                    out.append((q, r, a))
+                return out
+            """, ns)
+        run = ns["run"]
+        vals = [0, 1, 2, 3, 7, -1, -2, -3, -7, 2**29, -2**29, 2**30 - 1, -(2**30 - 1)]
+        pairs = [(a, b) for a in vals for b in vals if b] * 3
+        from operator import floordiv, mod
+        expected = [(floordiv(a, b), mod(a, b), floordiv(a, b)) for a, b in pairs]
+        for _ in range(REPEAT):
+            self.assertEqual(run(pairs), expected)
+        with self.assertRaises(ZeroDivisionError):
+            run([(1, 2), (1, 0)])
+        self.assertEqual(run([(2**70, 3), (7.5, 2)]),
+                         [(2**70 // 3, 2**70 % 3, 2**70 // 3), (3.0, 1.5, 3.0)])
+
+
 if __name__ == "__main__":
     unittest.main()

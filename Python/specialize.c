@@ -2209,6 +2209,40 @@ BITWISE_LONGS_ACTION(compactlongs_and, &)
 BITWISE_LONGS_ACTION(compactlongs_xor, ^)
 #undef BITWISE_LONGS_ACTION
 
+/* % and // of compact ints with a nonzero divisor (a zero divisor keeps
+ * the generic path and its ZeroDivisionError), rounding toward negative
+ * infinity as long_mod and long_div do. */
+static int
+compactlongs_nonzero_divisor_guard(PyObject *lhs, PyObject *rhs)
+{
+    return is_compactlong(lhs) && is_compactlong(rhs) &&
+           _PyLong_CompactValue((PyLongObject *)rhs) != 0;
+}
+
+static PyObject *
+compactlongs_remainder(PyObject *lhs, PyObject *rhs)
+{
+    Py_ssize_t a = _PyLong_CompactValue((PyLongObject *)lhs);
+    Py_ssize_t b = _PyLong_CompactValue((PyLongObject *)rhs);
+    Py_ssize_t r = a % b;
+    if (r != 0 && ((r < 0) != (b < 0))) {
+        r += b;
+    }
+    return PyLong_FromSsize_t(r);
+}
+
+static PyObject *
+compactlongs_floor_divide(PyObject *lhs, PyObject *rhs)
+{
+    Py_ssize_t a = _PyLong_CompactValue((PyLongObject *)lhs);
+    Py_ssize_t b = _PyLong_CompactValue((PyLongObject *)rhs);
+    Py_ssize_t q = a / b;
+    if (a % b != 0 && ((a < 0) != (b < 0))) {
+        q -= 1;
+    }
+    return PyLong_FromSsize_t(q);
+}
+
 /* float-long */
 
 static inline int
@@ -2329,6 +2363,10 @@ bytearray_int_subscript(PyObject *lhs, PyObject *rhs)
 static _PyBinaryOpSpecializationDescr binaryop_extend_descrs[] = {
     /* long-long arithmetic: guards also check _PyLong_IsCompact, so
        type alone is not sufficient to eliminate the guard. */
+    {NB_REMAINDER, compactlongs_nonzero_divisor_guard, compactlongs_remainder, &PyLong_Type, 1, NULL, NULL},
+    {NB_INPLACE_REMAINDER, compactlongs_nonzero_divisor_guard, compactlongs_remainder, &PyLong_Type, 1, NULL, NULL},
+    {NB_FLOOR_DIVIDE, compactlongs_nonzero_divisor_guard, compactlongs_floor_divide, &PyLong_Type, 1, NULL, NULL},
+    {NB_INPLACE_FLOOR_DIVIDE, compactlongs_nonzero_divisor_guard, compactlongs_floor_divide, &PyLong_Type, 1, NULL, NULL},
     {NB_OR, compactlongs_guard, compactlongs_or, &PyLong_Type, 1, NULL, NULL},
     {NB_AND, compactlongs_guard, compactlongs_and, &PyLong_Type, 1, NULL, NULL},
     {NB_XOR, compactlongs_guard, compactlongs_xor, &PyLong_Type, 1, NULL, NULL},
