@@ -364,6 +364,7 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_CALL_BUILTIN_CLASS] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_GUARD_CALLABLE_RECORD] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
     [_CALL_RECORD] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
+    [_CALL_RECORD_CHECKED] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_GUARD_CALLABLE_BUILTIN_O] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
     [_CALL_BUILTIN_O] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_GUARD_CALLABLE_BUILTIN_FAST] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
@@ -3448,6 +3449,15 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_CALL_RECORD_CHECKED] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 2, 0, _CALL_RECORD_CHECKED_r02 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
     [_GUARD_CALLABLE_BUILTIN_O] = {
         .best = { 0, 0, 0, 0 },
         .entries = {
@@ -5061,6 +5071,7 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_CALL_BUILTIN_CLASS_r00] = _CALL_BUILTIN_CLASS,
     [_GUARD_CALLABLE_RECORD_r00] = _GUARD_CALLABLE_RECORD,
     [_CALL_RECORD_r02] = _CALL_RECORD,
+    [_CALL_RECORD_CHECKED_r02] = _CALL_RECORD_CHECKED,
     [_GUARD_CALLABLE_BUILTIN_O_r00] = _GUARD_CALLABLE_BUILTIN_O,
     [_CALL_BUILTIN_O_r03] = _CALL_BUILTIN_O,
     [_GUARD_CALLABLE_BUILTIN_FAST_r00] = _GUARD_CALLABLE_BUILTIN_FAST,
@@ -5516,6 +5527,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_CALL_NON_PY_GENERAL_r01] = "_CALL_NON_PY_GENERAL_r01",
     [_CALL_RECORD] = "_CALL_RECORD",
     [_CALL_RECORD_r02] = "_CALL_RECORD_r02",
+    [_CALL_RECORD_CHECKED] = "_CALL_RECORD_CHECKED",
+    [_CALL_RECORD_CHECKED_r02] = "_CALL_RECORD_CHECKED_r02",
     [_CALL_STR_1] = "_CALL_STR_1",
     [_CALL_STR_1_r32] = "_CALL_STR_1_r32",
     [_CALL_TUPLE_1] = "_CALL_TUPLE_1",
@@ -7426,6 +7439,8 @@ int _PyUop_num_popped(int opcode, int oparg)
         case _GUARD_CALLABLE_RECORD:
             return 0;
         case _CALL_RECORD:
+            return 2 + oparg;
+        case _CALL_RECORD_CHECKED:
             return 2 + oparg;
         case _GUARD_CALLABLE_BUILTIN_O:
             return 0;

@@ -855,6 +855,102 @@ class FloatCallFusionTests(unittest.TestCase):
         self.assertEqual(counts["_GRAIL_FLOAT_PROGRAM"], 0, counts)
 
 
+# Records rebuilt from values known to conform (_CALL_RECORD_CHECKED).
+CONFORMING = """
+import grail
+
+@grail.record
+class Item:
+    q: tuple[int, ...]
+    n: int
+    flag: bool
+
+@grail.record
+class Table:
+    items: tuple[Item | None, ...]
+    count: int
+
+def put(t, i, v):
+    return t[:i] + (v,) + t[i + 1:]
+
+def step(tab, i):
+    items = tab.items
+    it = items[i]
+    new = Item(it.q[1:] + (i,), it.n + 1, not it.flag)
+    return Table(put(items, i, new), tab.count + 1)
+
+def loop(tab, n):
+    for k in range(n):
+        tab = step(tab, k % 3)
+    return tab
+"""
+
+
+def load_conforming():
+    namespace = {"__name__": "grail_jit_conforming"}
+    exec(CONFORMING, namespace)
+    return namespace
+
+
+class KnownConformingTests(unittest.TestCase):
+    def check_table(self, m, tab):
+        import _grail
+        Item, Table = m["Item"], m["Table"]
+        # The conformance bits match a fresh construction's.
+        for it in tab.items[:3]:
+            self.assertEqual(_grail._is_conforming(it),
+                             _grail._is_conforming(Item(it.q, it.n, it.flag)))
+        self.assertEqual(_grail._is_conforming(tab),
+                         _grail._is_conforming(Table(tab.items, tab.count)))
+
+    def test_results(self):
+        m = load_conforming()
+        Item, Table = m["Item"], m["Table"]
+        start = Table(tuple(Item((0, 0), 0, False) for _ in range(3)) + (None,), 0)
+        tab = m["loop"](start, ITERATIONS)
+        self.assertEqual(tab.count, ITERATIONS)
+        self.assertEqual([it.n for it in tab.items[:3]], [6667, 6667, 6666])
+        self.check_table(m, tab)
+        import _grail
+        self.assertTrue(_grail._is_conforming(tab))
+        # A nonconforming item (a str in q, an int flag) leaves the table
+        # nonconforming until it is replaced by conforming values.
+        for bad in (Item(("x", 0), 0, False), Item((0, 0), 0, 1)):
+            for n in (1, 2, 3, 4, 7):
+                with self.subTest(bad=bad, n=n):
+                    start = Table((bad, Item((0, 0), 0, False),
+                                   Item((0, 0), 0, False), None), 0)
+                    tab = m["loop"](start, n)
+                    self.check_table(m, tab)
+
+    @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
+    def test_checked_uops(self):
+        m = load_conforming()
+        Item, Table = m["Item"], m["Table"]
+        m["loop"](Table(tuple(Item((0, 0), 0, False) for _ in range(3)), 0),
+                  ITERATIONS)
+        counts = executor_uop_counts(m["loop"])
+        self.assertGreaterEqual(counts["_CALL_RECORD_CHECKED"], 2, counts)
+        self.assertEqual(counts["_CALL_RECORD"], 0, counts)
+
+    @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
+    def test_known_conforming_ablation(self):
+        from test.support.script_helper import assert_python_ok
+        code = f"""if 1:
+            import sys
+            sys.path.insert(0, {repr(__file__.rsplit("/", 1)[0])})
+            from test.test_grail_jit import load_conforming, executor_uops
+            m = load_conforming()
+            Item, Table = m["Item"], m["Table"]
+            start = Table(tuple(Item((0, 0), 0, False) for _ in range(3)), 0)
+            assert m["loop"](start, 20000).count == 20000
+            uops = executor_uops(m["loop"])
+            assert "_CALL_RECORD" in uops, uops
+            assert "_CALL_RECORD_CHECKED" not in uops, uops
+        """
+        assert_python_ok("-c", code, PYTHON_GRAIL_JIT_KNOWN_CONFORMING="0")
+
+
 def sum_repeat(value, n):
     t = 0.0
     for _ in range(n):

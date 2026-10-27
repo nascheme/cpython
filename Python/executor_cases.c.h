@@ -20730,6 +20730,39 @@
             break;
         }
 
+        case _CALL_RECORD_CHECKED_r02: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef *args;
+            _PyStackRef callable;
+            _PyStackRef res;
+            _PyStackRef c;
+            oparg = CURRENT_OPARG();
+            args = &stack_pointer[-oparg];
+            callable = stack_pointer[-2 - oparg];
+            PyObject *check = (PyObject *)CURRENT_OPERAND0_64();
+            STAT_INC(CALL, hit);
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            PyObject *res_o = _PyGrail_RecordFromStackRefsCheckedStealOnSuccess(
+                (PyTypeObject *)PyStackRef_AsPyObjectBorrow(callable),
+                args, oparg, (uint64_t)(uintptr_t)check);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            if (res_o == NULL) {
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_ERROR();
+            }
+            c = callable;
+            res = PyStackRef_FromPyObjectSteal(res_o);
+            _tos_cache1 = c;
+            _tos_cache0 = res;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(2);
+            stack_pointer += -2 - oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _GUARD_CALLABLE_BUILTIN_O_r00: {
             CHECK_CURRENT_CACHED_VALUES(0);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());

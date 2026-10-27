@@ -76,6 +76,33 @@ PyAPI_FUNC(int) _PyGrail_UnpackMatchedRecord(struct _PyInterpreterFrame *frame,
 PyAPI_FUNC(PyTypeObject *) _PyGrail_ConformingFieldType(PyTypeObject *type,
                                                        Py_ssize_t offset);
 
+/* Value plans compiled at declaration (see recordobject.c), exported for
+ * the tier-2 optimizer. A record type's nodes start with one node per field;
+ * a union or tuple node's children are nodes [first, first + n). Types are
+ * borrowed from the schema, which the frozen record type owns. */
+enum {
+    _PyGrail_PLAN_ANY,       /* no plan */
+    _PyGrail_PLAN_EXACT,     /* exact scalar type */
+    _PyGrail_PLAN_RECORD,    /* exact record type, and the value conforms */
+    _PyGrail_PLAN_UNION,
+    _PyGrail_PLAN_TUPLE,     /* fixed tuple: child i for item i */
+    _PyGrail_PLAN_VARTUPLE,  /* variable tuple: child 0 for every item */
+};
+
+typedef struct {
+    PyTypeObject *type;
+    uint32_t kind;
+    uint32_t n;
+    uint32_t first;
+    uint32_t height;  /* nesting below this node: 0 for a leaf */
+} _PyGrailPlanNode;
+
+/* The plan nodes of a record type, or NULL for any other type. */
+PyAPI_FUNC(const _PyGrailPlanNode *) _PyGrail_PlanNodes(PyTypeObject *type);
+/* 1 if value conforms to plan node p of nodes, 0 if not, -1 on error. */
+PyAPI_FUNC(int) _PyGrail_PlanConforms(const _PyGrailPlanNode *nodes,
+                                      const _PyGrailPlanNode *p, PyObject *value);
+
 /* Field count of a record (UNPACK_SEQUENCE_RECORD's guard). */
 static inline Py_ssize_t
 _PyGrail_RecordFieldCount(PyObject *record)
@@ -85,6 +112,10 @@ _PyGrail_RecordFieldCount(PyObject *record)
 }
 PyAPI_FUNC(PyObject *) _PyGrail_RecordFromStackRefsStealOnSuccess(PyTypeObject *,
                                                                 _PyStackRef *, Py_ssize_t);
+/* The same, checking only the fields whose bit is set in check (fields from
+ * 64 on are always checked); the others are known to conform. */
+PyAPI_FUNC(PyObject *) _PyGrail_RecordFromStackRefsCheckedStealOnSuccess(
+    PyTypeObject *, _PyStackRef *, Py_ssize_t, uint64_t check);
 int _PyGrail_MatchRecord(PyObject *subject, PyObject *type, Py_ssize_t nargs,
                          PyObject *kwargs, PyObject **result);
 

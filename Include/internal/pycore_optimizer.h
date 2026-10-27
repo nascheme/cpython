@@ -73,6 +73,7 @@ typedef struct _JitOptRefBuffer {
 
 #define GRAIL_MAX_BORROWS 8
 #define GRAIL_MAX_CONFORMING 32
+#define GRAIL_MAX_PLAN_FACTS 64
 
 typedef struct _JitOptContext {
     char done;
@@ -110,6 +111,13 @@ typedef struct _JitOptContext {
     // Grail records known to conform (see grail_known_conforming()).
     JitOptSymbol *grail_conforming[GRAIL_MAX_CONFORMING];
     int grail_conforming_count;
+    // Values known to conform to a Grail value plan (see grail_conforms()).
+    struct {
+        JitOptSymbol *value;
+        const void *nodes;      // const _PyGrailPlanNode *
+        const void *node;
+    } grail_plans[GRAIL_MAX_PLAN_FACTS];
+    int grail_plan_count;
 } JitOptContext;
 
 

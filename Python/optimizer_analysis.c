@@ -472,13 +472,35 @@ lookup_attr(JitOptContext *ctx, _PyBloomFilter *dependencies, _PyUOpInstruction 
     return sym_new_not_null(ctx);
 }
 
-/* Grail records known to conform, so that typed field loads from them need
- * no exit. A conforming record stays conforming (its fields are immutable
- * values), so this holds for the rest of the trace. */
-static bool
-grail_known_conforming(JitOptContext *ctx, JitOptRef ref)
+/* Grail value conformance in a trace.
+ *
+ * Records and tuples are immutable and plans are frozen, so two kinds of
+ * facts hold for the rest of a trace once established:
+ *  - grail_conforming: records whose conformance bit is known to be set
+ *    (they passed a typed field load, or were built from proven values);
+ *  - grail_plans: values known to conform to a plan node, such as a field of
+ *    a conforming record, an item or slice of a conforming tuple, or a
+ *    concatenation of those.
+ * grail_conforms() combines them with known types, constants and symbolic
+ * tuples. A _CALL_RECORD then checks only the arguments it cannot prove
+ * (_CALL_RECORD_CHECKED), and a record built from proven arguments is known
+ * to conform. PYTHON_GRAIL_JIT_KNOWN_CONFORMING=0 disables the plan facts and
+ * _CALL_RECORD_CHECKED (fresh process per setting). */
+
+#define GRAIL_PLAN_DEPTH 8
+
+typedef _PyGrailPlanNode GrailPlan;
+
+static int
+grail_plan_facts(void)
 {
-    JitOptSymbol *sym = PyJitRef_Unwrap(ref);
+    const char *value = Py_GETENV("PYTHON_GRAIL_JIT_KNOWN_CONFORMING");
+    return value == NULL || strcmp(value, "0") != 0;
+}
+
+static bool
+grail_in_conforming_set(JitOptContext *ctx, JitOptSymbol *sym)
+{
     for (int i = 0; i < ctx->grail_conforming_count; i++) {
         if (ctx->grail_conforming[i] == sym) {
             return true;
@@ -487,12 +509,321 @@ grail_known_conforming(JitOptContext *ctx, JitOptRef ref)
     return false;
 }
 
+/* True if plan alternative a cannot describe a value of exact type type. */
+static bool
+grail_plan_excludes(const GrailPlan *a, PyTypeObject *type)
+{
+    switch (a->kind) {
+    case _PyGrail_PLAN_EXACT:
+    case _PyGrail_PLAN_RECORD:
+        return a->type != type;
+    case _PyGrail_PLAN_TUPLE:
+    case _PyGrail_PLAN_VARTUPLE:
+        return type != &PyTuple_Type;
+    default:
+        return false;
+    }
+}
+
+/* True if every value conforming to plan h of hn (and of exact type type,
+ * when not NULL) conforms to plan w of wn. Structural: the two plans may
+ * belong to different record types. */
+static bool
+grail_plan_implies(const GrailPlan *hn, const GrailPlan *h, PyTypeObject *type,
+                   const GrailPlan *wn, const GrailPlan *w, int depth)
+{
+    if (w->kind == _PyGrail_PLAN_ANY) {
+        return true;
+    }
+    if (depth > GRAIL_PLAN_DEPTH) {
+        return false;
+    }
+    if (h->kind == _PyGrail_PLAN_UNION) {
+        bool any = false;
+        for (uint32_t k = 0; k < h->n; k++) {
+            const GrailPlan *a = &hn[h->first + k];
+            if (type != NULL && grail_plan_excludes(a, type)) {
+                continue;
+            }
+            if (!grail_plan_implies(hn, a, type, wn, w, depth + 1)) {
+                return false;
+            }
+            any = true;
+        }
+        return any;
+    }
+    switch (w->kind) {
+    case _PyGrail_PLAN_EXACT:
+    case _PyGrail_PLAN_RECORD:
+        return h->kind == w->kind && h->type == w->type;
+    case _PyGrail_PLAN_UNION:
+        for (uint32_t k = 0; k < w->n; k++) {
+            if (grail_plan_implies(hn, h, type, wn, &wn[w->first + k], depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    case _PyGrail_PLAN_VARTUPLE: {
+        const GrailPlan *wc = &wn[w->first];
+        if (h->kind == _PyGrail_PLAN_VARTUPLE) {
+            return grail_plan_implies(hn, &hn[h->first], NULL, wn, wc, depth + 1);
+        }
+        if (h->kind != _PyGrail_PLAN_TUPLE) {
+            return false;
+        }
+        for (uint32_t k = 0; k < h->n; k++) {
+            if (!grail_plan_implies(hn, &hn[h->first + k], NULL, wn, wc, depth + 1)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    case _PyGrail_PLAN_TUPLE:
+        if (h->kind != _PyGrail_PLAN_TUPLE || h->n != w->n) {
+            return false;
+        }
+        for (uint32_t k = 0; k < h->n; k++) {
+            if (!grail_plan_implies(hn, &hn[h->first + k], NULL,
+                                    wn, &wn[w->first + k], depth + 1)) {
+                return false;
+            }
+        }
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* True if a plan fact about ref implies plan w of wn. */
+static bool
+grail_fact_implies(JitOptContext *ctx, JitOptRef ref, const GrailPlan *wn,
+                   const GrailPlan *w)
+{
+    JitOptSymbol *sym = PyJitRef_Unwrap(ref);
+    PyTypeObject *type = NULL;
+    for (int i = 0; i < ctx->grail_plan_count; i++) {
+        if (ctx->grail_plans[i].value != sym) {
+            continue;
+        }
+        if (type == NULL) {
+            type = sym_get_type(ref);
+        }
+        if (grail_plan_implies(ctx->grail_plans[i].nodes, ctx->grail_plans[i].node,
+                               type, wn, w, 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Grail records known to conform, so that typed field loads from them need
+ * no exit. A conforming record stays conforming (its fields are immutable
+ * values), so this holds for the rest of the trace. */
+static bool
+grail_known_conforming(JitOptContext *ctx, JitOptRef ref)
+{
+    if (grail_in_conforming_set(ctx, PyJitRef_Unwrap(ref))) {
+        return true;
+    }
+    PyTypeObject *type = sym_get_type(ref);
+    if (type == NULL || ctx->grail_plan_count == 0) {
+        return false;
+    }
+    GrailPlan record = {.type = type, .kind = _PyGrail_PLAN_RECORD};
+    return grail_fact_implies(ctx, ref, &record, &record);
+}
+
 static void
 grail_set_conforming(JitOptContext *ctx, JitOptRef ref)
 {
-    if (!grail_known_conforming(ctx, ref) &&
+    if (!grail_in_conforming_set(ctx, PyJitRef_Unwrap(ref)) &&
         ctx->grail_conforming_count < GRAIL_MAX_CONFORMING) {
         ctx->grail_conforming[ctx->grail_conforming_count++] = PyJitRef_Unwrap(ref);
+    }
+}
+
+/* Record that ref conforms to plan node p of nodes. A leaf plan also gives
+ * the value's exact type. */
+static void
+grail_add_plan_fact(JitOptContext *ctx, JitOptRef ref, const GrailPlan *nodes,
+                    const GrailPlan *p)
+{
+    if (p->kind == _PyGrail_PLAN_ANY || !grail_plan_facts()) {
+        return;
+    }
+    if (p->kind == _PyGrail_PLAN_EXACT || p->kind == _PyGrail_PLAN_RECORD) {
+        PyTypeObject *type = sym_get_type(ref);
+        if (type != NULL && type != p->type) {
+            return;  // unreachable code: keep what is known
+        }
+        if (type == NULL) {
+            sym_set_type(ref, p->type);
+        }
+        if (p->kind == _PyGrail_PLAN_RECORD) {
+            grail_set_conforming(ctx, ref);
+        }
+        return;
+    }
+    JitOptSymbol *sym = PyJitRef_Unwrap(ref);
+    for (int i = 0; i < ctx->grail_plan_count; i++) {
+        if (ctx->grail_plans[i].value == sym && ctx->grail_plans[i].node == p) {
+            return;
+        }
+    }
+    if (ctx->grail_plan_count < GRAIL_MAX_PLAN_FACTS) {
+        int n = ctx->grail_plan_count++;
+        ctx->grail_plans[n].value = sym;
+        ctx->grail_plans[n].nodes = nodes;
+        ctx->grail_plans[n].node = p;
+    }
+}
+
+/* True if the value of ref is known to conform to plan w of wn. */
+static bool
+grail_conforms(JitOptContext *ctx, JitOptRef ref, const GrailPlan *wn,
+               const GrailPlan *w, int depth)
+{
+    if (w->kind == _PyGrail_PLAN_ANY) {
+        return true;
+    }
+    if (depth > GRAIL_PLAN_DEPTH) {
+        return false;
+    }
+    if (sym_is_const(ctx, ref)) {
+        PyObject *value = sym_get_const(ctx, ref);
+        if (value != NULL) {
+            int res = _PyGrail_PlanConforms(wn, w, value);
+            if (res < 0) {
+                PyErr_Clear();
+            }
+            return res == 1;
+        }
+    }
+    if (grail_fact_implies(ctx, ref, wn, w)) {
+        return true;
+    }
+    PyTypeObject *type = sym_get_type(ref);
+    switch (w->kind) {
+    case _PyGrail_PLAN_EXACT:
+        return type == w->type;
+    case _PyGrail_PLAN_RECORD:
+        return type == w->type && grail_in_conforming_set(ctx, PyJitRef_Unwrap(ref));
+    case _PyGrail_PLAN_UNION:
+        for (uint32_t k = 0; k < w->n; k++) {
+            if (grail_conforms(ctx, ref, wn, &wn[w->first + k], depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    case _PyGrail_PLAN_TUPLE:
+    case _PyGrail_PLAN_VARTUPLE: {
+        Py_ssize_t length = sym_tuple_length(ref);
+        if (length < 0 ||
+            (w->kind == _PyGrail_PLAN_TUPLE && length != (Py_ssize_t)w->n)) {
+            return false;
+        }
+        for (Py_ssize_t k = 0; k < length; k++) {
+            const GrailPlan *c = &wn[w->first +
+                                     (w->kind == _PyGrail_PLAN_TUPLE ? k : 0)];
+            if (!grail_conforms(ctx, sym_tuple_getitem(ctx, ref, (int)k), wn, c,
+                                depth + 1)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+/* Facts for item (index, or -1 if not constant) of a tuple, or for a slice
+ * of it (slice true), from the tuple's plan facts. */
+static void
+grail_tuple_part_facts(JitOptContext *ctx, JitOptRef tuple, JitOptRef res,
+                       long index, bool slice)
+{
+    JitOptSymbol *sym = PyJitRef_Unwrap(tuple);
+    int n = ctx->grail_plan_count;
+    for (int i = 0; i < n; i++) {
+        if (ctx->grail_plans[i].value != sym) {
+            continue;
+        }
+        const GrailPlan *nodes = ctx->grail_plans[i].nodes;
+        const GrailPlan *p = ctx->grail_plans[i].node;
+        if (p->kind == _PyGrail_PLAN_VARTUPLE) {
+            grail_add_plan_fact(ctx, res, nodes, slice ? p : &nodes[p->first]);
+        }
+        else if (p->kind == _PyGrail_PLAN_TUPLE && !slice &&
+                 index >= 0 && index < (long)p->n) {
+            grail_add_plan_fact(ctx, res, nodes, &nodes[p->first + index]);
+        }
+    }
+}
+
+/* The concatenation of a tuple and a part known to conform to the same
+ * variable-tuple plan conforms to it too. */
+static void
+grail_tuple_concat_facts(JitOptContext *ctx, JitOptRef tuple, JitOptRef part,
+                         JitOptRef res)
+{
+    JitOptSymbol *sym = PyJitRef_Unwrap(tuple);
+    int n = ctx->grail_plan_count;
+    for (int i = 0; i < n; i++) {
+        if (ctx->grail_plans[i].value != sym) {
+            continue;
+        }
+        const GrailPlan *nodes = ctx->grail_plans[i].nodes;
+        const GrailPlan *p = ctx->grail_plans[i].node;
+        if (p->kind == _PyGrail_PLAN_VARTUPLE &&
+            grail_conforms(ctx, part, nodes, p, 0)) {
+            grail_add_plan_fact(ctx, res, nodes, p);
+        }
+    }
+}
+
+/* A field load from a record known to conform: the value conforms to the
+ * field's plan. */
+static void
+grail_field_facts(JitOptContext *ctx, JitOptRef owner, Py_ssize_t offset,
+                  JitOptRef attr)
+{
+    PyTypeObject *type = sym_get_type(owner);
+    const GrailPlan *nodes = type != NULL ? _PyGrail_PlanNodes(type) : NULL;
+    if (nodes == NULL || !grail_known_conforming(ctx, owner)) {
+        return;
+    }
+    Py_ssize_t i = (offset - (Py_ssize_t)offsetof(RecordObject, fields)) /
+                   (Py_ssize_t)sizeof(PyObject *);
+    Py_ssize_t n = (type->tp_basicsize - (Py_ssize_t)offsetof(RecordObject, fields)) /
+                   (Py_ssize_t)sizeof(PyObject *);
+    if (i >= 0 && i < n) {
+        grail_add_plan_fact(ctx, attr, nodes, &nodes[i]);
+    }
+}
+
+/* _CALL_RECORD of a record type: check only the arguments not known to
+ * conform. */
+static void
+grail_record_call(JitOptContext *ctx, _PyUOpInstruction *this_instr,
+                  PyTypeObject *type, JitOptRef *args, int nargs, JitOptRef res)
+{
+    const GrailPlan *nodes = _PyGrail_PlanNodes(type);
+    if (nodes == NULL || nargs > 64 || !grail_plan_facts()) {
+        return;
+    }
+    uint64_t check = 0;
+    for (int i = 0; i < nargs; i++) {
+        if (!grail_conforms(ctx, args[i], nodes, &nodes[i], 0)) {
+            check |= (uint64_t)1 << i;
+        }
+    }
+    uint64_t all = nargs == 64 ? UINT64_MAX : ((uint64_t)1 << nargs) - 1;
+    if (check != all) {
+        REPLACE_OP(this_instr, _CALL_RECORD_CHECKED, nargs, check);
+    }
+    if (check == 0) {
+        grail_set_conforming(ctx, res);
     }
 }
 

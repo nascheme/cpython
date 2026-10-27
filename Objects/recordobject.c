@@ -25,22 +25,13 @@
  * (i < number of fields) is field i's plan; a union or tuple node's children
  * are the contiguous nodes [first, first + n). Types are borrowed from the
  * plans, which the schema owns. */
-enum {
-    PLAN_ANY,       /* no plan */
-    PLAN_EXACT,     /* exact scalar type */
-    PLAN_RECORD,    /* exact record type, and the value conforms */
-    PLAN_UNION,
-    PLAN_TUPLE,     /* fixed tuple: child i for item i */
-    PLAN_VARTUPLE,  /* variable tuple: child 0 for every item */
-};
-
-typedef struct {
-    PyTypeObject *type;
-    uint32_t kind;
-    uint32_t n;
-    uint32_t first;
-    uint32_t height;  /* nesting below this node: 0 for a leaf */
-} PlanNode;
+#define PLAN_ANY _PyGrail_PLAN_ANY
+#define PLAN_EXACT _PyGrail_PLAN_EXACT
+#define PLAN_RECORD _PyGrail_PLAN_RECORD
+#define PLAN_UNION _PyGrail_PLAN_UNION
+#define PLAN_TUPLE _PyGrail_PLAN_TUPLE
+#define PLAN_VARTUPLE _PyGrail_PLAN_VARTUPLE
+typedef _PyGrailPlanNode PlanNode;
 
 /* Conformance recursion follows the plan, so checking a plan no taller than
  * this needs no recursion guard. */
@@ -250,6 +241,19 @@ plan_conforms_nested(const PlanNode *nodes, const PlanNode *p, PyObject *value)
     return result;
 }
 
+const _PyGrailPlanNode *
+_PyGrail_PlanNodes(PyTypeObject *type)
+{
+    return _PyGrail_IsRecordTypeFast(type) ? schema_nodes(type) : NULL;
+}
+
+int
+_PyGrail_PlanConforms(const _PyGrailPlanNode *nodes, const _PyGrailPlanNode *p,
+                      PyObject *value)
+{
+    return plan_conforms(nodes, p, value);
+}
+
 /* Number of nodes below plan, which plan_check has validated. */
 static Py_ssize_t
 plan_descendants(PyObject *plan)
@@ -422,12 +426,29 @@ PyObject *
 _PyGrail_RecordFromStackRefsStealOnSuccess(PyTypeObject *type,
                                            _PyStackRef *args, Py_ssize_t n)
 {
+    return _PyGrail_RecordFromStackRefsCheckedStealOnSuccess(type, args, n,
+                                                             UINT64_MAX);
+}
+
+/* Tier-2 _CALL_RECORD_CHECKED: the optimizer has shown that the fields whose
+ * bit is clear in check conform (values built or loaded in the same trace),
+ * so only the others are checked. Leaf plans are checked inline. */
+PyObject *
+_PyGrail_RecordFromStackRefsCheckedStealOnSuccess(PyTypeObject *type,
+                                                  _PyStackRef *args, Py_ssize_t n,
+                                                  uint64_t check)
+{
     assert(PyTuple_GET_SIZE(schema_part(type, 1)) == n);
     const PlanNode *nodes = schema_nodes(type);
     int conforming = 1;
     for (Py_ssize_t i = 0; i < n; i++) {
-        int ok = plan_conforms(nodes, &nodes[i],
-                               PyStackRef_AsPyObjectBorrow(args[i]));
+        if (i < 64 && !(check & ((uint64_t)1 << i))) {
+            continue;
+        }
+        const PlanNode *p = &nodes[i];
+        PyObject *value = PyStackRef_AsPyObjectBorrow(args[i]);
+        int ok = p->kind <= PLAN_RECORD ? plan_conforms_leaf(p, value) :
+                 plan_conforms(nodes, p, value);
         if (ok < 0) {
             return NULL;
         }

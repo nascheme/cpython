@@ -629,6 +629,11 @@ dummy_func(void) {
             if (d->result_unique) {
                 res = PyJitRef_MakeUnique(res);
             }
+            if (d->lhs_type == &PyTuple_Type && d->rhs_type == &PyTuple_Type &&
+                d->result_type == &PyTuple_Type) {
+                // Concatenation
+                grail_tuple_concat_facts(ctx, left, right, res);
+            }
         }
         else {
             res = sym_new_not_null(ctx);
@@ -860,9 +865,11 @@ dummy_func(void) {
                 assert(index < tuple_length);
                 res = sym_tuple_getitem(ctx, tuple_st, index);
             }
+            grail_tuple_part_facts(ctx, tuple_st, res, index, false);
         }
         else {
             res = sym_new_not_null(ctx);
+            grail_tuple_part_facts(ctx, tuple_st, res, -1, false);
         }
         ts = tuple_st;
         ss = sub_st;
@@ -1320,6 +1327,7 @@ dummy_func(void) {
         else {
             attr = sym_new_not_null(ctx);
         }
+        grail_field_facts(ctx, owner, index, attr);
         grail_borrow_candidate(ctx, attr, owner,
                                checked ? _LOAD_ATTR_RECORD_TYPED_BORROW
                                        : _LOAD_ATTR_RECORD_BORROW);
@@ -1336,6 +1344,7 @@ dummy_func(void) {
         else {
             attr = sym_new_not_null(ctx);
         }
+        grail_field_facts(ctx, owner, index, attr);
         grail_borrow_candidate(ctx, attr, owner, _LOAD_ATTR_RECORD_TYPED_BORROW);
         o = owner;
     }
@@ -2916,10 +2925,20 @@ dummy_func(void) {
         PyObject *type = sym_get_const(ctx, callable);
         if (type != NULL && PyType_Check(type)) {
             res = sym_new_type(ctx, (PyTypeObject *)type);
+            grail_record_call(ctx, this_instr, (PyTypeObject *)type, args,
+                              oparg, res);
         }
         else {
             res = sym_new_not_null(ctx);
         }
+        c = callable;
+    }
+
+    op(_CALL_RECORD_CHECKED, (check/4, callable, null, args[oparg] -- res, c)) {
+        (void)check;
+        PyObject *type = sym_get_const(ctx, callable);
+        res = type != NULL && PyType_Check(type) ?
+            sym_new_type(ctx, (PyTypeObject *)type) : sym_new_not_null(ctx);
         c = callable;
     }
 
@@ -3015,6 +3034,9 @@ dummy_func(void) {
             type == &PyTuple_Type)
         {
             res = sym_new_type(ctx, type);
+            if (type == &PyTuple_Type) {
+                grail_tuple_part_facts(ctx, container, res, -1, true);
+            }
         }
         else {
             res = sym_new_not_null(ctx);

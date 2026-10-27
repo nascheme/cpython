@@ -5672,6 +5672,21 @@ dummy_func(
             res = PyStackRef_FromPyObjectSteal(res_o);
         }
 
+        // _CALL_RECORD whose arguments with a clear bit in check are known
+        // to conform (see grail_record_call() in optimizer_analysis.c).
+        tier2 op(_CALL_RECORD_CHECKED, (check/4, callable, null, args[oparg] -- res, c)) {
+            STAT_INC(CALL, hit);
+            PyObject *res_o = _PyGrail_RecordFromStackRefsCheckedStealOnSuccess(
+                (PyTypeObject *)PyStackRef_AsPyObjectBorrow(callable),
+                args, oparg, (uint64_t)(uintptr_t)check);
+            if (res_o == NULL) {
+                ERROR_NO_POP();
+            }
+            c = callable;
+            INPUTS_DEAD();
+            res = PyStackRef_FromPyObjectSteal(res_o);
+        }
+
         macro(CALL_RECORD) =
             unused/1 +
             unused/2 +

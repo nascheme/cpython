@@ -1365,6 +1365,17 @@
                 if (d->result_unique) {
                     res = PyJitRef_MakeUnique(res);
                 }
+                if (d->lhs_type == &PyTuple_Type && d->rhs_type == &PyTuple_Type &&
+                    d->result_type == &PyTuple_Type) {
+                    CHECK_STACK_BOUNDS(3);
+                    stack_pointer[0] = res;
+                    stack_pointer[1] = l;
+                    stack_pointer[2] = r;
+                    stack_pointer += 3;
+                    ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                    grail_tuple_concat_facts(ctx, left, right, res);
+                    stack_pointer += -3;
+                }
             }
             else {
                 res = sym_new_not_null(ctx);
@@ -1660,6 +1671,14 @@
                 type == &PyTuple_Type)
             {
                 res = sym_new_type(ctx, type);
+                if (type == &PyTuple_Type) {
+                    CHECK_STACK_BOUNDS(-2);
+                    stack_pointer[-3] = res;
+                    stack_pointer += -2;
+                    ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                    grail_tuple_part_facts(ctx, container, res, -1, true);
+                    stack_pointer += 2;
+                }
             }
             else {
                 res = sym_new_not_null(ctx);
@@ -1821,17 +1840,26 @@
                     assert(index < tuple_length);
                     res = sym_tuple_getitem(ctx, tuple_st, index);
                 }
+                CHECK_STACK_BOUNDS(-1);
+                stack_pointer[-2] = res;
+                stack_pointer += -1;
+                ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                grail_tuple_part_facts(ctx, tuple_st, res, index, false);
             }
             else {
                 res = sym_new_not_null(ctx);
+                CHECK_STACK_BOUNDS(-1);
+                stack_pointer[-2] = res;
+                stack_pointer += -1;
+                ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                grail_tuple_part_facts(ctx, tuple_st, res, -1, false);
             }
             ts = tuple_st;
             ss = sub_st;
-            CHECK_STACK_BOUNDS(1);
-            stack_pointer[-2] = res;
-            stack_pointer[-1] = ts;
-            stack_pointer[0] = ss;
-            stack_pointer += 1;
+            CHECK_STACK_BOUNDS(2);
+            stack_pointer[0] = ts;
+            stack_pointer[1] = ss;
+            stack_pointer += 2;
             ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
             break;
         }
@@ -3200,6 +3228,7 @@
                 attr = sym_new_not_null(ctx);
             }
             stack_pointer[-1] = attr;
+            grail_field_facts(ctx, owner, index, attr);
             grail_borrow_candidate(ctx, attr, owner,
                                checked ? _LOAD_ATTR_RECORD_TYPED_BORROW
             : _LOAD_ATTR_RECORD_BORROW);
@@ -3227,6 +3256,7 @@
                 attr = sym_new_not_null(ctx);
             }
             stack_pointer[-1] = attr;
+            grail_field_facts(ctx, owner, index, attr);
             grail_borrow_candidate(ctx, attr, owner, _LOAD_ATTR_RECORD_TYPED_BORROW);
             o = owner;
             CHECK_STACK_BOUNDS(1);
@@ -5286,17 +5316,45 @@
         }
 
         case _CALL_RECORD: {
+            JitOptRef *args;
             JitOptRef callable;
             JitOptRef res;
             JitOptRef c;
+            args = &stack_pointer[-oparg];
             callable = stack_pointer[-2 - oparg];
             PyObject *type = sym_get_const(ctx, callable);
             if (type != NULL && PyType_Check(type)) {
                 res = sym_new_type(ctx, (PyTypeObject *)type);
+                CHECK_STACK_BOUNDS(-1 - oparg);
+                stack_pointer[-2 - oparg] = res;
+                stack_pointer += -1 - oparg;
+                ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                grail_record_call(ctx, this_instr, (PyTypeObject *)type, args,
+                              oparg, res);
             }
             else {
                 res = sym_new_not_null(ctx);
+                stack_pointer += -1 - oparg;
             }
+            c = callable;
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-1] = res;
+            stack_pointer[0] = c;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _CALL_RECORD_CHECKED: {
+            JitOptRef callable;
+            JitOptRef res;
+            JitOptRef c;
+            callable = stack_pointer[-2 - oparg];
+            PyObject *check = (PyObject *)this_instr->operand0;
+            (void)check;
+            PyObject *type = sym_get_const(ctx, callable);
+            res = type != NULL && PyType_Check(type) ?
+            sym_new_type(ctx, (PyTypeObject *)type) : sym_new_not_null(ctx);
             c = callable;
             CHECK_STACK_BOUNDS(-oparg);
             stack_pointer[-2 - oparg] = res;
