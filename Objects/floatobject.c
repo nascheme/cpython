@@ -185,6 +185,51 @@ PyFloat_FromString(PyObject *v)
     Py_buffer view = {NULL, NULL};
     PyObject *result = NULL;
 
+#if _PY_SHORT_FLOAT_REPR == 1
+    /* An optional sign, then at most 15 ASCII digits with at most one '.'
+       (no exponent, spaces or underscores): the digits as an integer m
+       < 10**15 and a power 10**k (k <= 15) are exact doubles, so m / 10**k
+       is correctly rounded, as strtod's result (Clinger's fast path). */
+    if (PyUnicode_Check(v) && PyUnicode_IS_ASCII(v)) {
+        static const double pow10[] = {1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6,
+                                       1e7, 1e8, 1e9, 1e10, 1e11, 1e12,
+                                       1e13, 1e14, 1e15};
+        const Py_UCS1 *p = PyUnicode_1BYTE_DATA(v);
+        const Py_UCS1 *stop = p + PyUnicode_GET_LENGTH(v);
+        int negative = 0;
+        if (p < stop && (*p == '-' || *p == '+')) {
+            negative = *p == '-';
+            p++;
+        }
+        int64_t m = 0;
+        int ndigits = 0, nfrac = 0, dot = 0;
+        for (; p < stop; p++) {
+            if ((unsigned)(*p - '0') < 10) {
+                m = m * 10 + (*p - '0');
+                ndigits++;
+                nfrac += dot;
+            }
+            else if (*p == '.' && !dot) {
+                dot = 1;
+            }
+            else {
+                break;
+            }
+            if (ndigits > 15) {
+                break;
+            }
+        }
+        if (p == stop && ndigits > 0) {
+            double x;
+            _Py_SET_53BIT_PRECISION_HEADER;
+            _Py_SET_53BIT_PRECISION_START;
+            x = (double)m / pow10[nfrac];
+            _Py_SET_53BIT_PRECISION_END;
+            return PyFloat_FromDouble(negative ? -x : x);
+        }
+    }
+#endif
+
     if (PyUnicode_Check(v)) {
         s_buffer = _PyUnicode_TransformDecimalAndSpaceToASCII(v);
         if (s_buffer == NULL)
