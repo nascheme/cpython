@@ -2655,6 +2655,30 @@ check_class(PyObject *cls, const char *error)
     return -1;
 }
 
+/* Whether inst.__class__ is certainly type(inst): attribute access is
+ * the generic one and __class__ is object's data descriptor, which an
+ * instance attribute cannot shadow. */
+static int
+has_default_class(PyObject *inst)
+{
+    PyTypeObject *tp = Py_TYPE(inst);
+    if (tp->tp_getattro != PyObject_GenericGetAttr) {
+        return 0;
+    }
+    PyObject *descr = _PyType_Lookup(tp, &_Py_ID(__class__));
+    return descr != NULL &&
+           descr == _PyType_Lookup(&PyBaseObject_Type, &_Py_ID(__class__));
+}
+
+/* Whether the special method name of cls (an instance of a subclass of
+ * type) is type's own, so that calling it is known to do. */
+static int
+has_type_special(PyObject *cls, PyObject *name)
+{
+    PyObject *descr = _PyType_Lookup(Py_TYPE(cls), name);
+    return descr != NULL && descr == _PyType_Lookup(&PyType_Type, name);
+}
+
 static int
 object_isinstance(PyObject *inst, PyObject *cls)
 {
@@ -2662,7 +2686,7 @@ object_isinstance(PyObject *inst, PyObject *cls)
     int retval;
     if (PyType_Check(cls)) {
         retval = PyObject_TypeCheck(inst, (PyTypeObject *)cls);
-        if (retval == 0) {
+        if (retval == 0 && !has_default_class(inst)) {
             retval = PyObject_GetOptionalAttr(inst, &_Py_ID(__class__), &icls);
             if (icls != NULL) {
                 if (icls != (PyObject *)(Py_TYPE(inst)) && PyType_Check(icls)) {
@@ -2726,6 +2750,11 @@ object_recursive_isinstance(PyThreadState *tstate, PyObject *inst, PyObject *cls
         }
         _Py_LeaveRecursiveCallTstate(tstate);
         return r;
+    }
+
+    /* A metaclass that inherits type's __instancecheck__. */
+    if (PyType_Check(cls) && has_type_special(cls, &_Py_ID(__instancecheck__))) {
+        return object_isinstance(inst, cls);
     }
 
     PyObject *checker = _PyObject_LookupSpecial(cls, &_Py_ID(__instancecheck__));
@@ -2817,6 +2846,11 @@ object_issubclass(PyThreadState *tstate, PyObject *derived, PyObject *cls)
         }
         _Py_LeaveRecursiveCallTstate(tstate);
         return r;
+    }
+
+    /* A metaclass that inherits type's __subclasscheck__. */
+    if (PyType_Check(cls) && has_type_special(cls, &_Py_ID(__subclasscheck__))) {
+        return recursive_issubclass(derived, cls);
     }
 
     checker = _PyObject_LookupSpecial(cls, &_Py_ID(__subclasscheck__));
