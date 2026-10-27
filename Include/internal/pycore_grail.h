@@ -252,6 +252,7 @@ PyAPI_FUNC(PyObject *) _PyGrail_BinaryOpGeneric(int);
  * (not a generic, or cold resolution needed). Same rules as above. */
 PyAPI_FUNC(PyObject *) _PyGrail_GenericSelect(PyObject *, PyObject *, int);
 PyAPI_FUNC(PyObject *) _PyGrail_GenericExactSelect(PyObject *, PyTypeObject *);
+PyAPI_FUNC(PyTypeObject *) _PyGrail_GenericSoleExactType(PyObject *, PyObject *);
 /* Bumped (release) after every change to a generic's registrations or
  * resolution cache, so a result derived from its selections can be tagged. */
 PyAPI_FUNC(uint64_t) _PyGrail_GenericGeneration(PyObject *);

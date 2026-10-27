@@ -5144,14 +5144,18 @@
             PyObject *generic = sym_get_const(ctx, callable);
             PyTypeObject *arg_type = sym_get_type(args[0]);
             unsigned int type_version = 0;
-            if (arg_type == NULL) {
-                arg_type = sym_get_probable_type(args[0]);
-                type_version = arg_type != NULL ? arg_type->tp_version_tag : 0;
-            }
             PyObject *folded = NULL;
-            if (impl != NULL && generic != NULL && arg_type != NULL &&
-                type_version == 0 && grail_fold_dispatch()) {
-                folded = _PyGrail_GenericExactSelect(generic, arg_type);
+            if (impl != NULL && generic != NULL && grail_fold_dispatch()) {
+                if (arg_type == NULL) {
+                    PyTypeObject *sole = _PyGrail_GenericSoleExactType(generic, impl);
+                    if (sole != NULL && (sole->tp_version_tag != 0 ||
+                                     PyUnstable_Type_AssignVersionTag(sole))) {
+                        arg_type = sole;
+                        type_version = sole->tp_version_tag;
+                    }
+                }
+                folded = arg_type == NULL ? NULL :
+                _PyGrail_GenericExactSelect(generic, arg_type);
                 if (folded != NULL && !(PyFunction_Check(folded) &&
                                     ((PyFunctionObject *)folded)->func_version ==
                                     ((PyFunctionObject *)impl)->func_version)) {

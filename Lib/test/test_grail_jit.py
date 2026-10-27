@@ -221,6 +221,43 @@ def load_module():
     return namespace
 
 
+SPECULATE = """
+import grail
+
+@grail.record
+class A:
+    x: int
+
+@grail.record
+class B:
+    x: int
+
+@grail.record
+class C:
+    x: int
+
+@grail.generic
+def g(v):
+    raise TypeError
+
+@g.impl
+def _(v: A):
+    return 1
+
+def shared(v):
+    return 100 if type(v) is B else 2000
+
+g.register(B, shared)
+g.register(C, shared)
+
+def loop(items):
+    t = 0
+    for v in items:
+        t += g(v)
+    return t
+"""
+
+
 class FoldedDispatchTests(unittest.TestCase):
     def test_generic_override_while_hot(self):
         m = load_module()
@@ -256,6 +293,31 @@ class FoldedDispatchTests(unittest.TestCase):
         loop = m["loop"]
         self.assertEqual(loop(ITERATIONS, V(1.0, 2.0), V(3.0, 4.0)), ITERATIONS * 24.0)
         self.assertEqual(loop(ITERATIONS, W(1.0, 2.0), W(3.0, 4.0)), ITERATIONS * -5.0)
+
+    def test_sole_registration_speculation(self):
+        # An argument of unknown type: the fold guards on the only type
+        # registered for the traced implementation, unless the
+        # implementation is shared by several types.
+        ns = {}
+        exec(SPECULATE, ns)
+        A, B, C, loop = ns["A"], ns["B"], ns["C"], ns["loop"]
+        for _ in range(REPEAT):
+            self.assertEqual(loop([A(0)] * 100), 100)
+        if tier2_enabled():
+            uops = executor_uops(loop)
+            self.assertIn("_GRAIL_CALL_GENERIC_FOLDED", uops)
+            self.assertNotIn("_GRAIL_CALL_GENERIC_SELECT_TIER_TWO", uops)
+        for _ in range(REPEAT):
+            self.assertEqual(loop([A(0), B(0), C(0)] * 100), 100 * 2101)
+        ns = {}
+        exec(SPECULATE, ns)
+        B, C, loop = ns["B"], ns["C"], ns["loop"]
+        for _ in range(REPEAT):
+            self.assertEqual(loop([B(0)] * 100), 100 * 100)
+        if tier2_enabled():
+            self.assertNotIn("_GRAIL_CALL_GENERIC_FOLDED", executor_uops(loop))
+        for _ in range(REPEAT):
+            self.assertEqual(loop([B(0), C(0)] * 100), 100 * 2100)
 
     @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
     def test_folded_uops(self):

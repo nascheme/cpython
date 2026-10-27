@@ -431,6 +431,39 @@ _PyGrail_GenericExactSelect(PyObject *callable, PyTypeObject *type)
     return exact_lookup(self, &type);
 }
 
+/* For the tier-2 optimizer: the type (borrowed) registered for func in an
+ * ordinary generic's exact table when it is the only registration of func
+ * and the type cannot be subclassed, else NULL. Only that type selects
+ * func: another type would need the registered type in its MRO. */
+PyTypeObject *
+_PyGrail_GenericSoleExactType(PyObject *callable, PyObject *func)
+{
+    if (Py_TYPE(callable)->tp_dealloc != (destructor)generic_dealloc) {
+        return NULL;
+    }
+    GenericObject *self = (GenericObject *)callable;
+    PyObject *table = self->table;
+    if (self->central_operator || self->arity != 1 || table == NULL ||
+        func == self->fallback) {
+        return NULL;
+    }
+    PyObject *type = NULL;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(table); i += 2) {
+        PyObject *key = PyTuple_GET_ITEM(table, i);
+        if (key != Py_None && PyTuple_GET_ITEM(table, i + 1) == func) {
+            if (type != NULL) {
+                return NULL;
+            }
+            type = key;
+        }
+    }
+    if (type == NULL || !PyType_Check(type) ||
+        PyType_HasFeature((PyTypeObject *)type, Py_TPFLAGS_BASETYPE)) {
+        return NULL;
+    }
+    return (PyTypeObject *)type;
+}
+
 /* A copy of `cache` plus one new entry, or NULL (no error) if it is full or
  * already holds the key. Then the caller publishes a fresh one-entry table. */
 static PyObject *
