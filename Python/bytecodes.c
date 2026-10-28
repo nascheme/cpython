@@ -4907,6 +4907,68 @@ dummy_func(
             new_frame = PyStackRef_Wrap(pushed_frame);
         }
 
+        /* As _INIT_CALL_PY_DEFAULTS, for a function with *args or
+         * **kwargs (no keyword-only parameters) called with positional
+         * arguments only: the extra arguments go into the *args tuple and
+         * **kwargs is a new empty dict.
+         */
+        tier2 op(_INIT_CALL_PY_VARARGS, (callable, self_or_null, args[oparg] -- new_frame)) {
+            PyFunctionObject *func = (PyFunctionObject *)PyStackRef_AsPyObjectBorrow(callable);
+            PyCodeObject *code = (PyCodeObject *)func->func_code;
+            int argcount = code->co_argcount;
+            int given = oparg;
+            if (!PyStackRef_IsNull(self_or_null)) {
+                args--;
+                given++;
+            }
+            assert(code->co_kwonlyargcount == 0);
+            PyObject *kwdict = NULL;
+            if (code->co_flags & CO_VARKEYWORDS) {
+                kwdict = PyDict_New();
+                if (kwdict == NULL) {
+                    ERROR_NO_POP();
+                }
+            }
+            PyObject *varargs = NULL;
+            if (code->co_flags & CO_VARARGS) {
+                if (given > argcount) {
+                    varargs = _PyTuple_FromStackRefStealOnSuccess(args + argcount,
+                                                                  given - argcount);
+                    if (varargs == NULL) {
+                        Py_XDECREF(kwdict);
+                        ERROR_NO_POP();
+                    }
+                }
+                else {
+                    varargs = (PyObject *)&_Py_SINGLETON(tuple_empty);
+                }
+            }
+            STAT_INC(CALL, hit);
+            _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, callable, argcount, frame);
+            int n = given < argcount ? given : argcount;
+            for (int i = 0; i < n; i++) {
+                pushed_frame->localsplus[i] = args[i];
+            }
+            if (given < argcount) {
+                PyObject *defaults = func->func_defaults;
+                Py_ssize_t first_default = argcount - PyTuple_GET_SIZE(defaults);
+                assert(given >= first_default);
+                for (int i = given; i < argcount; i++) {
+                    pushed_frame->localsplus[i] = PyStackRef_FromPyObjectNew(
+                        PyTuple_GET_ITEM(defaults, i - first_default));
+                }
+            }
+            int slot = argcount;
+            if (varargs != NULL) {
+                pushed_frame->localsplus[slot++] = PyStackRef_FromPyObjectSteal(varargs);
+            }
+            if (kwdict != NULL) {
+                pushed_frame->localsplus[slot] = PyStackRef_FromPyObjectSteal(kwdict);
+            }
+            INPUTS_DEAD();
+            new_frame = PyStackRef_Wrap(pushed_frame);
+        }
+
         op(_PUSH_FRAME, (new_frame -- )) {
             assert(!IS_PEP523_HOOKED(tstate));
             _PyInterpreterFrame *temp = PyStackRef_Unwrap(new_frame);

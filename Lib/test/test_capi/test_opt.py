@@ -3706,6 +3706,26 @@ class TestUopsOptimization(unittest.TestCase):
         f.__defaults__ = (20, [30])
         self.assertEqual(testfunc(3), (51 + 36 + 11) * 3)
 
+    def test_call_py_varargs(self):
+        def va(a, *args):
+            return a + len(args)
+
+        def kw(a, b=1, **kwargs):
+            kwargs["seen"] = True
+            return a + b + len(kwargs)
+
+        def testfunc(n):
+            total = 0
+            for _ in range(n):
+                total += va(1) + va(1, 2, 3) + kw(1) + kw(1, 2)
+            return total
+
+        res, ex = self._run_with_optimizer(testfunc, TIER2_THRESHOLD)
+        self.assertEqual(res, (1 + 3 + 3 + 4) * TIER2_THRESHOLD)
+        self.assertIsNotNone(ex)
+        uops = get_opnames(ex)
+        self.assertEqual(count_ops(ex, "_INIT_CALL_PY_VARARGS"), 4)
+
     def test_set_type_version_sets_type(self):
         class C:
             A = 1

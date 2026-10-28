@@ -18300,6 +18300,86 @@
             break;
         }
 
+        case _INIT_CALL_PY_VARARGS_r01: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef *args;
+            _PyStackRef self_or_null;
+            _PyStackRef callable;
+            _PyStackRef new_frame;
+            oparg = CURRENT_OPARG();
+            args = &stack_pointer[-oparg];
+            self_or_null = stack_pointer[-1 - oparg];
+            callable = stack_pointer[-2 - oparg];
+            PyFunctionObject *func = (PyFunctionObject *)PyStackRef_AsPyObjectBorrow(callable);
+            PyCodeObject *code = (PyCodeObject *)func->func_code;
+            int argcount = code->co_argcount;
+            int given = oparg;
+            if (!PyStackRef_IsNull(self_or_null)) {
+                args--;
+                given++;
+            }
+            assert(code->co_kwonlyargcount == 0);
+            PyObject *kwdict = NULL;
+            if (code->co_flags & CO_VARKEYWORDS) {
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                kwdict = PyDict_New();
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+                if (kwdict == NULL) {
+                    SET_CURRENT_CACHED_VALUES(0);
+                    JUMP_TO_ERROR();
+                }
+            }
+            PyObject *varargs = NULL;
+            if (code->co_flags & CO_VARARGS) {
+                if (given > argcount) {
+                    varargs = _PyTuple_FromStackRefStealOnSuccess(args + argcount,
+                        given - argcount);
+                    if (varargs == NULL) {
+                        _PyFrame_SetStackPointer(frame, stack_pointer);
+                        Py_XDECREF(kwdict);
+                        stack_pointer = _PyFrame_GetStackPointer(frame);
+                        SET_CURRENT_CACHED_VALUES(0);
+                        JUMP_TO_ERROR();
+                    }
+                }
+                else {
+                    varargs = (PyObject *)&_Py_SINGLETON(tuple_empty);
+                }
+            }
+            STAT_INC(CALL, hit);
+            _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, callable, argcount, frame);
+            int n = given < argcount ? given : argcount;
+            for (int i = 0; i < n; i++) {
+                pushed_frame->localsplus[i] = args[i];
+            }
+            if (given < argcount) {
+                PyObject *defaults = func->func_defaults;
+                Py_ssize_t first_default = argcount - PyTuple_GET_SIZE(defaults);
+                assert(given >= first_default);
+                for (int i = given; i < argcount; i++) {
+                    pushed_frame->localsplus[i] = PyStackRef_FromPyObjectNew(
+                        PyTuple_GET_ITEM(defaults, i - first_default));
+                }
+            }
+            int slot = argcount;
+            if (varargs != NULL) {
+                pushed_frame->localsplus[slot++] = PyStackRef_FromPyObjectSteal(varargs);
+            }
+            if (kwdict != NULL) {
+                pushed_frame->localsplus[slot] = PyStackRef_FromPyObjectSteal(kwdict);
+            }
+            new_frame = PyStackRef_Wrap(pushed_frame);
+            _tos_cache0 = new_frame;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(1);
+            stack_pointer += -2 - oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _PUSH_FRAME_r10: {
             CHECK_CURRENT_CACHED_VALUES(1);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());

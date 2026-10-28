@@ -4341,16 +4341,21 @@
             self_or_null = stack_pointer[-1 - oparg];
             callable = stack_pointer[-2 - oparg];
             PyFunctionObject *func = (PyFunctionObject *)sym_get_const(ctx, callable);
-            if (func != NULL && PyFunction_Check(func) && func->func_defaults != NULL &&
+            if (func != NULL && PyFunction_Check(func) &&
                 (sym_is_null(self_or_null) || sym_is_not_null(self_or_null))) {
                 PyCodeObject *co = (PyCodeObject *)func->func_code;
                 int given = oparg + sym_is_not_null(self_or_null);
-                if ((co->co_flags & (CO_VARARGS | CO_VARKEYWORDS)) == 0 &&
-                    (co->co_flags & CO_OPTIMIZED) && co->co_kwonlyargcount == 0 &&
-                    given < co->co_argcount &&
-                    given >= co->co_argcount - PyTuple_GET_SIZE(func->func_defaults)) {
+                int varargs = co->co_flags & (CO_VARARGS | CO_VARKEYWORDS);
+                Py_ssize_t ndefaults = func->func_defaults == NULL ? 0 :
+                PyTuple_GET_SIZE(func->func_defaults);
+                if ((co->co_flags & CO_OPTIMIZED) && co->co_kwonlyargcount == 0 &&
+                    given >= co->co_argcount - ndefaults &&
+                    (given < co->co_argcount ||
+                        (varargs && (given == co->co_argcount ||
+                              (co->co_flags & CO_VARARGS))))) {
                     ADD_OP(_CHECK_STACK_SPACE_OPERAND, 0, co->co_framesize);
-                    ADD_OP(_INIT_CALL_PY_DEFAULTS, oparg, 0);
+                    ADD_OP(varargs ? _INIT_CALL_PY_VARARGS : _INIT_CALL_PY_DEFAULTS,
+                        oparg, 0);
                 }
             }
             new_frame = PyJitRef_WrapInvalid(frame_new_from_symbol(ctx, callable, NULL, 0));
@@ -4546,6 +4551,18 @@
         }
 
         case _INIT_CALL_PY_DEFAULTS: {
+            JitOptRef callable;
+            JitOptRef new_frame;
+            callable = stack_pointer[-2 - oparg];
+            new_frame = PyJitRef_WrapInvalid(frame_new_from_symbol(ctx, callable, NULL, 0));
+            CHECK_STACK_BOUNDS(-1 - oparg);
+            stack_pointer[-2 - oparg] = new_frame;
+            stack_pointer += -1 - oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _INIT_CALL_PY_VARARGS: {
             JitOptRef callable;
             JitOptRef new_frame;
             callable = stack_pointer[-2 - oparg];
