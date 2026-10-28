@@ -372,6 +372,8 @@ int _PyOpcode_num_popped(int opcode, int oparg)  {
             return 0;
         case LOAD_FAST_BORROW:
             return 0;
+        case LOAD_FAST_BORROW_ATTR_RECORD:
+            return 0;
         case LOAD_FAST_BORROW_LOAD_FAST_BORROW:
             return 0;
         case LOAD_FAST_CHECK:
@@ -899,6 +901,8 @@ int _PyOpcode_num_pushed(int opcode, int oparg)  {
             return 1;
         case LOAD_FAST_BORROW:
             return 1;
+        case LOAD_FAST_BORROW_ATTR_RECORD:
+            return 1;
         case LOAD_FAST_BORROW_LOAD_FAST_BORROW:
             return 2;
         case LOAD_FAST_CHECK:
@@ -1326,6 +1330,7 @@ const struct opcode_metadata _PyOpcode_opcode_metadata[267] = {
     [LOAD_FAST] = { true, INSTR_FMT_IB, HAS_ARG_FLAG | HAS_LOCAL_FLAG | HAS_PURE_FLAG },
     [LOAD_FAST_AND_CLEAR] = { true, INSTR_FMT_IB, HAS_ARG_FLAG | HAS_LOCAL_FLAG },
     [LOAD_FAST_BORROW] = { true, INSTR_FMT_IB, HAS_ARG_FLAG | HAS_LOCAL_FLAG | HAS_PURE_FLAG },
+    [LOAD_FAST_BORROW_ATTR_RECORD] = { true, INSTR_FMT_IB, HAS_ARG_FLAG | HAS_LOCAL_FLAG },
     [LOAD_FAST_BORROW_LOAD_FAST_BORROW] = { true, INSTR_FMT_IB, HAS_ARG_FLAG | HAS_LOCAL_FLAG },
     [LOAD_FAST_CHECK] = { true, INSTR_FMT_IB, HAS_ARG_FLAG | HAS_LOCAL_FLAG | HAS_ERROR_FLAG },
     [LOAD_FAST_LOAD_FAST] = { true, INSTR_FMT_IB, HAS_ARG_FLAG | HAS_LOCAL_FLAG },
@@ -1816,6 +1821,7 @@ const char *_PyOpcode_OpName[267] = {
     [LOAD_FAST] = "LOAD_FAST",
     [LOAD_FAST_AND_CLEAR] = "LOAD_FAST_AND_CLEAR",
     [LOAD_FAST_BORROW] = "LOAD_FAST_BORROW",
+    [LOAD_FAST_BORROW_ATTR_RECORD] = "LOAD_FAST_BORROW_ATTR_RECORD",
     [LOAD_FAST_BORROW_LOAD_FAST_BORROW] = "LOAD_FAST_BORROW_LOAD_FAST_BORROW",
     [LOAD_FAST_CHECK] = "LOAD_FAST_CHECK",
     [LOAD_FAST_LOAD_FAST] = "LOAD_FAST_LOAD_FAST",
@@ -1948,7 +1954,6 @@ const uint8_t _PyOpcode_Deopt[256] = {
     [124] = 124,
     [125] = 125,
     [126] = 126,
-    [231] = 231,
     [232] = 232,
     [BINARY_OP] = BINARY_OP,
     [BINARY_OP_ADD_FLOAT] = BINARY_OP,
@@ -2112,6 +2117,7 @@ const uint8_t _PyOpcode_Deopt[256] = {
     [LOAD_FAST] = LOAD_FAST,
     [LOAD_FAST_AND_CLEAR] = LOAD_FAST_AND_CLEAR,
     [LOAD_FAST_BORROW] = LOAD_FAST_BORROW,
+    [LOAD_FAST_BORROW_ATTR_RECORD] = LOAD_FAST_BORROW,
     [LOAD_FAST_BORROW_LOAD_FAST_BORROW] = LOAD_FAST_BORROW_LOAD_FAST_BORROW,
     [LOAD_FAST_CHECK] = LOAD_FAST_CHECK,
     [LOAD_FAST_LOAD_FAST] = LOAD_FAST_LOAD_FAST,
@@ -2209,7 +2215,6 @@ const uint8_t _PyOpcode_Deopt[256] = {
     case 124: \
     case 125: \
     case 126: \
-    case 231: \
     case 232: \
         ;
 struct pseudo_targets {

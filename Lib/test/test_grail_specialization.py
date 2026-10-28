@@ -3,6 +3,7 @@ import concurrent.futures
 import dis
 import gc
 import os
+import sys
 import sysconfig
 import threading
 import unittest
@@ -43,6 +44,61 @@ class RecordLoadTests(unittest.TestCase):
             self.assertIs(read(obj)[1], obj.y)
         child.append(42)
         self.assertEqual(read(R(child, child)), ([42], [42]))
+
+    def test_fused_local_field_load(self):
+        # LOAD_FAST_BORROW + LOAD_ATTR_RECORD run as one instruction while
+        # the LOAD_ATTR stays specialized for a record field; otherwise the
+        # pair runs separately, and the fused form reverts once the
+        # LOAD_ATTR specializes for something else or under the JIT.
+        @grail.record
+        class P:
+            x: float
+            y: float
+
+        @grail.record
+        class Q:
+            y: int
+            x: int
+
+        class C:
+            def __init__(self):
+                self.x = "c"
+
+        def read(r):
+            return r.x
+
+        def ops():
+            return [i.opname for i in dis.get_instructions(read, adaptive=True)][1:3]
+
+        jit = hasattr(sys, "_jit") and sys._jit.is_enabled()
+        first = "LOAD_FAST_BORROW" if jit else "LOAD_FAST_BORROW_ATTR_RECORD"
+        self.warm(read, P(1.0, 2.0))
+        if os.environ.get("PYTHON_GRAIL_RECORD_LOADS") != "0":
+            self.assertEqual(ops(), [first, "LOAD_ATTR_RECORD"])
+        for _ in range(1000):
+            self.assertEqual(read(Q(1, 2)), 2)
+        for _ in range(1000):
+            self.assertEqual(read(P(3.0, 4.0)), 3.0)
+        for _ in range(1000):
+            self.assertEqual(read(C()), "c")
+        self.assertNotEqual(ops()[0], "LOAD_FAST_BORROW_ATTR_RECORD")
+        self.assertEqual(read(P(5.0, 6.0)), 5.0)
+
+        def trace(frame, event, arg):
+            frame.f_trace_opcodes = True
+            return trace
+
+        def read2(r):
+            return r.x
+
+        self.warm(read2, P(1.0, 2.0))
+        sys.settrace(trace)
+        try:
+            self.assertEqual(read2(Q(7, 8)), 8)
+            self.assertEqual(read2(P(7.0, 8.0)), 7.0)
+        finally:
+            sys.settrace(None)
+        self.assertEqual(read2(P(9.0, 8.0)), 9.0)
 
     def test_callable_field(self):
         @grail.record

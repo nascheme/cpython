@@ -10282,9 +10282,51 @@
             frame->instr_ptr = next_instr;
             next_instr += 1;
             INSTRUCTION_STATS(LOAD_FAST_BORROW);
+            PREDICTED_LOAD_FAST_BORROW:;
             _PyStackRef value;
             assert(!PyStackRef_IsNull(GETLOCAL(oparg)));
             value = PyStackRef_Borrow(GETLOCAL(oparg));
+            stack_pointer[0] = value;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            DISPATCH();
+        }
+
+        TARGET(LOAD_FAST_BORROW_ATTR_RECORD) {
+            #if _Py_TAIL_CALL_INTERP
+            int opcode = LOAD_FAST_BORROW_ATTR_RECORD;
+            (void)(opcode);
+            #endif
+            _Py_CODEUNIT* const this_instr = next_instr;
+            (void)this_instr;
+            frame->instr_ptr = next_instr;
+            next_instr += 1;
+            INSTRUCTION_STATS(LOAD_FAST_BORROW_ATTR_RECORD);
+            static_assert(0 == 0, "incorrect cache size");
+            _PyStackRef value;
+            _PyStackRef local = GETLOCAL(oparg);
+            assert(!PyStackRef_IsNull(local));
+            _Py_CODEUNIT *attr_instr = this_instr + 1;
+            _Py_CODEUNIT word = {.cache = FT_ATOMIC_LOAD_UINT16_RELAXED(*(uint16_t *)attr_instr)};
+            PyObject *owner_o = PyStackRef_AsPyObjectBorrow(local);
+            if (word.op.code == LOAD_ATTR_RECORD && (word.op.arg & 1) == 0 &&
+                FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(owner_o)->tp_version_tag) ==
+                read_u32(&attr_instr[2].cache)) {
+                uint16_t index = attr_instr[4].cache;
+                PyObject *attr_o = *(PyObject **)((char *)owner_o + index);
+                assert(attr_o != NULL);
+                value = PyStackRef_FromPyObjectNew(attr_o);
+                STAT_INC(LOAD_ATTR, hit);
+                SKIP_OVER(1 + INLINE_CACHE_ENTRIES_LOAD_ATTR);
+            }
+            else {
+                if (tstate->interp->jit || (word.op.arg & 1) ||
+                    (_PyOpcode_Deopt[word.op.code] == LOAD_ATTR &&
+                     word.op.code != LOAD_ATTR && word.op.code != LOAD_ATTR_RECORD)) {
+                    FT_ATOMIC_STORE_UINT8_RELAXED(this_instr->op.code, LOAD_FAST_BORROW);
+                }
+                value = PyStackRef_Borrow(local);
+            }
             stack_pointer[0] = value;
             stack_pointer += 1;
             ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);

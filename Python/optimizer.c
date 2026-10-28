@@ -754,6 +754,11 @@ _PyJit_translate_single_bytecode_to_trace(
         oparg = (oparg & ~255) | executor->vm_data.oparg;
     }
 
+    if (opcode == LOAD_FAST_BORROW_ATTR_RECORD) {
+        // Behaves as LOAD_FAST_BORROW under the JIT.
+        opcode = LOAD_FAST_BORROW;
+    }
+
     if (_PyOpcode_Caches[_PyOpcode_Deopt[opcode]] > 0) {
         uint16_t backoff = (this_instr + 1)->counter.value_and_backoff;
         // adaptive_counter_cooldown is a fresh specialization.

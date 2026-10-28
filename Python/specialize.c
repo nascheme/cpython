@@ -65,9 +65,12 @@ _PyCode_Quicken(_Py_CODEUNIT *instructions, Py_ssize_t size, int enable_counters
 {
     #if ENABLE_SPECIALIZATION
     _Py_BackoffCounter jump_counter, adaptive_counter, resume_counter;
+    /* See LOAD_FAST_BORROW_ATTR_RECORD. */
+    int fuse_record_loads = 0;
     if (enable_counters) {
         PyThreadState *tstate = _PyThreadState_GET();
         PyInterpreterState *interp = tstate->interp;
+        fuse_record_loads = !interp->jit;
         jump_counter = initial_jump_backoff_counter(&interp->opt_config);
         adaptive_counter = adaptive_counter_warmup();
         resume_counter = initial_resume_backoff_counter(&interp->opt_config);
@@ -86,6 +89,11 @@ _PyCode_Quicken(_Py_CODEUNIT *instructions, Py_ssize_t size, int enable_counters
         oparg = (oparg << 8) | instructions[i].op.arg;
         if (opcode == GET_ITER) {
             fixup_getiter(&instructions[i], flags);
+        }
+        if (opcode == LOAD_FAST_BORROW && fuse_record_loads &&
+            instructions[i + 1].op.code == LOAD_ATTR &&
+            (instructions[i + 1].op.arg & 1) == 0) {
+            instructions[i].op.code = LOAD_FAST_BORROW_ATTR_RECORD;
         }
         if (caches) {
             // The initial value depends on the opcode
