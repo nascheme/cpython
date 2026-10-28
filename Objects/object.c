@@ -2812,6 +2812,47 @@ _PyObject_SetDeferredRefcount(PyObject *op)
 #endif
 }
 
+#ifdef Py_GIL_DISABLED
+int
+_PyObject_EnableDeferredShared(PyObject *op)
+{
+    if (_PyObject_GC_IS_TRACKED(op)) {
+        return PyUnstable_Object_EnableDeferredRefcount(op);
+    }
+    if (!PyTuple_CheckExact(op) && !PyFrozenSet_CheckExact(op)) {
+        return 0;
+    }
+    // Immutable containers of non-GC objects are left untracked, which would
+    // exclude shared constants such as copy._atomic_types.  Track them so
+    // deferred refcounting applies; the GC never untracks deferred objects.
+    // Set both bits in one update, since other threads may concurrently set
+    // ob_gc_bits.
+    uint8_t bits = _Py_atomic_load_uint8(&op->ob_gc_bits);
+    do {
+        if (bits & (_PyGC_BITS_TRACKED | _PyGC_BITS_DEFERRED)) {
+            return 0;
+        }
+    } while (!_Py_atomic_compare_exchange_uint8(
+                 &op->ob_gc_bits, &bits,
+                 bits | _PyGC_BITS_TRACKED | _PyGC_BITS_DEFERRED));
+    _Py_atomic_add_ssize(&op->ob_ref_shared, _Py_REF_SHARED(_Py_REF_DEFERRED, 0));
+    return 1;
+}
+
+void
+_PyObject_MaybeDeferCellValue(PyObject *op)
+{
+    // Deferred objects are freed only by the GC.  Unlike module globals, cell
+    // contents are often short-lived, so only defer values whose delayed
+    // deallocation is unobservable: untracked tuples and frozensets (no GC
+    // children).
+    if ((PyTuple_CheckExact(op) || PyFrozenSet_CheckExact(op)) &&
+        !_PyObject_GC_IS_TRACKED(op)) {
+        _PyObject_EnableDeferredShared(op);
+    }
+}
+#endif
+
 int
 PyUnstable_Object_EnableDeferredRefcount(PyObject *op)
 {

@@ -58,15 +58,26 @@ _PyCell_GetStackRef(PyCellObject *cell)
         return PyStackRef_NULL;
     }
     _PyStackRef ref;
-    if (_Py_TryIncrefCompareStackRef(&cell->ob_ref, value, &ref)) {
-        return ref;
+    if (!_Py_TryIncrefCompareStackRef(&cell->ob_ref, value, &ref)) {
+        value = PyCell_GetRef(cell);
+        if (value == NULL) {
+            return PyStackRef_NULL;
+        }
+        ref = PyStackRef_FromPyObjectSteal(value);
     }
-#endif
+    if (!_PyObject_HasDeferredRefcount(value) && !_Py_IsImmortal(value) &&
+        !_Py_IsOwnedByCurrentThread(value)) {
+        // Holding a strong reference, so value cannot be freed here.
+        _PyObject_MaybeDeferCellValue(value);
+    }
+    return ref;
+#else
     value = PyCell_GetRef(cell);
     if (value == NULL) {
         return PyStackRef_NULL;
     }
     return PyStackRef_FromPyObjectSteal(value);
+#endif
 }
 
 #ifdef __cplusplus

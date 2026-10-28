@@ -16,6 +16,16 @@ extern "C" {
 // counting should be tracked by the GC so that they are eventually collected.
 extern void _PyObject_SetDeferredRefcount(PyObject *op);
 
+#ifdef Py_GIL_DISABLED
+// Enable deferred refcounting on an object shared between threads, tracking
+// untracked exact tuples and frozensets first.  Returns 1 if newly enabled.
+extern int _PyObject_EnableDeferredShared(PyObject *op);
+
+// Called with a strong reference to a cell value loaded by a thread that
+// does not own it; defers the refcount of eligible immutable values.
+PyAPI_FUNC(void) _PyObject_MaybeDeferCellValue(PyObject *op);
+#endif
+
 static inline int
 _PyObject_HasDeferredRefcount(PyObject *op)
 {

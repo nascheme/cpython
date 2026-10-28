@@ -8,7 +8,7 @@ import gc
 import weakref
 
 from test import support
-from test.support import threading_helper
+from test.support import import_helper, threading_helper
 
 
 class MyObj:
@@ -64,6 +64,59 @@ class TestGC(TestCase):
         mutators = [Thread(target=mutator_thread) for _ in range(NUM_MUTATORS)]
         with threading_helper.start_threads(gcs + mutators):
             pass
+
+    @support.cpython_only
+    def test_untracked_global_gets_deferred_refcount(self):
+        # LOAD_GLOBAL specialization from a non-owner thread enables deferred
+        # refcounting on hot globals.  Untracked immutable containers (here a
+        # frozenset of types and a tuple of ints) are tracked to qualify.
+        _testinternalcapi = import_helper.import_module("_testinternalcapi")
+        # Runtime-built, so not an immortal code constant; the GC untracks
+        # the tuple since it only holds ints.
+        ns = {"FS": frozenset({int, str, float}), "TUP": tuple(range(5))}
+        gc.collect()
+        exec("def load(n):\n"
+             "    for _ in range(n):\n"
+             "        FS; TUP\n"
+             "    return FS, TUP\n", ns)
+        self.assertFalse(gc.is_tracked(ns["FS"]))
+        self.assertFalse(gc.is_tracked(ns["TUP"]))
+        t = Thread(target=ns["load"], args=(1000,))
+        with threading_helper.start_threads([t]):
+            pass
+        for name in ("FS", "TUP"):
+            obj = ns[name]
+            self.assertTrue(gc.is_tracked(obj))
+            self.assertTrue(_testinternalcapi.has_deferred_refcount(obj))
+        gc.collect()
+        self.assertEqual(ns["load"](10), (frozenset({int, str, float}), (0, 1, 2, 3, 4)))
+        self.assertTrue(gc.is_tracked(ns["TUP"]))
+
+    @support.cpython_only
+    def test_cell_value_gets_deferred_refcount(self):
+        # A non-owner thread loading a closure value defers the refcount of
+        # immutable values only: untracked tuples and frozensets.
+        _testinternalcapi = import_helper.import_module("_testinternalcapi")
+
+        tup = tuple(range(5))
+        fs = frozenset({int, str})
+        gc.collect()
+        lst = [1]
+        self.assertFalse(gc.is_tracked(tup))
+        self.assertFalse(gc.is_tracked(fs))
+
+        def load():
+            return tup, fs, lst
+
+        t = Thread(target=load)
+        with threading_helper.start_threads([t]):
+            pass
+        self.assertTrue(_testinternalcapi.has_deferred_refcount(tup))
+        self.assertTrue(gc.is_tracked(tup))
+        self.assertTrue(_testinternalcapi.has_deferred_refcount(fs))
+        self.assertFalse(_testinternalcapi.has_deferred_refcount(lst))
+        gc.collect()
+        self.assertEqual(load(), ((0, 1, 2, 3, 4), frozenset({int, str}), [1]))
 
     def test_freeze_object_in_brc_queue(self):
         # GH-142975: Freezing objects in the BRC queue could result in some
