@@ -1545,6 +1545,17 @@ def matcher(n, limit):
                 t += a * b
     return t
 
+def wrap(i):
+    return (make(i),)
+
+def concat_records(n):
+    acc = ()
+    for i in range(n):
+        t = wrap(i)
+        (p,) = t
+        acc = acc[-3:] + t
+    return acc
+
 def fused_step(i, c, limit):
     d = (v3(i) + c) - c
     if i >= limit:
@@ -1817,6 +1828,13 @@ class VirtualObjectTests(unittest.TestCase):
         if tier2_enabled():
             self.assertIn("_VO_TUPLE_CONCAT", executor_uops(m["concat_step"]) |
                           executor_uops(concats))
+        # A tuple holding a virtual record is not concatenated virtually:
+        # the result must hold real records.
+        P = m["P"]
+        for _ in range(REPEAT):
+            acc = m["concat_records"](100)
+            self.assertEqual(acc, tuple(P(i, i + 1) for i in range(96, 100)))
+            self.assertTrue(all(type(p) is P for p in acc))
         # An empty real operand: the result is the virtual operand itself.
         self.assertEqual(concats(3, ()), expected(3, ()))
         self.assertEqual(concats(5, ()), expected(5, ()))

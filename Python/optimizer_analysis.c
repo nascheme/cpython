@@ -2343,6 +2343,17 @@ vo_snapshot(JitOptContext *ctx, const VOPre *pre, int start, int end)
     }
 }
 
+static bool
+vo_has_live_inner(_PyVOState *vo, const _PyVOCandidate *c)
+{
+    for (int k = 0; k < c->n; k++) {
+        if (c->inner[k] >= 0 && vo_live(&vo->cands[c->inner[k]])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* The fused float uop of a fused range (grail_fuse_elementwise(),
  * grail_fuse_float_call()), or NULL. */
 static _PyUOpInstruction *
@@ -2832,10 +2843,12 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             }
             else if ((opcode == _GUARD_BINARY_OP_EXTEND || opcode == _BINARY_OP_EXTEND) &&
                      nout == 1 && op == opcode && i < 2 && cand->type == NULL &&
+                     !vo_has_live_inner(vo, cand) &&
                      _PyBinaryOp_IsTupleConcat(
                          (const _PyBinaryOpSpecializationDescr *)out_start->operand0)) {
                 // tuple + tuple: _VO_TUPLE_CONCAT checks the real operands
-                // itself, so the guard goes.
+                // itself, so the guard goes. It copies the items into a real
+                // tuple, so none may be virtual.
                 vo_add_use(ctx, out, c,
                            opcode == _BINARY_OP_EXTEND ? VO_USE_CONCAT : VO_USE_NOP, i);
                 continue;
