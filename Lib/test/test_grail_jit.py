@@ -1827,6 +1827,49 @@ class VirtualObjectTests(unittest.TestCase):
             self.assertEqual(m["matcher"](n, limit),
                              sum(i * (i + 1) for i in range(limit)) + 1000 * (n - limit))
 
+    @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
+    def test_loop_carried_pending_calls(self):
+        # Pending calls (and GIL drop requests) while the accumulator is
+        # virtual leave the trace at _VO_CHECK_PERIODIC, which rebuilds it:
+        # the calls see a real record in the loop's frame.
+        import threading, time
+        from test.support import import_helper
+        _testcapi = import_helper.import_module("_testcapi")
+        m = load_virtual()
+        F, carried = m["F"], m["carried"]
+        start = F(-1.0, -1.0)
+        for _ in range(REPEAT):
+            carried(100, start, -1, -1)
+        seen = []
+
+        def probe():
+            f = sys._getframe(1)
+            while f is not None and f.f_code is not carried.__code__:
+                f = f.f_back
+            if f is not None:
+                seen.append(f.f_locals.get("acc"))
+            return 0
+
+        stop = False
+
+        def pusher():
+            while not stop:
+                try:
+                    _testcapi._pending_threadfunc(probe, num=1, blocking=False)
+                except Exception:
+                    pass
+                time.sleep(0.0005)
+
+        t = threading.Thread(target=pusher)
+        t.start()
+        try:
+            n = 100_000
+            self.assertEqual(carried(n, start, -1, -1), F((n - 1) * 1.0, n * 1.0))
+        finally:
+            stop = True
+            t.join()
+        self.assertTrue(all(type(acc) is F for acc in seen), seen[:5])
+
     def test_tuple_of_record(self):
         m = load_virtual()
         for _ in range(REPEAT):
