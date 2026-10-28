@@ -371,6 +371,7 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_CALL_METHOD_DESCRIPTOR_FAST_INLINE] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_MAYBE_EXPAND_METHOD_KW] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
     [_PY_FRAME_KW] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ESCAPES_FLAG | HAS_SYNC_SP_FLAG,
+    [_INIT_CALL_PY_KW] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
     [_CHECK_FUNCTION_VERSION_KW] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
     [_CHECK_METHOD_VERSION_KW] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
     [_EXPAND_METHOD_KW] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
@@ -3489,6 +3490,15 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_INIT_CALL_PY_KW] = {
+        .best = { 1, 1, 1, 1 },
+        .entries = {
+            { -1, -1, -1 },
+            { 1, 1, _INIT_CALL_PY_KW_r11 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
     [_CHECK_FUNCTION_VERSION_KW] = {
         .best = { 1, 1, 1, 1 },
         .entries = {
@@ -4851,6 +4861,7 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_CALL_METHOD_DESCRIPTOR_FAST_INLINE_r00] = _CALL_METHOD_DESCRIPTOR_FAST_INLINE,
     [_MAYBE_EXPAND_METHOD_KW_r11] = _MAYBE_EXPAND_METHOD_KW,
     [_PY_FRAME_KW_r11] = _PY_FRAME_KW,
+    [_INIT_CALL_PY_KW_r11] = _INIT_CALL_PY_KW,
     [_CHECK_FUNCTION_VERSION_KW_r11] = _CHECK_FUNCTION_VERSION_KW,
     [_CHECK_METHOD_VERSION_KW_r11] = _CHECK_METHOD_VERSION_KW,
     [_EXPAND_METHOD_KW_r11] = _EXPAND_METHOD_KW,
@@ -5904,6 +5915,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_INIT_CALL_PY_EXACT_ARGS_3_r01] = "_INIT_CALL_PY_EXACT_ARGS_3_r01",
     [_INIT_CALL_PY_EXACT_ARGS_4] = "_INIT_CALL_PY_EXACT_ARGS_4",
     [_INIT_CALL_PY_EXACT_ARGS_4_r01] = "_INIT_CALL_PY_EXACT_ARGS_4_r01",
+    [_INIT_CALL_PY_KW] = "_INIT_CALL_PY_KW",
+    [_INIT_CALL_PY_KW_r11] = "_INIT_CALL_PY_KW_r11",
     [_INIT_CALL_PY_VARARGS] = "_INIT_CALL_PY_VARARGS",
     [_INIT_CALL_PY_VARARGS_r01] = "_INIT_CALL_PY_VARARGS_r01",
     [_INSERT_NULL] = "_INSERT_NULL",
@@ -7123,6 +7136,8 @@ int _PyUop_num_popped(int opcode, int oparg)
         case _MAYBE_EXPAND_METHOD_KW:
             return 0;
         case _PY_FRAME_KW:
+            return 3 + oparg;
+        case _INIT_CALL_PY_KW:
             return 3 + oparg;
         case _CHECK_FUNCTION_VERSION_KW:
             return 0;

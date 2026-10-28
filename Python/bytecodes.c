@@ -5845,6 +5845,50 @@ dummy_func(
             new_frame = PyStackRef_Wrap(temp);
         }
 
+        /* Tier 2, emitted by the optimizer for a guarded function without
+         * *args or **kwargs called with constant keyword names that the
+         * optimizer matched to parameters: keyword argument j goes to local
+         * (slots >> 8*j) & 0xff, then missing positional parameters take
+         * their defaults (all keyword-only parameters are passed).
+         */
+        tier2 op(_INIT_CALL_PY_KW, (slots/4, callable, self_or_null, args[oparg], kwnames -- new_frame)) {
+            PyFunctionObject *func = (PyFunctionObject *)PyStackRef_AsPyObjectBorrow(callable);
+            PyCodeObject *code = (PyCodeObject *)func->func_code;
+            int argcount = code->co_argcount;
+            int nkw = (int)PyTuple_GET_SIZE(PyStackRef_AsPyObjectBorrow(kwnames));
+            int total = oparg;
+            if (!PyStackRef_IsNull(self_or_null)) {
+                args--;
+                total++;
+            }
+            int npos = total - nkw;
+            assert(nkw <= 8 && npos <= argcount);
+            STAT_INC(CALL, hit);
+            _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, callable, 0, frame);
+            _PyStackRef *locals = pushed_frame->localsplus;
+            for (int i = 0; i < npos; i++) {
+                locals[i] = args[i];
+            }
+            for (int j = 0; j < nkw; j++) {
+                locals[((uint64_t)(uintptr_t)slots >> (8 * j)) & 0xff] = args[npos + j];
+            }
+            if (npos < argcount) {
+                PyObject *defaults = func->func_defaults;
+                Py_ssize_t first_default = argcount -
+                    (defaults == NULL ? 0 : PyTuple_GET_SIZE(defaults));
+                for (int i = npos; i < argcount; i++) {
+                    if (PyStackRef_IsNull(locals[i])) {
+                        assert(i >= first_default);
+                        locals[i] = PyStackRef_FromPyObjectNew(
+                            PyTuple_GET_ITEM(defaults, i - first_default));
+                    }
+                }
+            }
+            INPUTS_DEAD();
+            PyStackRef_CLOSE(kwnames);
+            new_frame = PyStackRef_Wrap(pushed_frame);
+        }
+
         op(_CHECK_FUNCTION_VERSION_KW, (func_version/2, callable, unused, unused[oparg], unused -- callable, unused, unused[oparg], unused)) {
             PyObject *callable_o = PyStackRef_AsPyObjectBorrow(callable);
             EXIT_IF(!PyFunction_Check(callable_o));

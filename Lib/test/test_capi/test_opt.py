@@ -3726,6 +3726,28 @@ class TestUopsOptimization(unittest.TestCase):
         uops = get_opnames(ex)
         self.assertEqual(count_ops(ex, "_INIT_CALL_PY_VARARGS"), 4)
 
+    def test_call_py_kw(self):
+        def f(a, b=2, c=3):
+            return a + 10 * b + 100 * c
+
+        class C:
+            def m(self, x, flag=0):
+                return x + flag
+
+        def testfunc(n):
+            total = 0
+            o = C()
+            for _ in range(n):
+                total += f(1, c=4) + f(c=1, a=2) + o.m(1, flag=5)
+            return total
+
+        res, ex = self._run_with_optimizer(testfunc, TIER2_THRESHOLD)
+        self.assertEqual(res, (421 + 122 + 6) * TIER2_THRESHOLD)
+        self.assertIsNotNone(ex)
+        self.assertEqual(count_ops(ex, "_INIT_CALL_PY_KW"), 3)
+        with self.assertRaisesRegex(TypeError, "multiple values"):
+            f(1, a=2)
+
     def test_set_type_version_sets_type(self):
         class C:
             A = 1

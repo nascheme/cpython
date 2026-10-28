@@ -20742,6 +20742,67 @@
             break;
         }
 
+        case _INIT_CALL_PY_KW_r11: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef kwnames;
+            _PyStackRef *args;
+            _PyStackRef self_or_null;
+            _PyStackRef callable;
+            _PyStackRef new_frame;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            oparg = CURRENT_OPARG();
+            kwnames = _stack_item_0;
+            args = &stack_pointer[-oparg];
+            self_or_null = stack_pointer[-1 - oparg];
+            callable = stack_pointer[-2 - oparg];
+            PyObject *slots = (PyObject *)CURRENT_OPERAND0_64();
+            PyFunctionObject *func = (PyFunctionObject *)PyStackRef_AsPyObjectBorrow(callable);
+            PyCodeObject *code = (PyCodeObject *)func->func_code;
+            int argcount = code->co_argcount;
+            int nkw = (int)PyTuple_GET_SIZE(PyStackRef_AsPyObjectBorrow(kwnames));
+            int total = oparg;
+            if (!PyStackRef_IsNull(self_or_null)) {
+                args--;
+                total++;
+            }
+            int npos = total - nkw;
+            assert(nkw <= 8 && npos <= argcount);
+            STAT_INC(CALL, hit);
+            _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, callable, 0, frame);
+            _PyStackRef *locals = pushed_frame->localsplus;
+            for (int i = 0; i < npos; i++) {
+                locals[i] = args[i];
+            }
+            for (int j = 0; j < nkw; j++) {
+                locals[((uint64_t)(uintptr_t)slots >> (8 * j)) & 0xff] = args[npos + j];
+            }
+            if (npos < argcount) {
+                PyObject *defaults = func->func_defaults;
+                Py_ssize_t first_default = argcount -
+                (defaults == NULL ? 0 : PyTuple_GET_SIZE(defaults));
+                for (int i = npos; i < argcount; i++) {
+                    if (PyStackRef_IsNull(locals[i])) {
+                        assert(i >= first_default);
+                        locals[i] = PyStackRef_FromPyObjectNew(
+                            PyTuple_GET_ITEM(defaults, i - first_default));
+                    }
+                }
+            }
+            stack_pointer += -2 - oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            PyStackRef_CLOSE(kwnames);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            new_frame = PyStackRef_Wrap(pushed_frame);
+            _tos_cache0 = new_frame;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _CHECK_FUNCTION_VERSION_KW_r11: {
             CHECK_CURRENT_CACHED_VALUES(1);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());

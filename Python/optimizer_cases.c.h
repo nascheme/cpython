@@ -5404,9 +5404,76 @@
         /* _DO_CALL_KW is not a viable micro-op for tier 2 */
 
         case _PY_FRAME_KW: {
+            JitOptRef kwnames;
+            JitOptRef self_or_null;
+            JitOptRef callable;
+            JitOptRef new_frame;
+            kwnames = stack_pointer[-1];
+            self_or_null = stack_pointer[-2 - oparg];
+            callable = stack_pointer[-3 - oparg];
+            PyFunctionObject *func = (PyFunctionObject *)sym_get_const(ctx, callable);
+            PyObject *names = sym_get_const(ctx, kwnames);
+            if (func != NULL && PyFunction_Check(func) && names != NULL &&
+                PyTuple_CheckExact(names) &&
+                (sym_is_null(self_or_null) || sym_is_not_null(self_or_null))) {
+                PyCodeObject *co = (PyCodeObject *)func->func_code;
+                int nkw = (int)PyTuple_GET_SIZE(names);
+                int npos = oparg + sym_is_not_null(self_or_null) - nkw;
+                int nparams = co->co_argcount + co->co_kwonlyargcount;
+                Py_ssize_t ndefaults = func->func_defaults == NULL ? 0 :
+                PyTuple_GET_SIZE(func->func_defaults);
+                uint64_t slots = 0;
+                uint64_t filled = 0;
+                int ok = (co->co_flags & CO_OPTIMIZED) &&
+                !(co->co_flags & (CO_VARARGS | CO_VARKEYWORDS)) &&
+                nkw > 0 && nkw <= 8 && npos >= 0 &&
+                npos <= co->co_argcount && nparams <= 64 && nparams < 255;
+                for (int i = 0; ok && i < npos; i++) {
+                    filled |= (uint64_t)1 << i;
+                }
+                for (int j = 0; ok && j < nkw; j++) {
+                    PyObject *name = PyTuple_GET_ITEM(names, j);
+                    int found = -1;
+                    for (int i = co->co_posonlyargcount; i < nparams; i++) {
+                        PyObject *pname = PyTuple_GET_ITEM(co->co_localsplusnames, i);
+                        if (pname == name ||
+                            (PyUnicode_Check(name) && _PyUnicode_Equal(pname, name))) {
+                            found = i;
+                            break;
+                        }
+                    }
+                    if (found < 0 || (filled & ((uint64_t)1 << found))) {
+                        ok = 0;
+                        break;
+                    }
+                    filled |= (uint64_t)1 << found;
+                    slots |= (uint64_t)found << (8 * j);
+                }
+                for (int i = 0; ok && i < nparams; i++) {
+                    if (!(filled & ((uint64_t)1 << i)) &&
+                        (i >= co->co_argcount || i < co->co_argcount - ndefaults)) {
+                        ok = 0;
+                    }
+                }
+                if (ok) {
+                    ADD_OP(_CHECK_STACK_SPACE_OPERAND, 0, co->co_framesize);
+                    ADD_OP(_INIT_CALL_PY_KW, oparg, slots);
+                }
+            }
+            new_frame = PyJitRef_WrapInvalid(frame_new_from_symbol(ctx, callable, NULL, 0));
+            CHECK_STACK_BOUNDS(-2 - oparg);
+            stack_pointer[-3 - oparg] = new_frame;
+            stack_pointer += -2 - oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _INIT_CALL_PY_KW: {
             JitOptRef callable;
             JitOptRef new_frame;
             callable = stack_pointer[-3 - oparg];
+            PyObject *slots = (PyObject *)this_instr->operand0;
+            (void)slots;
             new_frame = PyJitRef_WrapInvalid(frame_new_from_symbol(ctx, callable, NULL, 0));
             CHECK_STACK_BOUNDS(-2 - oparg);
             stack_pointer[-3 - oparg] = new_frame;
