@@ -5974,7 +5974,9 @@ dummy_func(
         /* _GRAIL_ELEMENTWISE_FLOAT with virtual operands or result: bytes
          * 0, 1 and 2 of vbases are 1 + the first shadow slot of the left
          * operand's, right operand's and result's fields, or 0 for a real
-         * object. No operand is reused. */
+         * object. Byte 3 is 1 + the index of a virtual operand that dies
+         * here, whose fields the result takes over (updated in place when
+         * only its slots reference them). Real operands are not reused. */
         tier2 op(_VO_ELEMENTWISE_FLOAT, (type/4, vbases/4, left, right -- res, l, r)) {
             PyObject *left_o = PyStackRef_AsPyObjectBorrow(left);
             PyObject *right_o = PyStackRef_AsPyObjectBorrow(right);

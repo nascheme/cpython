@@ -914,7 +914,8 @@ _PyGrail_ElementwiseFloat(PyTypeObject *type, int op, int kind,
  * virtual record's fields in shadow. Real record operands are checked by
  * the caller (exact type, conforming); virtual ones conform. A virtual
  * result gets new float references in its slots; a real one is returned.
- * Returns -1 with MemoryError, leaving the result slots NULL. */
+ * Byte 3 is 1 + the index of a virtual operand that dies here, whose fields
+ * become the result's. Returns -1 with MemoryError, changing nothing. */
 int
 _PyGrail_ElementwiseFloatVirtual(PyTypeObject *type, int op, int kind,
                                  PyObject *a, PyObject *b, _PyStackRef *shadow,
@@ -923,35 +924,116 @@ _PyGrail_ElementwiseFloatVirtual(PyTypeObject *type, int op, int kind,
     Py_ssize_t n = (type->tp_basicsize - (Py_ssize_t)offsetof(RecordObject, fields)) /
                    (Py_ssize_t)sizeof(PyObject *);
     unsigned int abase = vbases & 0xff, bbase = (vbases >> 8) & 0xff;
-    unsigned int rbase = (vbases >> 16) & 0xff;
-    double scalar = kind == 1 ? PyFloat_AS_DOUBLE(b) :
-                    kind == 2 ? PyFloat_AS_DOUBLE(a) : 0.0;
-    double values[16];
+    unsigned int rbase = (vbases >> 16) & 0xff, steal = vbases >> 24;
     assert(n <= 16);
-    for (Py_ssize_t i = 0; i < n; i++) {
-        double x, y;
-        if (kind == 2) {
-            x = scalar;
+    PyObject *xbuf[16], *ybuf[16];
+    PyObject **x = NULL, **y = NULL;
+    double scalar = 0.0;
+    if (kind == 2) {
+        scalar = PyFloat_AS_DOUBLE(a);
+    }
+    else if (abase) {
+        for (Py_ssize_t i = 0; i < n; i++) {
+            xbuf[i] = PyStackRef_AsPyObjectBorrow(shadow[abase - 1 + i]);
+        }
+        x = xbuf;
+    }
+    else {
+        x = ((RecordObject *)a)->fields;
+    }
+    if (kind == 1) {
+        scalar = PyFloat_AS_DOUBLE(b);
+    }
+    else if (bbase) {
+        for (Py_ssize_t i = 0; i < n; i++) {
+            ybuf[i] = PyStackRef_AsPyObjectBorrow(shadow[bbase - 1 + i]);
+        }
+        y = ybuf;
+    }
+    else {
+        y = ((RecordObject *)b)->fields;
+    }
+#define EW_VALUE(i) \
+    (kind == 0 ? kernel_double_op(op, PyFloat_AS_DOUBLE(x[i]), PyFloat_AS_DOUBLE(y[i])) : \
+     kind == 1 ? kernel_double_op(op, PyFloat_AS_DOUBLE(x[i]), scalar) : \
+                 kernel_double_op(op, scalar, PyFloat_AS_DOUBLE(y[i])))
+    if (steal) {
+        /* The operand (steal - 1) is virtual and dies here: its float
+         * fields become the result's, updated in place when only its slot
+         * references them, as _PyGrail_ElementwiseFloat does with a
+         * uniquely referenced operand. A virtual result has its slots. New
+         * objects first, so that a failure changes nothing. */
+        _PyStackRef *slots = shadow + (steal == 1 ? abase : bbase) - 1;
+        assert(steal == 1 ? abase : bbase);
+        assert(!rbase || slots == shadow + rbase - 1);
+        PyObject **objs = steal == 1 ? xbuf : ybuf;
+        int unique = 1;
+        for (Py_ssize_t i = 0; i < n; i++) {
+            unique &= PyStackRef_RefcountOnObject(slots[i]) &&
+                      _PyObject_IsUniquelyReferenced(objs[i]);
+        }
+        RecordObject *self = NULL;
+        if (!rbase) {
+            self = record_alloc(type, n);
+            if (self == NULL) {
+                return -1;
+            }
+        }
+        if (unique) {
+            for (Py_ssize_t i = 0; i < n; i++) {
+                ((PyFloatObject *)objs[i])->ob_fval = EW_VALUE(i);
+            }
         }
         else {
-            x = PyFloat_AS_DOUBLE(abase ?
-                PyStackRef_AsPyObjectBorrow(shadow[abase - 1 + i]) :
-                ((RecordObject *)a)->fields[i]);
+            double values[16];
+            PyObject *fresh[16];
+            for (Py_ssize_t i = 0; i < n; i++) {
+                values[i] = EW_VALUE(i);
+            }
+            for (Py_ssize_t i = 0; i < n; i++) {
+                fresh[i] = NULL;
+                if (PyStackRef_RefcountOnObject(slots[i]) &&
+                    _PyObject_IsUniquelyReferenced(objs[i])) {
+                    continue;
+                }
+                fresh[i] = PyFloat_FromDouble(values[i]);
+                if (fresh[i] == NULL) {
+                    for (Py_ssize_t j = 0; j < i; j++) {
+                        Py_XDECREF(fresh[j]);
+                    }
+                    if (self != NULL) {
+                        record_free(self, type);
+                        _Py_DECREF_TYPE(type);
+                    }
+                    return -1;
+                }
+            }
+            for (Py_ssize_t i = 0; i < n; i++) {
+                if (fresh[i] == NULL) {
+                    ((PyFloatObject *)objs[i])->ob_fval = values[i];
+                }
+                else {
+                    /* Referenced elsewhere too: not freed. */
+                    PyStackRef_CLOSE(slots[i]);
+                    slots[i] = PyStackRef_FromPyObjectSteal(fresh[i]);
+                }
+            }
         }
-        if (kind == 1) {
-            y = scalar;
+        if (self != NULL) {
+            for (Py_ssize_t i = 0; i < n; i++) {
+                self->fields[i] = PyStackRef_AsPyObjectSteal(slots[i]);
+                slots[i] = PyStackRef_NULL;
+            }
+            self->conforming = 1;
+            _PyObject_GC_TRACK(self);
         }
-        else {
-            y = PyFloat_AS_DOUBLE(bbase ?
-                PyStackRef_AsPyObjectBorrow(shadow[bbase - 1 + i]) :
-                ((RecordObject *)b)->fields[i]);
-        }
-        values[i] = kernel_double_op(op, x, y);
+        *res = (PyObject *)self;
+        return 0;
     }
     if (rbase) {
         _PyStackRef *out = shadow + rbase - 1;
         for (Py_ssize_t i = 0; i < n; i++) {
-            PyObject *f = PyFloat_FromDouble(values[i]);
+            PyObject *f = PyFloat_FromDouble(EW_VALUE(i));
             if (f == NULL) {
                 for (Py_ssize_t j = 0; j < i; j++) {
                     PyStackRef_CLOSE(out[j]);
@@ -970,7 +1052,7 @@ _PyGrail_ElementwiseFloatVirtual(PyTypeObject *type, int op, int kind,
         return -1;
     }
     for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *f = PyFloat_FromDouble(values[i]);
+        PyObject *f = PyFloat_FromDouble(EW_VALUE(i));
         if (f == NULL) {
             for (Py_ssize_t j = 0; j < i; j++) {
                 Py_DECREF(self->fields[j]);
@@ -981,6 +1063,7 @@ _PyGrail_ElementwiseFloatVirtual(PyTypeObject *type, int op, int kind,
         }
         self->fields[i] = f;
     }
+#undef EW_VALUE
     self->conforming = 1;
     _PyObject_GC_TRACK(self);
     *res = (PyObject *)self;

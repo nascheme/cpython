@@ -1694,6 +1694,8 @@ enum {
     VO_USE_NOP,         // a guard it passes: removed
     VO_USE_UNPACK,      // unpacking of a tuple
     VO_USE_FUSED,       // operand (field: its index) of a fused float uop
+    VO_USE_STEAL,       // the element-wise uop takes over the fields of
+                        // this operand (field: its index), which dies
 };
 
 #define VO_MAX_FIELDS 16
@@ -2247,6 +2249,7 @@ vo_new_candidate(JitOptContext *ctx, const VOPre *pre,
     c->base = (uint8_t)base;
     c->escaped = false;
     c->safe_release = safe;
+    c->consumed = false;
     memcpy(c->inner, inner, sizeof(inner));
     for (int k = n; k < VO_MAX_FIELDS; k++) {
         c->inner[k] = -1;
@@ -2338,9 +2341,10 @@ vo_input_release_safe(JitOptContext *ctx, const VOPre *pre, int i,
 /* A fused float uop: _GRAIL_FLOAT_PROGRAM reads the fields of record
  * arguments and _GRAIL_ELEMENTWISE_FLOAT those of record operands, so
  * virtual ones are read from their shadow slots (_VO_FLOAT_PROGRAM,
- * _VO_ELEMENTWISE_FLOAT). The uops and the pops of the operands that
- * follow _GRAIL_ELEMENTWISE_FLOAT run no code when the real inputs are
- * safe to release. */
+ * _VO_ELEMENTWISE_FLOAT). Both check that real record operands have their
+ * exact all-float types and conform, and that the others are exact floats,
+ * so releasing them runs no code: only the callable of a float program
+ * matters. */
 static void
 vo_fused_inputs(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                 _PyUOpInstruction *out_end, JitOptRef *stack_pointer)
@@ -2379,22 +2383,47 @@ vo_fused_inputs(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_sta
             vo_escape(ctx, c, "fused call");
         }
     }
+    /* A virtual record operand of _GRAIL_ELEMENTWISE_FLOAT that dies
+     * there: its float fields become the result's (updated in place when
+     * nothing else references them), virtual or real, as the uop does with
+     * a uniquely referenced real operand. */
+    vo->steal_from = -1;
+    for (int k = 0; k < 2 && ew && k < pre->npop; k++) {
+        int d = pre->input_cand[k];
+        int kind = f->oparg >> 2;
+        if (d < 0 || !vo_live(&vo->cands[d]) || (k == 0 ? kind == 2 : kind == 1)) {
+            continue;
+        }
+        bool held = vo_scan(ctx, stack_pointer, NULL, d);
+        for (int o = 0; o < vo->ncands && !held; o++) {
+            if (vo_live(&vo->cands[o])) {
+                for (int j = 0; j < vo->cands[o].n; j++) {
+                    held |= vo->cands[o].inner[j] == d;
+                }
+            }
+        }
+        if (!held) {
+            _PyVOCandidate *dc = &vo->cands[d];
+            dc->death = (int)(out_end - ctx->out_buffer.start);
+            dc->consumed = true;
+            vo->steal_from = d;
+            vo_add_use(ctx, fout, d, VO_USE_STEAL, k);
+            DPRINTF(2, "vo: candidate %d dies before %d, fields to the result\n",
+                    d, dc->death);
+            break;
+        }
+    }
     for (_PyUOpInstruction *p = out_start; p < out_end; p++) {
         if (!(_PyUop_Flags[p->opcode] & HAS_ESCAPES_FLAG)) {
             continue;
         }
         bool exempt = false;
         if (p == f && f->opcode == _GRAIL_FLOAT_PROGRAM) {
-            exempt = true;
-            for (int i = 0; i < pre->npop; i++) {
-                exempt &= vo_input_release_safe(ctx, pre, i, stack_pointer);
-            }
+            exempt = vo_input_release_safe(ctx, pre, 0, stack_pointer) &&
+                     vo_input_release_safe(ctx, pre, 1, stack_pointer);
         }
-        else if (p == f && ew) {
+        else if (ew && (p == f || p == f + 1 || p == f + 2)) {
             exempt = true;
-        }
-        else if (ew && (p == f + 1 || p == f + 2)) {
-            exempt = vo_input_release_safe(ctx, pre, p == f + 1 ? 1 : 0, stack_pointer);
         }
         if (!exempt) {
             if (vo_any_live(ctx)) {
@@ -2406,9 +2435,12 @@ vo_fused_inputs(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_sta
     }
 }
 
-/* The result of _GRAIL_ELEMENTWISE_FLOAT: a record of exact floats. */
+/* The result of _GRAIL_ELEMENTWISE_FLOAT: a record of exact floats. It
+ * takes over the slots of a virtual operand that dies there, whose float
+ * fields _VO_ELEMENTWISE_FLOAT then updates in place, as
+ * _GRAIL_ELEMENTWISE_FLOAT does with a uniquely referenced operand. */
 static void
-vo_fused_candidate(JitOptContext *ctx, _PyUOpInstruction *out_start,
+vo_fused_candidate(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                    _PyUOpInstruction *out_end, JitOptRef *stack_pointer)
 {
     _PyVOState *vo = &ctx->vo;
@@ -2424,10 +2456,16 @@ vo_fused_candidate(JitOptContext *ctx, _PyUOpInstruction *out_start,
     }
     int base = -1;
     uint64_t mask = ((uint64_t)1 << n) - 1;
-    for (int b = 0; b + n <= _Py_VO_SHADOW_SIZE; b++) {
-        if (!(vo->shadow_used & (mask << b))) {
-            base = b;
-            break;
+    int from = pre->any_live ? vo->steal_from : -1;
+    if (from >= 0) {
+        base = vo->cands[from].base;
+    }
+    else {
+        for (int b = 0; b + n <= _Py_VO_SHADOW_SIZE; b++) {
+            if (!(vo->shadow_used & (mask << b))) {
+                base = b;
+                break;
+            }
         }
     }
     if (base < 0) {
@@ -2443,6 +2481,7 @@ vo_fused_candidate(JitOptContext *ctx, _PyUOpInstruction *out_start,
     c->base = (uint8_t)base;
     c->escaped = false;
     c->safe_release = true;
+    c->consumed = false;
     for (int k = 0; k < VO_MAX_FIELDS; k++) {
         c->inner[k] = -1;
     }
@@ -2495,7 +2534,9 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                     }
                 }
             }
-            else if (vo_is_pop(opcode)) {
+            else if (vo_is_pop(opcode) || opcode == _GUARD_IS_NOT_NONE_POP) {
+                // _GUARD_IS_NOT_NONE_POP of an object of known type is a
+                // pop (eliminate_pop_guard()).
                 if (nout == 0 || op == _NOP) {
                     continue;
                 }
@@ -2622,13 +2663,20 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             }
             bool exempt = false;
             if (vo_is_pop(op)) {
-                exempt = vo_is_pop(opcode) && nout == 1 && pre->npop == 1 &&
+                // A pop, or a guard that pops, folded to a pop
+                // (eliminate_pop_guard()).
+                bool pops = (vo_is_pop(opcode) || opcode == _GUARD_IS_NONE_POP ||
+                             opcode == _GUARD_IS_NOT_NONE_POP ||
+                             opcode == _GUARD_IS_TRUE_POP ||
+                             opcode == _GUARD_IS_FALSE_POP) &&
+                            nout == 1 && pre->npop == 1;
+                exempt = pops &&
                          (vo_decref_safe(ctx, pre->inputs[0]) ||
                           vo_sym_present(ctx, stack_pointer,
                                          PyJitRef_Unwrap(pre->inputs[0])));
                 // Otherwise a release that would free the value waits
                 // until no virtual object is live (_VO_POP_TOP_DEFER).
-                if (!exempt && op == _POP_TOP && vo_is_pop(opcode) && nout == 1 &&
+                if (!exempt && op == _POP_TOP && pops &&
                     vo->region_deferred < _Py_VO_DEFERRED_SIZE && vo->ndefers < 256) {
                     vo->defers[vo->ndefers++] = (int)(p - ctx->out_buffer.start);
                     vo->region_deferred++;
@@ -2742,7 +2790,13 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
     }
     /* A new candidate. */
     if (fused) {
-        vo_fused_candidate(ctx, out_start, out_end, stack_pointer);
+        int ncands = vo->ncands;
+        vo_fused_candidate(ctx, pre, out_start, out_end, stack_pointer);
+        if (pre->any_live && vo->steal_from >= 0 && vo->ncands == ncands) {
+            // The result is real: the stolen slots are free again.
+            vo_free_slots(ctx, &vo->cands[vo->steal_from]);
+        }
+        vo->steal_from = -1;
     }
     if ((opcode == _CALL_RECORD || opcode == _CALL_RECORD_CHECKED ||
          opcode == _BUILD_TUPLE) && !pre->inputs_overflow) {
@@ -2864,6 +2918,30 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
     if (tracer->vo_arena != NULL) {
         PyMem_Free(tracer->vo_arena);
         tracer->vo_arena = NULL;
+    }
+    /* A virtual operand whose fields an element-wise uop takes over for a
+     * real result saves nothing: real, the uop would update it in place
+     * (it is uniquely referenced). Keep it real; later uses first, so that
+     * a chain of them ends up real. */
+    for (int u = vo->nuses - 1; u >= 0; u--) {
+        _PyVOUse *use = &vo->uses[u];
+        _PyVOCandidate *c = &vo->cands[use->cand];
+        if (use->kind != VO_USE_STEAL || c->escaped) {
+            continue;
+        }
+        bool virtual_result = false;
+        bool inner = false;
+        for (int k = 0; k < vo->ncands; k++) {
+            virtual_result |= vo->cands[k].create == use->out && !vo->cands[k].escaped;
+        }
+        for (int k = 0; k < c->n; k++) {
+            inner |= c->inner[k] >= 0 && !vo->cands[c->inner[k]].escaped;
+        }
+        if (!virtual_result && !inner) {
+            DPRINTF(2, "vo: candidate %d stays real (fields to a real result)\n",
+                    (int)use->cand);
+            c->escaped = true;
+        }
     }
     int nvirtual = 0;
     for (int i = 0; i < vo->ncands; i++) {
@@ -3006,7 +3084,7 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
         }
         for (int k = 0; k < vo->ncands; k++) {
             _PyVOCandidate *c = &vo->cands[k];
-            if (!c->escaped && c->death == i) {
+            if (!c->escaped && c->death == i && !c->consumed) {
                 if (pending_flush && !c->safe_release) {
                     // Keep the order of the releases.
                     _PyUOpInstruction *f = &buffer[out++];
@@ -3091,6 +3169,9 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                     break;
                 case VO_USE_FUSED:
                     vo_set_vbase(&inst, use->field, c->base);
+                    break;
+                case VO_USE_STEAL:
+                    vo_set_vbase(&inst, 3, use->field);
                     break;
             }
         }

@@ -91,6 +91,8 @@ typedef struct {
     uint8_t base;           // first shadow slot
     bool escaped;           // stays a real allocation
     bool safe_release;      // releasing its fields runs no code
+    bool consumed;          // a fused uop took over its fields at its death
+                            // (no release)
     int8_t inner[16];       // candidate held by each field, or -1
 } _PyVOCandidate;
 
@@ -122,6 +124,8 @@ typedef struct {
     bool unknown_depth;     // returned to a frame whose stack depth is not
                             // yet known (until _GUARD_IP_RETURN_VALUE)
     bool dropped_uop;       // a fusion replaced the previous output uop
+    int steal_from;         // candidate whose slots the current element-wise
+                            // uop takes over, or -1
     int ncands;
     int nuses;
     int nsnaps;
