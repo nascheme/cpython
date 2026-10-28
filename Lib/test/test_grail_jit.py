@@ -1289,6 +1289,204 @@ class DraftGuardTests(unittest.TestCase):
             bump(d, 1)
 
 
+# Virtual objects: records and tuples built in one function and consumed by
+# its caller or callee in the same trace need no allocation. Each case also
+# checks the result, so the checks hold on every build.
+VIRTUAL = """
+import grail
+
+@grail.record
+class P:
+    x: int
+    y: int
+
+@grail.record
+class F:
+    x: float
+    y: float
+
+def make(i):
+    return P(i, i + 1)
+
+def total(p):
+    s = p.x
+    return s + p.y
+
+def chain(n):
+    t = 0
+    for i in range(n):
+        t += total(make(i))
+    return t
+
+def pair(i):
+    return i, i * 2
+
+def pairs(n):
+    t = 0
+    for i in range(n):
+        a, b = pair(i)
+        t += a + b
+    return t
+
+def keep(i, out):
+    p = make(i)
+    out.append(p)
+    return p.x
+
+def escaping(n, out):
+    t = 0
+    for i in range(n):
+        t += keep(i, out)
+    return t
+
+def check(p, i, limit):
+    q = p
+    if i >= limit:
+        return int(p is q) + p.x
+    return p.y
+
+def exits(n, limit):
+    t = 0
+    for i in range(n):
+        t += check(make(i), i, limit)
+    return t
+
+def ratio(p):
+    d = p.y
+    return p.x / d
+
+def ratios(n, caught):
+    t = 0.0
+    for i in range(n):
+        try:
+            t += ratio(F(1.0, (i % 16) * 1.0))
+        except ZeroDivisionError as e:
+            tb = e.__traceback__
+            while tb.tb_next is not None:
+                tb = tb.tb_next
+            caught.append(tb.tb_frame.f_locals["p"])
+    return t
+
+class D:
+    deleted = 0
+    def __del__(self):
+        D.deleted += 1
+
+def with_d(i, d):
+    return i, d
+
+def dels(n):
+    t = 0
+    for i in range(n):
+        a, d = with_d(i, D())
+        t += a
+    return t
+
+def last(n):
+    p = None
+    for i in range(n):
+        p = make(i)
+    return p
+"""
+
+
+def load_virtual():
+    ns = {}
+    exec(VIRTUAL, ns)
+    return ns
+
+
+class VirtualObjectTests(unittest.TestCase):
+    def test_cross_call_record(self):
+        m = load_virtual()
+        for _ in range(REPEAT):
+            self.assertEqual(m["chain"](100), 100 * 100)
+        if tier2_enabled():
+            uops = executor_uops(m["chain"])
+            self.assertIn("_VO_NEW_RECORD", uops)
+            self.assertIn("_VO_RELEASE", uops)
+            self.assertNotIn("_CALL_RECORD", uops)
+            self.assertNotIn("_CALL_RECORD_CHECKED", uops)
+
+    def test_returned_tuple(self):
+        m = load_virtual()
+        for _ in range(REPEAT):
+            self.assertEqual(m["pairs"](100), 3 * (99 * 100 // 2))
+        if tier2_enabled():
+            uops = executor_uops(m["pairs"])
+            self.assertIn("_VO_NEW_TUPLE", uops)
+            self.assertIn("_VO_UNPACK", uops)
+            self.assertNotIn("_BUILD_TUPLE", uops)
+
+    def test_escape_keeps_allocation(self):
+        m = load_virtual()
+        P = m["P"]
+        for _ in range(REPEAT):
+            out = []
+            self.assertEqual(m["escaping"](100, out), 99 * 100 // 2)
+            self.assertEqual(out, [P(i, i + 1) for i in range(100)])
+            self.assertEqual(len({id(p) for p in out}), 100)
+        if tier2_enabled():
+            self.assertNotIn("_VO_NEW_RECORD", executor_uops(m["escaping"]))
+
+    def test_side_exit_rebuilds_aliases(self):
+        m = load_virtual()
+        n = 100
+        for _ in range(REPEAT):
+            self.assertEqual(m["exits"](n, n), sum(range(1, n + 1)))
+        if tier2_enabled():
+            self.assertIn("_VO_NEW_RECORD", executor_uops(m["exits"]))
+        # Leave the trace at the branch while p is virtual in two locals of
+        # check(): tier 1 must see one real record in both.
+        for limit in (n // 2, 0, n - 1):
+            expected = sum(i + 1 for i in range(limit)) + \
+                       sum(1 + i for i in range(limit, n))
+            self.assertEqual(m["exits"](n, limit), expected)
+
+    def test_exception_in_inlined_frame(self):
+        m = load_virtual()
+        F = m["F"]
+        for _ in range(REPEAT):
+            caught = []
+            expected = 0.0
+            for i in range(100):
+                if i % 16:
+                    expected += 1.0 / (i % 16)
+            self.assertEqual(m["ratios"](100, caught), expected)
+            # The frame of ratio() shows the record it was given.
+            self.assertEqual(caught, [F(1.0, 0.0)] * 7)
+            self.assertTrue(all(type(p) is F for p in caught))
+
+    def test_released_fields_are_finalized(self):
+        m = load_virtual()
+        D = m["D"]
+        for _ in range(REPEAT):
+            before = D.deleted
+            self.assertEqual(m["dels"](100), 99 * 100 // 2)
+            self.assertEqual(D.deleted - before, 100)
+
+    def test_loop_carried_record_stays_real(self):
+        m = load_virtual()
+        P = m["P"]
+        for _ in range(REPEAT):
+            self.assertEqual(m["last"](100), P(99, 100))
+
+    @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
+    def test_ablation(self):
+        from test.support.script_helper import assert_python_ok
+        code = f"""if 1:
+            import sys
+            sys.path.insert(0, {repr(__file__.rsplit("/", 1)[0])})
+            from test.test_grail_jit import load_virtual, executor_uops
+            m = load_virtual()
+            for _ in range(100):
+                assert m["chain"](100) == 100 * 100
+            uops = executor_uops(m["chain"])
+            assert not any(u.startswith("_VO_") for u in uops), uops
+        """
+        assert_python_ok("-c", code, PYTHON_GRAIL_JIT_VIRTUAL_OBJECTS="0")
+
+
 def sum_repeat(value, n):
     t = 0.0
     for _ in range(n):

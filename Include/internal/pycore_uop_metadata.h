@@ -18,6 +18,7 @@ extern const ReplicationRange _PyUop_Replication[MAX_UOP_ID+1];
 extern const char * const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1];
 
 extern int _PyUop_num_popped(int opcode, int oparg);
+extern int _PyUop_num_inputs(int opcode, int oparg);
 
 typedef struct _pyuop_tos_cache_entry {
     /* input depth is implicit in position */
@@ -372,6 +373,15 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_GUARD_CALLABLE_RECORD] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
     [_CALL_RECORD] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_CALL_RECORD_CHECKED] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
+    [_VO_NEW_RECORD] = HAS_ARG_FLAG | HAS_DEOPT_FLAG,
+    [_VO_NEW_TUPLE] = HAS_ARG_FLAG,
+    [_VO_LOAD_FIELD] = 0,
+    [_VO_LOAD_FIELD_BORROW] = 0,
+    [_VO_UNPACK] = HAS_ARG_FLAG,
+    [_VO_RELEASE] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
+    [_VO_EXIT_INFO] = 0,
+    [_VO_RECOVER] = HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
+    [_VO_RECOVER_ERROR] = HAS_ESCAPES_FLAG,
     [_GUARD_CALLABLE_BUILTIN_O] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
     [_CALL_BUILTIN_O] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_GUARD_CALLABLE_BUILTIN_FAST] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
@@ -3533,6 +3543,87 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_VO_NEW_RECORD] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 2, 0, _VO_NEW_RECORD_r02 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
+    [_VO_NEW_TUPLE] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 1, 0, _VO_NEW_TUPLE_r01 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
+    [_VO_LOAD_FIELD] = {
+        .best = { 0, 1, 2, 2 },
+        .entries = {
+            { 2, 0, _VO_LOAD_FIELD_r02 },
+            { 2, 1, _VO_LOAD_FIELD_r12 },
+            { 3, 2, _VO_LOAD_FIELD_r23 },
+            { -1, -1, -1 },
+        },
+    },
+    [_VO_LOAD_FIELD_BORROW] = {
+        .best = { 0, 1, 2, 2 },
+        .entries = {
+            { 2, 0, _VO_LOAD_FIELD_BORROW_r02 },
+            { 2, 1, _VO_LOAD_FIELD_BORROW_r12 },
+            { 3, 2, _VO_LOAD_FIELD_BORROW_r23 },
+            { -1, -1, -1 },
+        },
+    },
+    [_VO_UNPACK] = {
+        .best = { 1, 1, 1, 1 },
+        .entries = {
+            { -1, -1, -1 },
+            { 0, 1, _VO_UNPACK_r10 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
+    [_VO_RELEASE] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 0, 0, _VO_RELEASE_r00 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
+    [_VO_EXIT_INFO] = {
+        .best = { 0, 1, 2, 3 },
+        .entries = {
+            { 0, 0, _VO_EXIT_INFO_r00 },
+            { 1, 1, _VO_EXIT_INFO_r11 },
+            { 2, 2, _VO_EXIT_INFO_r22 },
+            { 3, 3, _VO_EXIT_INFO_r33 },
+        },
+    },
+    [_VO_RECOVER] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 0, 0, _VO_RECOVER_r00 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
+    [_VO_RECOVER_ERROR] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 0, 0, _VO_RECOVER_ERROR_r00 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
     [_GUARD_CALLABLE_BUILTIN_O] = {
         .best = { 0, 0, 0, 0 },
         .entries = {
@@ -5202,6 +5293,22 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_GUARD_CALLABLE_RECORD_r00] = _GUARD_CALLABLE_RECORD,
     [_CALL_RECORD_r02] = _CALL_RECORD,
     [_CALL_RECORD_CHECKED_r02] = _CALL_RECORD_CHECKED,
+    [_VO_NEW_RECORD_r02] = _VO_NEW_RECORD,
+    [_VO_NEW_TUPLE_r01] = _VO_NEW_TUPLE,
+    [_VO_LOAD_FIELD_r02] = _VO_LOAD_FIELD,
+    [_VO_LOAD_FIELD_r12] = _VO_LOAD_FIELD,
+    [_VO_LOAD_FIELD_r23] = _VO_LOAD_FIELD,
+    [_VO_LOAD_FIELD_BORROW_r02] = _VO_LOAD_FIELD_BORROW,
+    [_VO_LOAD_FIELD_BORROW_r12] = _VO_LOAD_FIELD_BORROW,
+    [_VO_LOAD_FIELD_BORROW_r23] = _VO_LOAD_FIELD_BORROW,
+    [_VO_UNPACK_r10] = _VO_UNPACK,
+    [_VO_RELEASE_r00] = _VO_RELEASE,
+    [_VO_EXIT_INFO_r00] = _VO_EXIT_INFO,
+    [_VO_EXIT_INFO_r11] = _VO_EXIT_INFO,
+    [_VO_EXIT_INFO_r22] = _VO_EXIT_INFO,
+    [_VO_EXIT_INFO_r33] = _VO_EXIT_INFO,
+    [_VO_RECOVER_r00] = _VO_RECOVER,
+    [_VO_RECOVER_ERROR_r00] = _VO_RECOVER_ERROR,
     [_GUARD_CALLABLE_BUILTIN_O_r00] = _GUARD_CALLABLE_BUILTIN_O,
     [_CALL_BUILTIN_O_r03] = _CALL_BUILTIN_O,
     [_GUARD_CALLABLE_BUILTIN_FAST_r00] = _GUARD_CALLABLE_BUILTIN_FAST,
@@ -6961,6 +7068,31 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r02] = "_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r02",
     [_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r12] = "_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r12",
     [_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r23] = "_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r23",
+    [_VO_EXIT_INFO] = "_VO_EXIT_INFO",
+    [_VO_EXIT_INFO_r00] = "_VO_EXIT_INFO_r00",
+    [_VO_EXIT_INFO_r11] = "_VO_EXIT_INFO_r11",
+    [_VO_EXIT_INFO_r22] = "_VO_EXIT_INFO_r22",
+    [_VO_EXIT_INFO_r33] = "_VO_EXIT_INFO_r33",
+    [_VO_LOAD_FIELD] = "_VO_LOAD_FIELD",
+    [_VO_LOAD_FIELD_r02] = "_VO_LOAD_FIELD_r02",
+    [_VO_LOAD_FIELD_r12] = "_VO_LOAD_FIELD_r12",
+    [_VO_LOAD_FIELD_r23] = "_VO_LOAD_FIELD_r23",
+    [_VO_LOAD_FIELD_BORROW] = "_VO_LOAD_FIELD_BORROW",
+    [_VO_LOAD_FIELD_BORROW_r02] = "_VO_LOAD_FIELD_BORROW_r02",
+    [_VO_LOAD_FIELD_BORROW_r12] = "_VO_LOAD_FIELD_BORROW_r12",
+    [_VO_LOAD_FIELD_BORROW_r23] = "_VO_LOAD_FIELD_BORROW_r23",
+    [_VO_NEW_RECORD] = "_VO_NEW_RECORD",
+    [_VO_NEW_RECORD_r02] = "_VO_NEW_RECORD_r02",
+    [_VO_NEW_TUPLE] = "_VO_NEW_TUPLE",
+    [_VO_NEW_TUPLE_r01] = "_VO_NEW_TUPLE_r01",
+    [_VO_RECOVER] = "_VO_RECOVER",
+    [_VO_RECOVER_r00] = "_VO_RECOVER_r00",
+    [_VO_RECOVER_ERROR] = "_VO_RECOVER_ERROR",
+    [_VO_RECOVER_ERROR_r00] = "_VO_RECOVER_ERROR_r00",
+    [_VO_RELEASE] = "_VO_RELEASE",
+    [_VO_RELEASE_r00] = "_VO_RELEASE_r00",
+    [_VO_UNPACK] = "_VO_UNPACK",
+    [_VO_UNPACK_r10] = "_VO_UNPACK_r10",
     [_WITH_EXCEPT_START] = "_WITH_EXCEPT_START",
     [_WITH_EXCEPT_START_r33] = "_WITH_EXCEPT_START_r33",
     [_YIELD_VALUE] = "_YIELD_VALUE",
@@ -7643,6 +7775,24 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 2 + oparg;
         case _CALL_RECORD_CHECKED:
             return 2 + oparg;
+        case _VO_NEW_RECORD:
+            return 2 + oparg;
+        case _VO_NEW_TUPLE:
+            return oparg;
+        case _VO_LOAD_FIELD:
+            return 1;
+        case _VO_LOAD_FIELD_BORROW:
+            return 1;
+        case _VO_UNPACK:
+            return 1;
+        case _VO_RELEASE:
+            return 0;
+        case _VO_EXIT_INFO:
+            return 0;
+        case _VO_RECOVER:
+            return 0;
+        case _VO_RECOVER_ERROR:
+            return 0;
         case _GUARD_CALLABLE_BUILTIN_O:
             return 0;
         case _CALL_BUILTIN_O:
@@ -7867,6 +8017,932 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 0;
         case _RECORD_BOUND_METHOD:
             return 0;
+        case _RECORD_CODE:
+            return 0;
+        default:
+            return -1;
+    }
+}
+
+int _PyUop_num_inputs(int opcode, int oparg)
+{
+    switch(opcode) {
+        case _NOP:
+            return 0;
+        case _CHECK_PERIODIC:
+            return 0;
+        case _CHECK_PERIODIC_IF_NOT_YIELD_FROM:
+            return 0;
+        case _RESUME_CHECK:
+            return 0;
+        case _LOAD_FAST_CHECK:
+            return 0;
+        case _LOAD_FAST_0:
+            return 0;
+        case _LOAD_FAST_1:
+            return 0;
+        case _LOAD_FAST_2:
+            return 0;
+        case _LOAD_FAST_3:
+            return 0;
+        case _LOAD_FAST_4:
+            return 0;
+        case _LOAD_FAST_5:
+            return 0;
+        case _LOAD_FAST_6:
+            return 0;
+        case _LOAD_FAST_7:
+            return 0;
+        case _LOAD_FAST:
+            return 0;
+        case _LOAD_FAST_BORROW_0:
+            return 0;
+        case _LOAD_FAST_BORROW_1:
+            return 0;
+        case _LOAD_FAST_BORROW_2:
+            return 0;
+        case _LOAD_FAST_BORROW_3:
+            return 0;
+        case _LOAD_FAST_BORROW_4:
+            return 0;
+        case _LOAD_FAST_BORROW_5:
+            return 0;
+        case _LOAD_FAST_BORROW_6:
+            return 0;
+        case _LOAD_FAST_BORROW_7:
+            return 0;
+        case _LOAD_FAST_BORROW:
+            return 0;
+        case _LOAD_FAST_AND_CLEAR:
+            return 0;
+        case _LOAD_CONST:
+            return 0;
+        case _LOAD_SMALL_INT_0:
+            return 0;
+        case _LOAD_SMALL_INT_1:
+            return 0;
+        case _LOAD_SMALL_INT_2:
+            return 0;
+        case _LOAD_SMALL_INT_3:
+            return 0;
+        case _LOAD_SMALL_INT:
+            return 0;
+        case _SWAP_FAST_0:
+            return 1;
+        case _SWAP_FAST_1:
+            return 1;
+        case _SWAP_FAST_2:
+            return 1;
+        case _SWAP_FAST_3:
+            return 1;
+        case _SWAP_FAST_4:
+            return 1;
+        case _SWAP_FAST_5:
+            return 1;
+        case _SWAP_FAST_6:
+            return 1;
+        case _SWAP_FAST_7:
+            return 1;
+        case _SWAP_FAST:
+            return 1;
+        case _POP_TOP:
+            return 1;
+        case _POP_TOP_NOP:
+            return 1;
+        case _POP_TOP_INT:
+            return 1;
+        case _POP_TOP_FLOAT:
+            return 1;
+        case _POP_TOP_UNICODE:
+            return 1;
+        case _POP_TOP_OPARG:
+            return oparg;
+        case _PUSH_NULL:
+            return 0;
+        case _END_FOR:
+            return 1;
+        case _POP_ITER:
+            return 2;
+        case _END_SEND:
+            return 3;
+        case _UNARY_NEGATIVE:
+            return 1;
+        case _UNARY_NEGATIVE_FLOAT_INPLACE:
+            return 1;
+        case _UNARY_NOT:
+            return 1;
+        case _TO_BOOL:
+            return 1;
+        case _TO_BOOL_TUPLE:
+            return 1;
+        case _TO_BOOL_BOOL:
+            return 1;
+        case _TO_BOOL_INT:
+            return 1;
+        case _GUARD_NOS_LIST:
+            return 2;
+        case _GUARD_TOS_LIST:
+            return 1;
+        case _GUARD_TOS_SLICE:
+            return 1;
+        case _TO_BOOL_LIST:
+            return 1;
+        case _TO_BOOL_NONE:
+            return 1;
+        case _GUARD_NOS_COMPACT_ASCII:
+            return 2;
+        case _GUARD_NOS_UNICODE:
+            return 2;
+        case _GUARD_TOS_UNICODE:
+            return 1;
+        case _TO_BOOL_STR:
+            return 1;
+        case _REPLACE_WITH_TRUE:
+            return 1;
+        case _UNARY_INVERT:
+            return 1;
+        case _GUARD_NOS_INT:
+            return 2;
+        case _GUARD_TOS_INT:
+            return 1;
+        case _GUARD_NOS_OVERFLOWED:
+            return 2;
+        case _GUARD_TOS_OVERFLOWED:
+            return 1;
+        case _BINARY_OP_MULTIPLY_INT:
+            return 2;
+        case _BINARY_OP_ADD_INT:
+            return 2;
+        case _BINARY_OP_SUBTRACT_INT:
+            return 2;
+        case _BINARY_OP_ADD_INT_INPLACE:
+            return 2;
+        case _BINARY_OP_SUBTRACT_INT_INPLACE:
+            return 2;
+        case _BINARY_OP_MULTIPLY_INT_INPLACE:
+            return 2;
+        case _BINARY_OP_ADD_INT_INPLACE_RIGHT:
+            return 2;
+        case _BINARY_OP_SUBTRACT_INT_INPLACE_RIGHT:
+            return 2;
+        case _BINARY_OP_MULTIPLY_INT_INPLACE_RIGHT:
+            return 2;
+        case _GUARD_NOS_FLOAT:
+            return 2;
+        case _GUARD_TOS_FLOAT:
+            return 1;
+        case _BINARY_OP_MULTIPLY_FLOAT:
+            return 2;
+        case _BINARY_OP_ADD_FLOAT:
+            return 2;
+        case _BINARY_OP_SUBTRACT_FLOAT:
+            return 2;
+        case _BINARY_OP_ADD_FLOAT_INPLACE:
+            return 2;
+        case _BINARY_OP_SUBTRACT_FLOAT_INPLACE:
+            return 2;
+        case _BINARY_OP_MULTIPLY_FLOAT_INPLACE:
+            return 2;
+        case _BINARY_OP_ADD_FLOAT_INPLACE_RIGHT:
+            return 2;
+        case _BINARY_OP_MULTIPLY_FLOAT_INPLACE_RIGHT:
+            return 2;
+        case _BINARY_OP_SUBTRACT_FLOAT_INPLACE_RIGHT:
+            return 2;
+        case _BINARY_OP_TRUEDIV_FLOAT:
+            return 2;
+        case _BINARY_OP_TRUEDIV_FLOAT_INPLACE:
+            return 2;
+        case _BINARY_OP_TRUEDIV_FLOAT_INPLACE_RIGHT:
+            return 2;
+        case _BINARY_OP_ADD_UNICODE:
+            return 2;
+        case _BINARY_OP_INPLACE_ADD_UNICODE:
+            return 2;
+        case _GUARD_BINARY_OP_EXTEND_LHS:
+            return 2;
+        case _GUARD_BINARY_OP_EXTEND_RHS:
+            return 2;
+        case _GUARD_BINARY_OP_EXTEND:
+            return 2;
+        case _BINARY_OP_EXTEND:
+            return 2;
+        case _GRAIL_BINARY_CHECK_FUNC:
+            return 2;
+        case _GRAIL_BINARY_LOAD_IMPL:
+            return 2;
+        case _GRAIL_BINARY_INIT_CALL:
+            return 3;
+        case _GRAIL_BINARY_KERNEL:
+            return 2;
+        case _GUARD_NOS_OBJ_TYPE_VERSION:
+            return 2;
+        case _BINARY_OP_SUBSCR_SSIZE_ITEM:
+            return 2;
+        case _STORE_SUBSCR_SSIZE_ITEM:
+            return 3;
+        case _BINARY_OP_PY_CHECK_FUNC:
+            return 2;
+        case _BINARY_OP_PY_LOAD_FUNC:
+            return 2;
+        case _BINARY_OP_PY_INIT_CALL:
+            return 3;
+        case _EXIT_BINARY_OP_CHECK:
+            return 4;
+        case _GRAIL_FLOAT_PROGRAM:
+            return 2 + oparg;
+        case _GRAIL_ELEMENTWISE_FLOAT:
+            return 2;
+        case _BINARY_SLICE:
+            return 3;
+        case _STORE_SLICE:
+            return 4;
+        case _BINARY_OP_SUBSCR_LIST_INT:
+            return 2;
+        case _BINARY_OP_SUBSCR_LIST_SLICE:
+            return 2;
+        case _BINARY_OP_SUBSCR_STR_INT:
+            return 2;
+        case _BINARY_OP_SUBSCR_USTR_INT:
+            return 2;
+        case _GUARD_NOS_TUPLE:
+            return 2;
+        case _GUARD_TOS_TUPLE:
+            return 1;
+        case _GUARD_BINARY_OP_SUBSCR_TUPLE_INT_BOUNDS:
+            return 2;
+        case _BINARY_OP_SUBSCR_TUPLE_INT:
+            return 2;
+        case _GUARD_NOS_DICT_SUBSCRIPT:
+            return 2;
+        case _GUARD_NOS_DICT_STORE_SUBSCRIPT:
+            return 3;
+        case _GUARD_TOS_ANY_DICT:
+            return 1;
+        case _GUARD_TOS_DICT:
+            return 1;
+        case _GUARD_TOS_FROZENDICT:
+            return 1;
+        case _BINARY_OP_SUBSCR_DICT_KNOWN_HASH:
+            return 2;
+        case _BINARY_OP_SUBSCR_DICT:
+            return 2;
+        case _BINARY_OP_SUBSCR_CHECK_FUNC:
+            return 2;
+        case _BINARY_OP_SUBSCR_INIT_CALL:
+            return 3;
+        case _LIST_APPEND:
+            return 2 + (oparg-1);
+        case _SET_ADD:
+            return 2 + (oparg-1);
+        case _STORE_SUBSCR:
+            return 3;
+        case _STORE_SUBSCR_LIST_INT:
+            return 3;
+        case _STORE_SUBSCR_DICT:
+            return 3;
+        case _STORE_SUBSCR_DICT_KNOWN_HASH:
+            return 3;
+        case _DELETE_SUBSCR:
+            return 2;
+        case _CALL_INTRINSIC_1:
+            return 1;
+        case _CALL_INTRINSIC_2:
+            return 2;
+        case _MAKE_HEAP_SAFE:
+            return 1;
+        case _RETURN_VALUE:
+            return 1;
+        case _GET_AITER:
+            return 1;
+        case _GET_ANEXT:
+            return 1;
+        case _GET_AWAITABLE:
+            return 1;
+        case _SEND_GEN_FRAME:
+            return 3;
+        case _GUARD_TOS_IS_NONE:
+            return 1;
+        case _GUARD_NOS_NOT_NULL:
+            return 2;
+        case _SEND_VIRTUAL_TIER_TWO:
+            return 3;
+        case _GUARD_3OS_ASYNC_GEN_ASEND:
+            return 3;
+        case _SEND_ASYNC_GEN_TIER_TWO:
+            return 3;
+        case _YIELD_VALUE:
+            return 1;
+        case _POP_EXCEPT:
+            return 1;
+        case _LOAD_COMMON_CONSTANT:
+            return 0;
+        case _LOAD_BUILD_CLASS:
+            return 0;
+        case _STORE_NAME:
+            return 1;
+        case _DELETE_NAME:
+            return 0;
+        case _UNPACK_SEQUENCE:
+            return 1;
+        case _UNPACK_SEQUENCE_TWO_TUPLE:
+            return 1;
+        case _UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE:
+            return 1;
+        case _UNPACK_SEQUENCE_UNIQUE_THREE_TUPLE:
+            return 1;
+        case _GUARD_TOS_MATCHED_RECORD:
+            return 1;
+        case _UNPACK_SEQUENCE_RECORD:
+            return 1;
+        case _UNPACK_SEQUENCE_TUPLE:
+            return 1;
+        case _UNPACK_SEQUENCE_UNIQUE_TUPLE:
+            return 1;
+        case _UNPACK_SEQUENCE_LIST:
+            return 1;
+        case _UNPACK_EX:
+            return 1;
+        case _STORE_ATTR:
+            return 2;
+        case _DELETE_ATTR:
+            return 1;
+        case _STORE_GLOBAL:
+            return 1;
+        case _DELETE_GLOBAL:
+            return 0;
+        case _LOAD_LOCALS:
+            return 0;
+        case _LOAD_FROM_DICT_OR_GLOBALS:
+            return 1;
+        case _LOAD_NAME:
+            return 0;
+        case _LOAD_GLOBAL:
+            return 0;
+        case _PUSH_NULL_CONDITIONAL:
+            return 0;
+        case _GUARD_GLOBALS_VERSION:
+            return 0;
+        case _LOAD_GLOBAL_MODULE:
+            return 0;
+        case _LOAD_GLOBAL_BUILTINS:
+            return 0;
+        case _GUARD_BUILTINS_IS_CANONICAL:
+            return 0;
+        case _DELETE_FAST:
+            return 0;
+        case _MAKE_CELL:
+            return 0;
+        case _DELETE_DEREF:
+            return 0;
+        case _LOAD_FROM_DICT_OR_DEREF:
+            return 1;
+        case _LOAD_DEREF:
+            return 0;
+        case _STORE_DEREF:
+            return 1;
+        case _COPY_FREE_VARS:
+            return 0;
+        case _BUILD_STRING:
+            return oparg;
+        case _BUILD_INTERPOLATION:
+            return 2 + (oparg & 1);
+        case _BUILD_TEMPLATE:
+            return 2;
+        case _BUILD_TUPLE:
+            return oparg;
+        case _BUILD_LIST:
+            return oparg;
+        case _LIST_EXTEND:
+            return 2 + (oparg-1);
+        case _SET_UPDATE:
+            return 2 + (oparg-1);
+        case _BUILD_SET:
+            return oparg;
+        case _BUILD_MAP:
+            return oparg*2;
+        case _SETUP_ANNOTATIONS:
+            return 0;
+        case _DICT_UPDATE:
+            return 2 + (oparg - 1);
+        case _DICT_MERGE:
+            return 5 + (oparg - 1);
+        case _MAP_ADD:
+            return 3 + (oparg - 1);
+        case _LOAD_SUPER_ATTR_ATTR:
+            return 3;
+        case _GUARD_NOS_TYPE_VERSION:
+            return 2;
+        case _GUARD_LOAD_SUPER_ATTR_METHOD:
+            return 3;
+        case _LOAD_SUPER_ATTR_METHOD:
+            return 3;
+        case _LOAD_ATTR:
+            return 1;
+        case _GUARD_TYPE_VERSION:
+            return 1;
+        case _GUARD_TYPE_VERSION_LOCKED:
+            return 1;
+        case _GUARD_TYPE:
+            return 1;
+        case _CHECK_MANAGED_OBJECT_HAS_VALUES:
+            return 1;
+        case _LOAD_ATTR_INSTANCE_VALUE:
+            return 1;
+        case _LOAD_ATTR_MODULE:
+            return 1;
+        case _LOAD_ATTR_WITH_HINT:
+            return 1;
+        case _LOAD_ATTR_SLOT:
+            return 1;
+        case _LOAD_ATTR_RECORD:
+            return 1;
+        case _LOAD_ATTR_RECORD_TYPED:
+            return 1;
+        case _LOAD_ATTR_RECORD_BORROW:
+            return 1;
+        case _LOAD_ATTR_RECORD_TYPED_BORROW:
+            return 1;
+        case _GUARD_RECORD_DRAFT:
+            return 1;
+        case _LOAD_ATTR_RECORD_DRAFT:
+            return 1;
+        case _CHECK_ATTR_CLASS:
+            return 1;
+        case _LOAD_ATTR_CLASS:
+            return 1;
+        case _LOAD_ATTR_PROPERTY_FRAME:
+            return 1;
+        case _LOAD_ATTR_GETATTRIBUTE_OVERRIDDEN_FRAME:
+            return 1;
+        case _GUARD_DORV_NO_DICT:
+            return 1;
+        case _STORE_ATTR_INSTANCE_VALUE:
+            return 2;
+        case _LOCK_OBJECT:
+            return 1;
+        case _STORE_ATTR_WITH_HINT:
+            return 2;
+        case _STORE_ATTR_SLOT:
+            return 2;
+        case _STORE_ATTR_RECORD_DRAFT:
+            return 2;
+        case _COMPARE_OP:
+            return 2;
+        case _COMPARE_OP_FLOAT:
+            return 2;
+        case _COMPARE_OP_FLOAT_INT_CONST:
+            return 2;
+        case _COMPARE_OP_FLOAT_INT:
+            return 2;
+        case _COMPARE_OP_RECORD:
+            return 2;
+        case _COMPARE_OP_INT:
+            return 2;
+        case _COMPARE_OP_STR:
+            return 2;
+        case _IS_OP:
+            return 2;
+        case _CONTAINS_OP:
+            return 2;
+        case _CONTAINS_OP_TUPLE:
+            return 2;
+        case _CONTAINS_OP_LIST:
+            return 2;
+        case _CONTAINS_OP_STR:
+            return 2;
+        case _GUARD_TOS_ANY_SET:
+            return 1;
+        case _GUARD_TOS_SET:
+            return 1;
+        case _GUARD_TOS_FROZENSET:
+            return 1;
+        case _CONTAINS_OP_SET:
+            return 2;
+        case _CONTAINS_OP_DICT:
+            return 2;
+        case _CHECK_EG_MATCH:
+            return 2;
+        case _CHECK_EXC_MATCH:
+            return 2;
+        case _IMPORT_NAME:
+            return 2;
+        case _IMPORT_FROM:
+            return 1;
+        case _IS_NONE:
+            return 1;
+        case _GET_LEN:
+            return 1;
+        case _MATCH_CLASS:
+            return 3;
+        case _GUARD_MATCH_CLASS_RECORD:
+            return 3;
+        case _MATCH_CLASS_RECORD:
+            return 3;
+        case _GUARD_3OS_TYPE_VERSION:
+            return 3;
+        case _MATCH_CLASS_RECORD_SELF:
+            return 3;
+        case _MATCH_CLASS_RECORD_NONE:
+            return 3;
+        case _MATCH_MAPPING:
+            return 1;
+        case _MATCH_SEQUENCE:
+            return 1;
+        case _MATCH_KEYS:
+            return 2;
+        case _GET_ITER:
+            return 1;
+        case _GUARD_ITERATOR:
+            return 1;
+        case _GUARD_ITER_VIRTUAL:
+            return 1;
+        case _PUSH_TAGGED_ZERO:
+            return 0;
+        case _GET_ITER_TRAD:
+            return 1;
+        case _FOR_ITER_TIER_TWO:
+            return 2;
+        case _GUARD_TYPE_ITER:
+            return 2;
+        case _ITER_NEXT_INLINE:
+            return 2;
+        case _GUARD_NOS_ITER_VIRTUAL:
+            return 2;
+        case _GUARD_TOS_NOT_NULL:
+            return 1;
+        case _FOR_ITER_VIRTUAL_TIER_TWO:
+            return 2;
+        case _ITER_CHECK_LIST:
+            return 2;
+        case _GUARD_NOT_EXHAUSTED_LIST:
+            return 2;
+        case _ITER_NEXT_LIST_TIER_TWO:
+            return 2;
+        case _ITER_CHECK_TUPLE:
+            return 2;
+        case _GUARD_NOT_EXHAUSTED_TUPLE:
+            return 2;
+        case _ITER_NEXT_TUPLE:
+            return 2;
+        case _ITER_CHECK_RANGE:
+            return 2;
+        case _GUARD_NOT_EXHAUSTED_RANGE:
+            return 2;
+        case _ITER_NEXT_RANGE:
+            return 2;
+        case _FOR_ITER_GEN_FRAME:
+            return 2;
+        case _INSERT_NULL:
+            return 1;
+        case _LOAD_SPECIAL:
+            return 2;
+        case _WITH_EXCEPT_START:
+            return 5;
+        case _PUSH_EXC_INFO:
+            return 1;
+        case _GUARD_DORV_VALUES_INST_ATTR_FROM_DICT:
+            return 1;
+        case _GUARD_KEYS_VERSION:
+            return 1;
+        case _LOAD_ATTR_METHOD_WITH_VALUES:
+            return 1;
+        case _LOAD_ATTR_METHOD_NO_DICT:
+            return 1;
+        case _LOAD_ATTR_NONDESCRIPTOR_WITH_VALUES:
+            return 1;
+        case _LOAD_ATTR_NONDESCRIPTOR_NO_DICT:
+            return 1;
+        case _CHECK_ATTR_METHOD_LAZY_DICT:
+            return 1;
+        case _LOAD_ATTR_METHOD_LAZY_DICT:
+            return 1;
+        case _MAYBE_EXPAND_METHOD:
+            return 2 + oparg;
+        case _PY_FRAME_GENERAL:
+            return 2 + oparg;
+        case _CHECK_FUNCTION_VERSION:
+            return 2 + oparg;
+        case _CHECK_FUNCTION_VERSION_INLINE:
+            return 0;
+        case _CHECK_METHOD_VERSION:
+            return 2 + oparg;
+        case _EXPAND_METHOD:
+            return 2 + oparg;
+        case _CHECK_IS_NOT_PY_CALLABLE:
+            return 2 + oparg;
+        case _CALL_NON_PY_GENERAL:
+            return 2 + oparg;
+        case _CHECK_CALL_BOUND_METHOD_EXACT_ARGS:
+            return 2 + oparg;
+        case _INIT_CALL_BOUND_METHOD_EXACT_ARGS:
+            return 2 + oparg;
+        case _CHECK_PEP_523:
+            return 0;
+        case _CHECK_FUNCTION_EXACT_ARGS:
+            return 2 + oparg;
+        case _CHECK_STACK_SPACE:
+            return 2 + oparg;
+        case _CHECK_RECURSION_REMAINING:
+            return 0;
+        case _INIT_CALL_PY_EXACT_ARGS_0:
+            return 2 + oparg;
+        case _INIT_CALL_PY_EXACT_ARGS_1:
+            return 2 + oparg;
+        case _INIT_CALL_PY_EXACT_ARGS_2:
+            return 2 + oparg;
+        case _INIT_CALL_PY_EXACT_ARGS_3:
+            return 2 + oparg;
+        case _INIT_CALL_PY_EXACT_ARGS_4:
+            return 2 + oparg;
+        case _INIT_CALL_PY_EXACT_ARGS:
+            return 2 + oparg;
+        case _INIT_CALL_PY_DEFAULTS:
+            return 2 + oparg;
+        case _INIT_CALL_PY_VARARGS:
+            return 2 + oparg;
+        case _PUSH_FRAME:
+            return 1;
+        case _GRAIL_CALL_GENERIC_SELECT_TIER_TWO:
+            return 2 + oparg;
+        case _GRAIL_CALL_GENERIC_FOLDED:
+            return 2 + oparg;
+        case _GUARD_NOS_NULL:
+            return 2;
+        case _GUARD_THIRD_NULL:
+            return 3;
+        case _GUARD_CALLABLE_TYPE_1:
+            return 3;
+        case _CALL_TYPE_1:
+            return 3;
+        case _GUARD_CALLABLE_STR_1:
+            return 3;
+        case _CALL_STR_1:
+            return 3;
+        case _GUARD_CALLABLE_TUPLE_1:
+            return 3;
+        case _CALL_TUPLE_1:
+            return 3;
+        case _CHECK_OBJECT:
+            return 2 + oparg;
+        case _ALLOCATE_OBJECT:
+            return 2 + oparg;
+        case _CREATE_INIT_FRAME:
+            return 2 + oparg;
+        case _EXIT_INIT_CHECK:
+            return 1;
+        case _GUARD_CALLABLE_BUILTIN_CLASS:
+            return 2 + oparg;
+        case _CALL_BUILTIN_CLASS:
+            return 2 + oparg;
+        case _GUARD_CALLABLE_RECORD:
+            return 2 + oparg;
+        case _CALL_RECORD:
+            return 2 + oparg;
+        case _CALL_RECORD_CHECKED:
+            return 2 + oparg;
+        case _VO_NEW_RECORD:
+            return 2 + oparg;
+        case _VO_NEW_TUPLE:
+            return oparg;
+        case _VO_LOAD_FIELD:
+            return 1;
+        case _VO_LOAD_FIELD_BORROW:
+            return 1;
+        case _VO_UNPACK:
+            return 1;
+        case _VO_RELEASE:
+            return 0;
+        case _VO_EXIT_INFO:
+            return 0;
+        case _VO_RECOVER:
+            return 0;
+        case _VO_RECOVER_ERROR:
+            return 0;
+        case _GUARD_CALLABLE_BUILTIN_O:
+            return 2 + oparg;
+        case _CALL_BUILTIN_O:
+            return 2 + oparg;
+        case _GUARD_CALLABLE_BUILTIN_FAST:
+            return 2 + oparg;
+        case _CALL_BUILTIN_FAST:
+            return 2 + oparg;
+        case _GUARD_CALLABLE_BUILTIN_FAST_WITH_KEYWORDS:
+            return 2 + oparg;
+        case _CALL_BUILTIN_FAST_WITH_KEYWORDS:
+            return 2 + oparg;
+        case _GUARD_CALLABLE_DRAFT_ENTER:
+            return 2;
+        case _CALL_DRAFT_ENTER:
+            return 2;
+        case _GUARD_CALLABLE_DRAFT_EXIT:
+            return 5;
+        case _CALL_DRAFT_EXIT:
+            return 5;
+        case _GUARD_CALLABLE_LEN:
+            return 3;
+        case _CALL_LEN:
+            return 3;
+        case _GUARD_CALLABLE_ISINSTANCE:
+            return 4;
+        case _CALL_ISINSTANCE:
+            return 4;
+        case _GUARD_CALLABLE_LIST_APPEND:
+            return 3;
+        case _CALL_LIST_APPEND:
+            return 3;
+        case _GUARD_CALLABLE_METHOD_DESCRIPTOR_O:
+            return 2 + oparg;
+        case _CALL_METHOD_DESCRIPTOR_O:
+            return 2 + oparg;
+        case _CHECK_RECURSION_LIMIT:
+            return 0;
+        case _CALL_METHOD_DESCRIPTOR_O_INLINE:
+            return 1 + oparg;
+        case _GUARD_CALLABLE_METHOD_DESCRIPTOR_FAST_WITH_KEYWORDS:
+            return 2 + oparg;
+        case _CALL_METHOD_DESCRIPTOR_FAST_WITH_KEYWORDS:
+            return 2 + oparg;
+        case _CALL_METHOD_DESCRIPTOR_FAST_WITH_KEYWORDS_INLINE:
+            return 2 + oparg;
+        case _GUARD_CALLABLE_METHOD_DESCRIPTOR_NOARGS:
+            return 2 + oparg;
+        case _CALL_METHOD_DESCRIPTOR_NOARGS:
+            return 2 + oparg;
+        case _CALL_METHOD_DESCRIPTOR_NOARGS_INLINE:
+            return 1 + oparg;
+        case _GUARD_CALLABLE_METHOD_DESCRIPTOR_FAST:
+            return 2 + oparg;
+        case _CALL_METHOD_DESCRIPTOR_FAST:
+            return 2 + oparg;
+        case _CALL_METHOD_DESCRIPTOR_FAST_INLINE:
+            return 2 + oparg;
+        case _MAYBE_EXPAND_METHOD_KW:
+            return 3 + oparg;
+        case _PY_FRAME_KW:
+            return 3 + oparg;
+        case _INIT_CALL_PY_KW:
+            return 3 + oparg;
+        case _CHECK_FUNCTION_VERSION_KW:
+            return 3 + oparg;
+        case _CHECK_METHOD_VERSION_KW:
+            return 3 + oparg;
+        case _EXPAND_METHOD_KW:
+            return 3 + oparg;
+        case _CHECK_IS_NOT_PY_CALLABLE_KW:
+            return 3 + oparg;
+        case _CALL_KW_NON_PY:
+            return 3 + oparg;
+        case _MAKE_CALLARGS_A_TUPLE:
+            return 4;
+        case _CHECK_IS_PY_CALLABLE_EX:
+            return 4;
+        case _PY_FRAME_EX:
+            return 4;
+        case _CHECK_IS_NOT_PY_CALLABLE_EX:
+            return 4;
+        case _CALL_FUNCTION_EX_NON_PY_GENERAL:
+            return 4;
+        case _MAKE_FUNCTION:
+            return 1;
+        case _MAKE_FUNCTION_ENV:
+            return 1;
+        case _SET_FUNCTION_ATTRIBUTE:
+            return 2;
+        case _RETURN_GENERATOR:
+            return 0;
+        case _BUILD_SLICE:
+            return oparg;
+        case _CONVERT_VALUE:
+            return 1;
+        case _FORMAT_SIMPLE:
+            return 1;
+        case _FORMAT_WITH_SPEC:
+            return 2;
+        case _COPY_1:
+            return 1;
+        case _COPY_2:
+            return 2;
+        case _COPY_3:
+            return 3;
+        case _COPY:
+            return 1 + (oparg-1);
+        case _BINARY_OP:
+            return 2;
+        case _SWAP_2:
+            return 2;
+        case _SWAP_3:
+            return 3;
+        case _SWAP:
+            return 2 + (oparg-2);
+        case _GUARD_IS_TRUE_POP:
+            return 1;
+        case _GUARD_IS_FALSE_POP:
+            return 1;
+        case _GUARD_BIT_IS_SET_POP_4:
+            return 1;
+        case _GUARD_BIT_IS_SET_POP_5:
+            return 1;
+        case _GUARD_BIT_IS_SET_POP_6:
+            return 1;
+        case _GUARD_BIT_IS_SET_POP_7:
+            return 1;
+        case _GUARD_BIT_IS_SET_POP:
+            return 1;
+        case _GUARD_BIT_IS_UNSET_POP_4:
+            return 1;
+        case _GUARD_BIT_IS_UNSET_POP_5:
+            return 1;
+        case _GUARD_BIT_IS_UNSET_POP_6:
+            return 1;
+        case _GUARD_BIT_IS_UNSET_POP_7:
+            return 1;
+        case _GUARD_BIT_IS_UNSET_POP:
+            return 1;
+        case _GUARD_IS_NONE_POP:
+            return 1;
+        case _GUARD_IS_NOT_NONE_POP:
+            return 1;
+        case _JUMP_TO_TOP:
+            return 0;
+        case _SET_IP:
+            return 0;
+        case _CHECK_STACK_SPACE_OPERAND:
+            return 0;
+        case _SAVE_RETURN_OFFSET:
+            return 0;
+        case _EXIT_TRACE:
+            return 0;
+        case _DYNAMIC_EXIT:
+            return 0;
+        case _CHECK_VALIDITY:
+            return 0;
+        case _LOAD_CONST_INLINE:
+            return 0;
+        case _LOAD_CONST_INLINE_BORROW:
+            return 0;
+        case _RROT_3:
+            return 3;
+        case _START_EXECUTOR:
+            return 0;
+        case _MAKE_WARM:
+            return 0;
+        case _FATAL_ERROR:
+            return 0;
+        case _DEOPT:
+            return 0;
+        case _HANDLE_PENDING_AND_DEOPT:
+            return 0;
+        case _ERROR_POP_N:
+            return 0;
+        case _SPILL_OR_RELOAD:
+            return 0;
+        case _TIER2_RESUME_CHECK:
+            return 0;
+        case _COLD_EXIT:
+            return 0;
+        case _COLD_DYNAMIC_EXIT:
+            return 0;
+        case _GUARD_CODE_VERSION__PUSH_FRAME:
+            return 0;
+        case _GUARD_CODE_VERSION_YIELD_VALUE:
+            return 0;
+        case _GUARD_CODE_VERSION_RETURN_VALUE:
+            return 0;
+        case _GUARD_CODE_VERSION_RETURN_GENERATOR:
+            return 0;
+        case _GUARD_IP__PUSH_FRAME:
+            return 0;
+        case _GUARD_IP_YIELD_VALUE:
+            return 0;
+        case _GUARD_IP_RETURN_VALUE:
+            return 0;
+        case _GUARD_IP_RETURN_GENERATOR:
+            return 0;
+        case _RECORD_TOS:
+            return 1;
+        case _RECORD_TOS_TYPE:
+            return 1;
+        case _RECORD_NOS:
+            return 2;
+        case _RECORD_NOS_TYPE:
+            return 2;
+        case _RECORD_NOS_GEN_FUNC:
+            return 2;
+        case _RECORD_3OS_GEN_FUNC:
+            return 3;
+        case _RECORD_3OS_TYPE:
+            return 3;
+        case _RECORD_4OS:
+            return 4;
+        case _RECORD_CALLABLE:
+            return 2 + oparg;
+        case _RECORD_GRAIL_GENERIC_IMPL:
+            return 2 + oparg;
+        case _RECORD_CALLABLE_KW:
+            return 3 + oparg;
+        case _RECORD_BOUND_METHOD:
+            return 2 + oparg;
         case _RECORD_CODE:
             return 0;
         default:

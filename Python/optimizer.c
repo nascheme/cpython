@@ -261,7 +261,82 @@ _PyExecutor_Free(_PyExecutorObject *self)
 #ifdef _Py_JIT
     _PyJIT_Free(self);
 #endif
+    PyMem_Free(self->vo_data);
     PyObject_GC_Del(self);
+}
+
+/* Virtual objects at run time (the optimizer side is in
+ * optimizer_analysis.c). */
+
+PyObject _PyVO_Placeholder = _PyObject_HEAD_INIT(&PyBaseObject_Type);
+
+/* The first uop of an exit stub for an exit taken while virtual objects
+ * are live: build each object once from its shadow fields, which move into
+ * it, then store a reference in every slot that holds it (aliases share
+ * the object). No code runs: records and tuples are complete before they
+ * are stored. If an allocation fails, that object's slots get None, its
+ * fields are released and MemoryError is raised (or, with in_error, the
+ * pending exception is kept). */
+int
+_PyVO_Recover(PyThreadState *tstate, _PyInterpreterFrame *frame,
+              const _PyVORecovery *rec, int in_error)
+{
+    _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow;
+    PyObject *built[256];
+    int failed = 0;
+    PyObject *exc = in_error ? PyErr_GetRaisedException() : NULL;
+    for (int i = 0; i < rec->nobjs; i++) {
+        const _PyVORecoveryObject *obj = &rec->objs[i];
+        _PyStackRef *fields = shadow + obj->base;
+        PyObject *o;
+        if (obj->type != NULL) {
+            o = _PyGrail_RecordFromVirtual(obj->type, fields, obj->n);
+        }
+        else {
+            o = _PyTuple_FromStackRefStealOnSuccess(fields, obj->n);
+            if (o != NULL) {
+                for (int j = 0; j < obj->n; j++) {
+                    fields[j] = PyStackRef_NULL;
+                }
+            }
+        }
+        if (o == NULL) {
+            failed = 1;
+            for (int j = 0; j < obj->n; j++) {
+                _PyStackRef field = fields[j];
+                fields[j] = PyStackRef_NULL;
+                PyStackRef_XCLOSE(field);
+            }
+        }
+        built[i] = o;
+    }
+    const _PyVORecoveryLoc *locs = _PyVORecovery_Locs(rec);
+    for (int i = 0; i < rec->nlocs; i++) {
+        const _PyVORecoveryLoc *loc = &locs[i];
+        _PyInterpreterFrame *f = frame;
+        for (int k = 0; k < loc->frame_up; k++) {
+            f = f->previous;
+        }
+        int index = loc->index;
+        if (loc->is_stack) {
+            index += _PyFrame_GetCode(f)->co_nlocalsplus;
+        }
+        assert(PyStackRef_AsPyObjectBorrow(f->localsplus[index]) == &_PyVO_Placeholder);
+        PyObject *o = built[loc->obj];
+        f->localsplus[index] = o != NULL ? PyStackRef_FromPyObjectNew(o)
+                                         : PyStackRef_None;
+    }
+    for (int i = 0; i < rec->nobjs; i++) {
+        Py_XDECREF(built[i]);
+    }
+    if (in_error) {
+        if (failed) {
+            PyErr_Clear();
+        }
+        PyErr_SetRaisedException(exc);
+        return 0;
+    }
+    return failed ? -1 : 0;
 }
 
 static void executor_invalidate(PyObject *op);
@@ -1403,10 +1478,16 @@ static void make_exit(_PyUOpInstruction *inst, int opcode, int target, bool is_c
 #endif
 }
 
+#define EXIT_FLAGS (HAS_EXIT_FLAG | HAS_DEOPT_FLAG | HAS_PERIODIC_FLAG)
+
 /* Convert implicit exits, errors and deopts
- * into explicit ones. */
+ * into explicit ones.
+ * A uop that _VO_EXIT_INFO marks (virtual objects are live) gets exit and
+ * error stubs of its own that first rebuild them: vo_info[i] is the
+ * _PyVORecovery of uop i, or NULL. */
 static int
-prepare_for_execution(_PyUOpInstruction *buffer, int length)
+prepare_for_execution(_PyUOpInstruction *buffer, int length,
+                      const void **vo_info)
 {
     int32_t current_jump = -1;
     int32_t current_jump_target = -1;
@@ -1416,15 +1497,32 @@ prepare_for_execution(_PyUOpInstruction *buffer, int length)
     int32_t current_exit_op = -1;
     /* Leaving in NOPs slows down the interpreter and messes up the stats */
     _PyUOpInstruction *copy_to = &buffer[0];
+    const void *pending_info = NULL;
     for (int i = 0; i < length; i++) {
         _PyUOpInstruction *inst = &buffer[i];
+        if (_PyUop_Uncached[inst->opcode] == _VO_EXIT_INFO) {
+            pending_info = (const void *)(uintptr_t)inst->operand0;
+            continue;
+        }
         if (inst->opcode != _NOP) {
             if (copy_to != inst) {
                 *copy_to = *inst;
             }
+            // The marker applies to the uop right after it (stack_allocate()
+            // may have put a spill in between).
+            const void *info = NULL;
+            uint16_t base = _PyUop_Uncached[copy_to->opcode];
+            if (base != _SPILL_OR_RELOAD) {
+                assert(pending_info == NULL ||
+                       (_PyUop_Flags[base] & (EXIT_FLAGS | HAS_ERROR_FLAG)));
+                info = pending_info;
+                pending_info = NULL;
+            }
+            vo_info[copy_to - buffer] = info;
             copy_to++;
         }
     }
+    assert(pending_info == NULL);
     length = (int)(copy_to - buffer);
     int next_spare = length;
     for (int i = 0; i < length; i++) {
@@ -1432,8 +1530,43 @@ prepare_for_execution(_PyUOpInstruction *buffer, int length)
         int base_opcode = _PyUop_Uncached[inst->opcode];
         assert(inst->opcode != _NOP);
         int32_t target = (int32_t)uop_get_target(inst);
-        uint16_t exit_flags = _PyUop_Flags[base_opcode] & (HAS_EXIT_FLAG | HAS_DEOPT_FLAG | HAS_PERIODIC_FLAG);
-        if (exit_flags) {
+        uint16_t exit_flags = _PyUop_Flags[base_opcode] & EXIT_FLAGS;
+        const void *info = vo_info[i];
+        if (exit_flags && info != NULL) {
+            uint16_t base_exit_op = _EXIT_TRACE;
+            if (exit_flags & HAS_DEOPT_FLAG) {
+                base_exit_op = _DEOPT;
+            }
+            else if (exit_flags & HAS_PERIODIC_FLAG) {
+                base_exit_op = _HANDLE_PENDING_AND_DEOPT;
+            }
+            if (dynamic_exit_uop[base_opcode]) {
+                base_exit_op = _DYNAMIC_EXIT;
+            }
+            bool is_control_flow = (base_opcode == _GUARD_IS_FALSE_POP || base_opcode == _GUARD_IS_TRUE_POP || is_for_iter_test[base_opcode]);
+            int exit_depth = get_cached_entries_for_side_exit(inst);
+            buffer[i].jump_target = next_spare;
+            buffer[i].format = UOP_FORMAT_JUMP;
+            if (exit_depth != 0) {
+                make_exit(&buffer[next_spare], _PyUop_SpillsAndReloads[exit_depth][0], 0, false);
+                next_spare++;
+            }
+            // Recovery that fails raises MemoryError at the exit's target.
+            make_exit(&buffer[next_spare], _VO_RECOVER_r00, 0, false);
+            buffer[next_spare].operand0 = (uintptr_t)info;
+            buffer[next_spare].format = UOP_FORMAT_JUMP;
+            buffer[next_spare].jump_target = 0;
+            buffer[next_spare].error_target = next_spare + 2;
+            make_exit(&buffer[next_spare + 1],
+                      _PyUop_Caching[base_exit_op].entries[0].opcode,
+                      target, is_control_flow);
+            make_exit(&buffer[next_spare + 2], _ERROR_POP_N_r00, 0, false);
+            buffer[next_spare + 2].operand0 = target;
+            next_spare += 3;
+            // Do not share these stubs.
+            current_jump_target = -1;
+        }
+        else if (exit_flags) {
             uint16_t base_exit_op = _EXIT_TRACE;
             if (exit_flags & HAS_DEOPT_FLAG) {
                 base_exit_op = _DEOPT;
@@ -1459,7 +1592,20 @@ prepare_for_execution(_PyUOpInstruction *buffer, int length)
             buffer[i].jump_target = current_jump;
             buffer[i].format = UOP_FORMAT_JUMP;
         }
-        if (_PyUop_Flags[base_opcode] & HAS_ERROR_FLAG) {
+        if ((_PyUop_Flags[base_opcode] & HAS_ERROR_FLAG) && info != NULL) {
+            make_exit(&buffer[next_spare], _VO_RECOVER_ERROR_r00, 0, false);
+            buffer[next_spare].operand0 = (uintptr_t)info;
+            make_exit(&buffer[next_spare + 1], _ERROR_POP_N_r00, 0, false);
+            buffer[next_spare + 1].operand0 = target;
+            buffer[i].error_target = next_spare;
+            if (buffer[i].format == UOP_FORMAT_TARGET) {
+                buffer[i].format = UOP_FORMAT_JUMP;
+                buffer[i].jump_target = 0;
+            }
+            next_spare += 2;
+            current_error_target = -1;
+        }
+        else if (_PyUop_Flags[base_opcode] & HAS_ERROR_FLAG) {
             int popped = (_PyUop_Flags[base_opcode] & HAS_ERROR_NO_POP_FLAG) ?
                 0 : _PyUop_num_popped(base_opcode, inst->oparg);
             if (target != current_error_target || popped != current_popped) {
@@ -1499,6 +1645,7 @@ allocate_executor(int exit_count, int length)
     res->code_size = length;
     res->exit_count = exit_count;
     res->jit_registration = NULL;
+    res->vo_data = NULL;
     return res;
 }
 
@@ -1563,7 +1710,10 @@ sanity_check(_PyExecutorObject *executor)
             base_opcode == _HANDLE_PENDING_AND_DEOPT ||
             base_opcode == _EXIT_TRACE ||
             base_opcode == _ERROR_POP_N ||
-            base_opcode == _DYNAMIC_EXIT);
+            base_opcode == _DYNAMIC_EXIT ||
+            base_opcode == _VO_RECOVER ||
+            base_opcode == _VO_RECOVER_ERROR ||
+            base_opcode == _SPILL_OR_RELOAD);
     }
 }
 
@@ -1789,13 +1939,23 @@ uop_optimize(
     _PyUOpInstruction *output = &_tstate->jit_tracer_state->uop_array[0];
     length = stack_allocate(buffer, output, length);
     buffer = output;
-    length = prepare_for_execution(buffer, length);
-    assert(length <= UOP_MAX_TRACE_LENGTH);
+    length = prepare_for_execution(buffer, length,
+                                   _tstate->jit_tracer_state->vo_exit_info);
+    void *vo_arena = _tstate->jit_tracer_state->vo_arena;
+    _tstate->jit_tracer_state->vo_arena = NULL;
+    if (length > UOP_MAX_TRACE_LENGTH) {
+        // Only the stubs that rebuild virtual objects can get here.
+        assert(vo_arena != NULL);
+        PyMem_Free(vo_arena);
+        return 0;
+    }
     _PyExecutorObject *executor = make_executor_from_uops(
         _tstate, buffer, length, &dependencies);
     if (executor == NULL) {
+        PyMem_Free(vo_arena);
         return -1;
     }
+    executor->vo_data = vo_arena;
     assert(length <= UOP_MAX_TRACE_LENGTH);
 
     // Check executor coldness

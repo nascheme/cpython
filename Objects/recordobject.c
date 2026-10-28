@@ -467,6 +467,50 @@ _PyGrail_RecordFromStackRefsCheckedStealOnSuccess(PyTypeObject *type,
     return (PyObject *)self;
 }
 
+/* Tier-2 virtual records (_VO_NEW_RECORD; see "Virtual objects" in
+ * Python/optimizer_analysis.c): 1 if the arguments whose bit is set in check
+ * conform, else 0. The optimizer uses it only when those plans are leaves or
+ * unions of leaves, so it runs no code and cannot fail. */
+int
+_PyGrail_RecordArgsConform(PyTypeObject *type, _PyStackRef *args,
+                           Py_ssize_t n, uint64_t check)
+{
+    assert(PyTuple_GET_SIZE(schema_part(type, 1)) == n);
+    const PlanNode *nodes = schema_nodes(type);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        if (i < 64 && !(check & ((uint64_t)1 << i))) {
+            continue;
+        }
+        const PlanNode *p = &nodes[i];
+        assert(p->height == 0 || (p->kind == PLAN_UNION && p->height == 1));
+        if (plan_conforms(nodes, p, PyStackRef_AsPyObjectBorrow(args[i])) <= 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Materialize a virtual record: a new conforming record of type that takes
+ * the n field references from fields, leaving them NULL. On failure (NULL
+ * with MemoryError) fields are unchanged. No code runs. */
+PyObject *
+_PyGrail_RecordFromVirtual(PyTypeObject *type, _PyStackRef *fields,
+                           Py_ssize_t n)
+{
+    assert(PyTuple_GET_SIZE(schema_part(type, 1)) == n);
+    RecordObject *self = record_alloc(type, n);
+    if (self == NULL) {
+        return NULL;
+    }
+    self->conforming = 1;
+    for (Py_ssize_t i = 0; i < n; i++) {
+        self->fields[i] = PyStackRef_AsPyObjectSteal(fields[i]);
+        fields[i] = PyStackRef_NULL;
+    }
+    _PyObject_GC_TRACK(self);
+    return (PyObject *)self;
+}
+
 /* Index of the field called name, n if there is none, or -1 on error.
  * Field names are interned at declaration and keyword names usually are, so
  * a pointer pass finds them; the comparison pass covers other strings. */

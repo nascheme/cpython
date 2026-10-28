@@ -1638,6 +1638,985 @@ grail_fuse_float_call(JitOptContext *ctx, _PyUOpInstruction *this_instr,
 }
 
 /* >0 (length) for success, 0 for not ready, clears all possible errors. */
+/* Virtual objects.
+ *
+ * A Grail record built by _CALL_RECORD[_CHECKED] from a constant record
+ * type, or a tuple built by _BUILD_TUPLE, is kept virtual when the whole of
+ * its life in the trace, typically from the function that builds it,
+ * through inlined returns and calls, to the field loads or unpacking that
+ * consume it, needs no real object:
+ *
+ *  - every uop that takes it as an input is one that knows virtual objects:
+ *    field loads, unpacking, pops, local stores and loads, copies, swaps,
+ *    inlined returns, argument passing to an inlined call, guards that do
+ *    not read it, and type version guards that its exact type passes;
+ *  - no barrier runs while it is live: a uop that may run arbitrary code or
+ *    inspect frames (calls, decrefs of unknown objects...). The exceptions
+ *    are decrefs of values known to be safe, returns from frames whose
+ *    locals are all safe, uops that escape only to raise, and calls of
+ *    math functions and a few builtins on exact floats and ints;
+ *  - it is dead before the trace ends (no loop-carried objects yet) and is
+ *    not returned out of the trace's root frame.
+ *
+ * Otherwise it escapes, which here means it stays an ordinary allocation
+ * for its whole life: nothing is materialized on the main path.
+ *
+ * Tier-2 frames are real interpreter frames and uops address the physical
+ * stack, so the lowering keeps the stack shape: every slot that holds a
+ * virtual object holds the immortal _PyVO_Placeholder, and its fields are
+ * owned by the thread's vo_shadow from a slot base the optimizer assigns.
+ * _VO_NEW_RECORD and _VO_NEW_TUPLE move the arguments there, _VO_LOAD_FIELD
+ * and _VO_UNPACK read them, pops become _POP_TOP_NOP, and _VO_RELEASE drops
+ * the fields after the uop at which the object dies (no abstract location
+ * holds it any more). A virtual record always conforms: _VO_NEW_RECORD
+ * deopts before consuming anything when the arguments do not.
+ *
+ * Exits: before each uop that can leave the trace while virtual objects
+ * are live, the optimizer records where they are (frame, local or stack
+ * index) and inserts a _VO_EXIT_INFO marker with a _PyVORecovery.
+ * prepare_for_execution() gives that uop private exit and error stubs whose
+ * first uop rebuilds each object once and stores it into every slot that
+ * holds it (see _PyVO_Recover() in optimizer.c), so tier 1 and other
+ * executors only ever see real objects.
+ *
+ * The analysis runs alongside the abstract interpreter: it already models
+ * inlined frames, locals and stacks, and a symbol identifies one
+ * allocation. The rewrite runs once the trace is complete, when it is known
+ * which candidates escaped. PYTHON_GRAIL_JIT_VIRTUAL_OBJECTS=0 disables it
+ * (fresh process per setting). */
+
+enum {
+    VO_USE_NEW,         // the construction
+    VO_USE_LOAD,        // a field load
+    VO_USE_POP,         // a pop: becomes _POP_TOP_NOP
+    VO_USE_NOP,         // a guard it passes: removed
+    VO_USE_UNPACK,      // unpacking of a tuple
+};
+
+#define VO_MAX_FIELDS 16
+#define VO_MAX_INPUTS 32
+#define VO_MAX_PRE_LOCS 64
+
+static int
+vo_enabled(void)
+{
+    const char *value = Py_GETENV("PYTHON_GRAIL_JIT_VIRTUAL_OBJECTS");
+    return value == NULL || strcmp(value, "0") != 0;
+}
+
+/* The state of the abstract interpreter before a uop. */
+typedef struct {
+    uint16_t opcode;
+    int oparg;
+    int npop;
+    int depth;                  // ctx->curr_frame_depth
+    bool any_live;
+    JitOptRef inputs[VO_MAX_INPUTS];   // bottom first
+    int input_cand[VO_MAX_INPUTS];     // candidate index, or -1
+    bool inputs_overflow;
+    JitOptRef *caller_locals;   // _RETURN_VALUE: the caller's locals
+    bool returning_safe;        // _RETURN_VALUE: the frame's locals are safe
+    int nlocs;
+    _PyVOLoc locs[VO_MAX_PRE_LOCS];
+    bool locs_overflow;
+    bool pending_locs;          // a candidate is in a frame not yet pushed
+} VOPre;
+
+static inline bool
+vo_live(const _PyVOCandidate *c)
+{
+    return !c->escaped && c->death < 0;
+}
+
+/* The live candidate whose symbol ref refers to, or -1. */
+static int
+vo_find(JitOptContext *ctx, JitOptRef ref)
+{
+    JitOptSymbol *sym = PyJitRef_Unwrap(ref);
+    if (sym == NULL) {
+        return -1;
+    }
+    for (int i = 0; i < ctx->vo.ncands; i++) {
+        _PyVOCandidate *c = &ctx->vo.cands[i];
+        if (c->sym == sym && vo_live(c)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void
+vo_free_slots(JitOptContext *ctx, _PyVOCandidate *c)
+{
+    uint64_t mask = (c->n == 64 ? UINT64_MAX : (((uint64_t)1 << c->n) - 1)) << c->base;
+    ctx->vo.shadow_used &= ~mask;
+}
+
+static void
+vo_escape(JitOptContext *ctx, int i, const char *why)
+{
+    _PyVOCandidate *c = &ctx->vo.cands[i];
+    if (!vo_live(c)) {
+        return;
+    }
+    DPRINTF(2, "vo: candidate %d (created at %d) escapes: %s\n", i, c->create, why);
+    c->escaped = true;
+    vo_free_slots(ctx, c);
+}
+
+static void
+vo_escape_all(JitOptContext *ctx, const char *why)
+{
+    for (int i = 0; i < ctx->vo.ncands; i++) {
+        vo_escape(ctx, i, why);
+    }
+}
+
+static bool
+vo_any_live(JitOptContext *ctx)
+{
+    for (int i = 0; i < ctx->vo.ncands; i++) {
+        if (vo_live(&ctx->vo.cands[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Releasing a reference to a value of this exact type runs no code. */
+static bool
+vo_safe_scalar_type(PyTypeObject *type)
+{
+    return type == &PyFloat_Type || type == &PyLong_Type ||
+           type == &PyBool_Type || type == &PyUnicode_Type ||
+           type == &PyBytes_Type || type == &PyComplex_Type ||
+           type == Py_TYPE(Py_None);
+}
+
+/* Releasing a conforming record of this type runs no code: every plan is
+ * an exact safe scalar, such a record, or a union of those. */
+static bool
+vo_record_safe(PyTypeObject *type, int depth)
+{
+    const GrailPlan *nodes = _PyGrail_PlanNodes(type);
+    if (nodes == NULL || depth > 4) {
+        return false;
+    }
+    Py_ssize_t n = (type->tp_basicsize - (Py_ssize_t)offsetof(RecordObject, fields)) /
+                   (Py_ssize_t)sizeof(PyObject *);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        const GrailPlan *p = &nodes[i];
+        const GrailPlan *alts = p;
+        uint32_t nalts = 1;
+        if (p->kind == _PyGrail_PLAN_UNION && p->height == 1) {
+            alts = nodes + p->first;
+            nalts = p->n;
+        }
+        for (uint32_t k = 0; k < nalts; k++) {
+            const GrailPlan *a = &alts[k];
+            if (a->kind == _PyGrail_PLAN_EXACT && vo_safe_scalar_type(a->type)) {
+                continue;
+            }
+            if (a->kind == _PyGrail_PLAN_RECORD && vo_record_safe(a->type, depth + 1)) {
+                continue;
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Dropping a reference to ref runs no code. */
+static bool
+vo_decref_safe(JitOptContext *ctx, JitOptRef ref)
+{
+    if (sym_is_null(ref) || sym_is_const(ctx, ref) || vo_find(ctx, ref) >= 0) {
+        return true;
+    }
+    PyTypeObject *type = sym_get_type(ref);
+    if (type == NULL) {
+        return false;
+    }
+    if (vo_safe_scalar_type(type)) {
+        return true;
+    }
+    return _PyGrail_IsRecordTypeFast(type) && grail_known_conforming(ctx, ref) &&
+           vo_record_safe(type, 0);
+}
+
+/* The conformance checks of _CALL_RECORD_CHECKED (bits of check) run no
+ * code and cannot fail: leaf plans and unions of leaves. */
+static bool
+vo_record_checks_pure(PyTypeObject *type, int n, uint64_t check)
+{
+    const GrailPlan *nodes = _PyGrail_PlanNodes(type);
+    if (nodes == NULL) {
+        return false;
+    }
+    for (int i = 0; i < n; i++) {
+        if (!(check & ((uint64_t)1 << i))) {
+            continue;
+        }
+        const GrailPlan *p = &nodes[i];
+        if (!(p->height == 0 ||
+              (p->kind == _PyGrail_PLAN_UNION && p->height == 1))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* A call of a math function, or of abs/min/max, with exact float and int
+ * arguments: it runs no Python code and only escapes to raise. */
+static bool
+vo_pure_builtin_call(JitOptContext *ctx, const VOPre *pre)
+{
+    if (pre->inputs_overflow || pre->npop < 3) {
+        return false;
+    }
+    PyObject *callable = sym_get_const(ctx, pre->inputs[0]);
+    if (callable == NULL || !PyCFunction_CheckExact(callable) ||
+        !sym_is_null(pre->inputs[1])) {
+        return false;
+    }
+    PyObject *module = ((PyCFunctionObject *)callable)->m_module;
+    const char *name = ((PyCFunctionObject *)callable)->m_ml->ml_name;
+    if (module == NULL || !PyUnicode_Check(module)) {
+        return false;
+    }
+    if (!_PyUnicode_EqualToASCIIString(module, "math") &&
+        !(_PyUnicode_EqualToASCIIString(module, "builtins") &&
+          (strcmp(name, "abs") == 0 || strcmp(name, "min") == 0 ||
+           strcmp(name, "max") == 0))) {
+        return false;
+    }
+    for (int i = 2; i < pre->npop; i++) {
+        PyTypeObject *type = sym_get_type(pre->inputs[i]);
+        if (type != &PyFloat_Type && type != &PyLong_Type) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool
+vo_is_pop(int opcode)
+{
+    return opcode == _POP_TOP || opcode == _POP_TOP_NOP ||
+           opcode == _POP_TOP_INT || opcode == _POP_TOP_FLOAT ||
+           opcode == _POP_TOP_UNICODE;
+}
+
+static bool
+vo_is_record_load(int opcode)
+{
+    return opcode == _LOAD_ATTR_RECORD || opcode == _LOAD_ATTR_RECORD_TYPED ||
+           opcode == _LOAD_ATTR_RECORD_BORROW ||
+           opcode == _LOAD_ATTR_RECORD_TYPED_BORROW;
+}
+
+static bool
+vo_is_tuple_unpack(int opcode)
+{
+    return opcode == _UNPACK_SEQUENCE_TWO_TUPLE ||
+           opcode == _UNPACK_SEQUENCE_TUPLE ||
+           opcode == _UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE ||
+           opcode == _UNPACK_SEQUENCE_UNIQUE_THREE_TUPLE ||
+           opcode == _UNPACK_SEQUENCE_UNIQUE_TUPLE;
+}
+
+/* Uops that only move references between locals and the stack. */
+static bool
+vo_is_move(int opcode)
+{
+    switch (opcode) {
+        case _LOAD_FAST:
+        case _LOAD_FAST_BORROW:
+        case _LOAD_FAST_CHECK:
+        case _LOAD_FAST_AND_CLEAR:
+        case _SWAP_FAST:
+        case _COPY:
+        case _SWAP:
+        case _MAKE_HEAP_SAFE:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* Call guards whose inputs from position 2 on are `unused`. */
+static bool
+vo_is_call_guard(int opcode)
+{
+    return opcode == _CHECK_FUNCTION_VERSION ||
+           opcode == _CHECK_FUNCTION_EXACT_ARGS ||
+           opcode == _CHECK_STACK_SPACE;
+}
+
+#define VO_EXIT_FLAGS (HAS_EXIT_FLAG | HAS_DEOPT_FLAG | HAS_PERIODIC_FLAG | HAS_ERROR_FLAG)
+
+/* Scan the abstract frames for the locations of live candidates. With
+ * pre != NULL, record them; return whether cand (if >= 0) was found. Frames
+ * 1..depth are the trace's frames (frames[0] is the root); a frame
+ * initialized for a call but not yet pushed is scanned too. */
+static bool
+vo_scan(JitOptContext *ctx, JitOptRef *stack_pointer, VOPre *pre, int cand)
+{
+    bool found = false;
+    int depth = ctx->curr_frame_depth;
+    int nframes = depth + (ctx->vo.pending_frame ? 1 : 0);
+    for (int d = 0; d < nframes && d < MAX_ABSTRACT_FRAME_DEPTH; d++) {
+        _Py_UOpsAbstractFrame *f = &ctx->frames[d];
+        JitOptRef *sp = d == depth - 1 ? stack_pointer :
+                        d == depth ? f->stack : f->stack_pointer;
+        int nlocals = f->locals_len;
+        int nstack = (int)(sp - f->stack);
+        for (int k = 0; k < nlocals + nstack; k++) {
+            bool is_stack = k >= nlocals;
+            JitOptRef ref = is_stack ? f->stack[k - nlocals] : f->locals[k];
+            int c = vo_find(ctx, ref);
+            if (c < 0) {
+                continue;
+            }
+            if (c == cand) {
+                found = true;
+            }
+            if (pre != NULL) {
+                if (d == depth) {
+                    // A frame not yet pushed cannot be rebuilt at an exit.
+                    pre->pending_locs = true;
+                    continue;
+                }
+                if (pre->nlocs >= VO_MAX_PRE_LOCS) {
+                    pre->locs_overflow = true;
+                    continue;
+                }
+                _PyVOLoc *loc = &pre->locs[pre->nlocs++];
+                loc->cand = (uint8_t)c;
+                loc->depth = (uint8_t)(d + 1);
+                loc->is_stack = is_stack;
+                loc->index = (uint16_t)(is_stack ? k - nlocals : k);
+            }
+        }
+    }
+    return found;
+}
+
+/* Before the abstract interpreter runs this_instr. */
+static void
+vo_before(JitOptContext *ctx, _PyUOpInstruction *this_instr,
+          JitOptRef *stack_pointer, VOPre *pre)
+{
+    pre->opcode = this_instr->opcode;
+    pre->oparg = this_instr->oparg;
+    pre->depth = ctx->curr_frame_depth;
+    pre->any_live = vo_any_live(ctx);
+    pre->npop = 0;
+    pre->inputs_overflow = false;
+    pre->nlocs = 0;
+    pre->locs_overflow = false;
+    pre->pending_locs = false;
+    pre->caller_locals = NULL;
+    pre->returning_safe = false;
+    int opcode = this_instr->opcode;
+    if (opcode == _CALL_RECORD || opcode == _CALL_RECORD_CHECKED ||
+        opcode == _BUILD_TUPLE || pre->any_live) {
+        pre->npop = _PyUop_num_inputs(opcode, this_instr->oparg);
+        if (pre->npop < 0) {
+            pre->npop = 0;
+        }
+        int n = pre->npop;
+        if (n > VO_MAX_INPUTS) {
+            pre->inputs_overflow = true;
+        }
+        for (int i = 0; i < n; i++) {
+            JitOptRef ref = stack_pointer[i - n];
+            int c = vo_find(ctx, ref);
+            if (i >= VO_MAX_INPUTS) {
+                if (c >= 0) {
+                    vo_escape(ctx, c, "too many inputs");
+                }
+                continue;
+            }
+            pre->inputs[i] = ref;
+            pre->input_cand[i] = c;
+        }
+    }
+    if (!pre->any_live) {
+        return;
+    }
+    vo_scan(ctx, stack_pointer, pre, -1);
+    if (opcode == _RETURN_VALUE) {
+        _Py_UOpsAbstractFrame *f = ctx->frame;
+        pre->returning_safe = true;
+        for (int k = 0; k < f->locals_len; k++) {
+            if (!vo_decref_safe(ctx, f->locals[k])) {
+                pre->returning_safe = false;
+                break;
+            }
+        }
+        if (ctx->curr_frame_depth >= 2) {
+            pre->caller_locals = ctx->frames[ctx->curr_frame_depth - 2].locals;
+        }
+    }
+}
+
+static void
+vo_add_use(JitOptContext *ctx, int out, int cand, int kind, int field)
+{
+    if (ctx->vo.nuses >= VO_MAX_USES) {
+        vo_escape(ctx, cand, "too many uses");
+        return;
+    }
+    _PyVOUse *u = &ctx->vo.uses[ctx->vo.nuses++];
+    u->out = out;
+    u->cand = (uint8_t)cand;
+    u->kind = (uint8_t)kind;
+    u->field = (uint8_t)field;
+}
+
+/* Try to make the construction just emitted (out_start[0]) a candidate. */
+static void
+vo_new_candidate(JitOptContext *ctx, const VOPre *pre,
+                 _PyUOpInstruction *out_start, JitOptRef *stack_pointer)
+{
+    _PyVOState *vo = &ctx->vo;
+    int opcode = out_start->opcode;
+    PyTypeObject *type = NULL;
+    int n = pre->oparg;
+    JitOptRef res;
+    if (opcode == _CALL_RECORD || opcode == _CALL_RECORD_CHECKED) {
+        PyObject *callable = sym_get_const(ctx, pre->inputs[0]);
+        if (callable == NULL || !PyType_Check(callable) ||
+            !_PyGrail_IsRecordTypeFast((PyTypeObject *)callable)) {
+            return;
+        }
+        type = (PyTypeObject *)callable;
+        uint64_t check = opcode == _CALL_RECORD_CHECKED ? out_start->operand0 : UINT64_MAX;
+        if (n > VO_MAX_FIELDS || !vo_record_checks_pure(type, n, check)) {
+            return;
+        }
+        res = stack_pointer[-2];
+    }
+    else if (opcode == _BUILD_TUPLE) {
+        if (n < 1 || n > VO_MAX_FIELDS) {
+            return;
+        }
+        res = stack_pointer[-1];
+    }
+    else {
+        return;
+    }
+    if (vo->ncands >= VO_MAX_CANDIDATES) {
+        return;
+    }
+    for (int i = 0; i < pre->npop; i++) {
+        if (pre->input_cand[i] >= 0) {
+            // Nested virtual objects are not supported yet.
+            return;
+        }
+    }
+    int base = -1;
+    uint64_t mask = ((uint64_t)1 << n) - 1;
+    for (int b = 0; b + n <= _Py_VO_SHADOW_SIZE; b++) {
+        if (!(vo->shadow_used & (mask << b))) {
+            base = b;
+            break;
+        }
+    }
+    if (base < 0) {
+        return;
+    }
+    bool safe = true;
+    if (type != NULL) {
+        safe = vo_record_safe(type, 0);
+    }
+    else {
+        for (int i = 0; i < n; i++) {
+            if (!vo_decref_safe(ctx, pre->inputs[i])) {
+                safe = false;
+            }
+        }
+    }
+    int i = vo->ncands++;
+    _PyVOCandidate *c = &vo->cands[i];
+    c->sym = PyJitRef_Unwrap(res);
+    c->type = type;
+    c->create = (int)(out_start - ctx->out_buffer.start);
+    c->death = -1;
+    c->n = (uint8_t)n;
+    c->base = (uint8_t)base;
+    c->escaped = false;
+    c->safe_release = safe;
+    vo->shadow_used |= mask << base;
+    vo_add_use(ctx, c->create, i, VO_USE_NEW, 0);
+    DPRINTF(2, "vo: candidate %d at %d, %d fields, base %d\n", i, c->create, n, base);
+}
+
+/* Record the locations of the live candidates (from pre) for the output
+ * uops [start, end). Consecutive equal snapshots are merged. */
+static void
+vo_snapshot(JitOptContext *ctx, const VOPre *pre, int start, int end)
+{
+    _PyVOState *vo = &ctx->vo;
+    if (start == end) {
+        return;
+    }
+    int nlive = 0;
+    for (int k = 0; k < pre->nlocs; k++) {
+        nlive += vo_live(&vo->cands[pre->locs[k].cand]);
+    }
+    if (vo->nsnaps > 0) {
+        _PyVOSnapshot *last = &vo->snaps[vo->nsnaps - 1];
+        if (last->out_end == start && last->depth == pre->depth &&
+            last->nlocs == nlive) {
+            bool same = true;
+            int j = 0;
+            for (int k = 0; k < pre->nlocs && same; k++) {
+                const _PyVOLoc *a = &pre->locs[k];
+                if (!vo_live(&vo->cands[a->cand])) {
+                    continue;
+                }
+                const _PyVOLoc *b = &vo->locs[last->first_loc + j++];
+                same = a->cand == b->cand && a->depth == b->depth &&
+                       a->is_stack == b->is_stack && a->index == b->index;
+            }
+            if (same) {
+                last->out_end = end;
+                return;
+            }
+        }
+    }
+    if (vo->nsnaps >= VO_MAX_SNAPSHOTS || vo->nlocs + nlive > VO_MAX_LOCS) {
+        vo_escape_all(ctx, "too many exits");
+        return;
+    }
+    _PyVOSnapshot *snap = &vo->snaps[vo->nsnaps++];
+    snap->out_start = start;
+    snap->out_end = end;
+    snap->depth = pre->depth;
+    snap->first_loc = vo->nlocs;
+    snap->nlocs = nlive;
+    for (int k = 0; k < pre->nlocs; k++) {
+        if (vo_live(&vo->cands[pre->locs[k].cand])) {
+            vo->locs[vo->nlocs++] = pre->locs[k];
+        }
+    }
+}
+
+/* After the abstract interpreter ran pre's uop, emitting
+ * [out_start, out_end). */
+static void
+vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
+         _PyUOpInstruction *out_end, JitOptRef *stack_pointer, int fused)
+{
+    _PyVOState *vo = &ctx->vo;
+    int opcode = pre->opcode;
+    int nout = (int)(out_end - out_start);
+    int out = (int)(out_start - ctx->out_buffer.start);
+    if (ctx->done) {
+        vo_escape_all(ctx, "optimizer stopped");
+        return;
+    }
+    if (pre->any_live) {
+        if (fused) {
+            vo_escape_all(ctx, "fused call");
+            return;
+        }
+        /* Inputs: is each candidate input consumed by a uop that knows
+         * virtual objects? */
+        for (int i = 0; i < pre->npop && i < VO_MAX_INPUTS; i++) {
+            int c = pre->input_cand[i];
+            if (c < 0 || !vo_live(&vo->cands[c])) {
+                continue;
+            }
+            _PyVOCandidate *cand = &vo->cands[c];
+            int op = nout == 1 ? out_start->opcode : -1;
+            if (vo_is_record_load(opcode)) {
+                if (cand->type != NULL && vo_is_record_load(op)) {
+                    int field = (int)(((Py_ssize_t)out_start->operand0 -
+                                       (Py_ssize_t)offsetof(RecordObject, fields)) /
+                                      (Py_ssize_t)sizeof(PyObject *));
+                    if (field >= 0 && field < cand->n) {
+                        vo_add_use(ctx, out, c, VO_USE_LOAD, field);
+                        continue;
+                    }
+                }
+            }
+            else if (vo_is_pop(opcode)) {
+                if (nout == 0 || op == _NOP) {
+                    continue;
+                }
+                if (vo_is_pop(op)) {
+                    vo_add_use(ctx, out, c, VO_USE_POP, 0);
+                    continue;
+                }
+            }
+            else if (vo_is_tuple_unpack(opcode) || opcode == _UNPACK_SEQUENCE) {
+                if (cand->type == NULL && cand->n == pre->oparg &&
+                    (vo_is_tuple_unpack(op) || op == _UNPACK_SEQUENCE)) {
+                    vo_add_use(ctx, out, c, VO_USE_UNPACK, 0);
+                    continue;
+                }
+            }
+            else if (opcode == _GUARD_TYPE_VERSION) {
+                if (nout == 0 || op == _NOP) {
+                    continue;
+                }
+                if (cand->type != NULL && op == _GUARD_TYPE_VERSION &&
+                    cand->type->tp_version_tag != 0 &&
+                    cand->type->tp_version_tag == (uint32_t)out_start->operand0) {
+                    vo_add_use(ctx, out, c, VO_USE_NOP, 0);
+                    continue;
+                }
+            }
+            else if (opcode == _GUARD_TOS_TUPLE || opcode == _GUARD_NOS_TUPLE) {
+                // The guard checks input 0; input 1 of _GUARD_NOS_TUPLE is
+                // unused.
+                if (nout == 0 || op == _NOP || i == 1) {
+                    continue;
+                }
+                if (cand->type == NULL && op == opcode) {
+                    vo_add_use(ctx, out, c, VO_USE_NOP, 0);
+                    continue;
+                }
+            }
+            else if (vo_is_move(opcode)) {
+                if (nout == 1 && op == opcode) {
+                    continue;
+                }
+            }
+            else if (opcode == _RETURN_VALUE) {
+                if (pre->caller_locals != NULL &&
+                    ctx->curr_frame_depth == pre->depth - 1 &&
+                    ctx->frame->locals == pre->caller_locals) {
+                    continue;
+                }
+            }
+            else if (opcode == _INIT_CALL_PY_EXACT_ARGS || vo_is_call_guard(opcode)) {
+                if (i >= 2) {
+                    continue;
+                }
+            }
+            else if (_PyUop_Flags[opcode] & HAS_RECORDS_VALUE_FLAG) {
+                continue;
+            }
+            vo_escape(ctx, c, _PyOpcode_uop_name[opcode]);
+        }
+        /* Uops that read or write locals other than by moving them. */
+        if ((_PyUop_Flags[opcode] & HAS_LOCAL_FLAG) && !vo_is_move(opcode) &&
+            opcode != _DELETE_FAST) {
+            for (int k = 0; k < pre->nlocs; k++) {
+                if (!pre->locs[k].is_stack && pre->locs[k].depth == pre->depth) {
+                    vo_escape(ctx, pre->locs[k].cand, "local uop");
+                }
+            }
+        }
+        /* Barriers. */
+        for (_PyUOpInstruction *p = out_start; p < out_end; p++) {
+            int op = p->opcode;
+            if (!(_PyUop_Flags[op] & HAS_ESCAPES_FLAG)) {
+                continue;
+            }
+            bool exempt = false;
+            if (vo_is_pop(op)) {
+                exempt = vo_is_pop(opcode) && nout == 1 && pre->npop == 1 &&
+                         vo_decref_safe(ctx, pre->inputs[0]);
+            }
+            else if (op == _RETURN_VALUE) {
+                exempt = pre->returning_safe;
+            }
+            else if (op == _CALL_BUILTIN_O || op == _CALL_BUILTIN_FAST) {
+                exempt = vo_pure_builtin_call(ctx, pre);
+            }
+            else if (op == _BINARY_OP_TRUEDIV_FLOAT || op == _BINARY_OP_EXTEND) {
+                exempt = true;
+            }
+            else if (op == _CALL_RECORD || op == _CALL_RECORD_CHECKED) {
+                PyObject *callable = pre->npop > 0 && !pre->inputs_overflow ?
+                    sym_get_const(ctx, pre->inputs[0]) : NULL;
+                exempt = callable != NULL && PyType_Check(callable) &&
+                         vo_record_checks_pure((PyTypeObject *)callable, p->oparg,
+                                               op == _CALL_RECORD_CHECKED ?
+                                               p->operand0 : UINT64_MAX);
+            }
+            if (!exempt) {
+                vo_escape_all(ctx, _PyOpcode_uop_name[op]);
+                break;
+            }
+        }
+        /* Ends of the trace. */
+        for (_PyUOpInstruction *p = out_start; p < out_end; p++) {
+            if (is_terminator_uop(p) || p->opcode == _YIELD_VALUE ||
+                p->opcode == _RETURN_GENERATOR) {
+                vo_escape_all(ctx, "end of trace");
+            }
+        }
+        /* Exits: remember where the live candidates are. This is done for
+         * every uop, not just the ones that can exit: the optimizer can turn
+         * an earlier _NOP into a guard (_GUARD_GLOBALS_VERSION). */
+        if (vo_any_live(ctx)) {
+            bool exits = false;
+            for (_PyUOpInstruction *p = out_start; p < out_end; p++) {
+                if (_PyUop_Flags[p->opcode] & VO_EXIT_FLAGS) {
+                    exits = true;
+                }
+            }
+            if (pre->locs_overflow || (pre->pending_locs && exits)) {
+                vo_escape_all(ctx, "locations");
+            }
+            else if (!pre->pending_locs) {
+                vo_snapshot(ctx, pre, out, out + nout);
+            }
+        }
+    }
+    /* A new candidate. */
+    if ((opcode == _CALL_RECORD || opcode == _CALL_RECORD_CHECKED ||
+         opcode == _BUILD_TUPLE) && nout == 1 && !pre->inputs_overflow) {
+        vo_new_candidate(ctx, pre, out_start, stack_pointer);
+    }
+    if (opcode == _INIT_CALL_PY_EXACT_ARGS) {
+        vo->pending_frame = true;
+    }
+    else if (opcode == _PUSH_FRAME) {
+        vo->pending_frame = false;
+    }
+    if (!pre->any_live) {
+        return;
+    }
+    /* Deaths. */
+    bool may_die = vo_is_pop(opcode) || vo_is_tuple_unpack(opcode) ||
+                   opcode == _UNPACK_SEQUENCE || opcode == _RETURN_VALUE ||
+                   opcode == _DELETE_FAST;
+    for (int i = 0; i < vo->ncands; i++) {
+        _PyVOCandidate *c = &vo->cands[i];
+        if (!vo_live(c) || c->create >= out) {
+            continue;
+        }
+        if (vo_scan(ctx, stack_pointer, NULL, i)) {
+            continue;
+        }
+        if (!may_die) {
+            // Lost track of it: keep it real.
+            vo_escape(ctx, i, "lost");
+            continue;
+        }
+        c->death = out + nout;
+        vo_free_slots(ctx, c);
+        DPRINTF(2, "vo: candidate %d dies before %d\n", i, c->death);
+        if (!c->safe_release) {
+            vo_escape_all(ctx, "unsafe release");
+        }
+    }
+}
+
+/* Rewrite the optimized trace for the candidates that did not escape:
+ * constructions, uses, releases and exit markers. Returns the new length
+ * (length if nothing changes). */
+static int
+vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
+           _PyUOpInstruction *buffer, int length)
+{
+    _PyVOState *vo = &ctx->vo;
+    _PyJitTracerState *tracer = tstate->jit_tracer_state;
+    if (tracer->vo_arena != NULL) {
+        PyMem_Free(tracer->vo_arena);
+        tracer->vo_arena = NULL;
+    }
+    int nvirtual = 0;
+    for (int i = 0; i < vo->ncands; i++) {
+        _PyVOCandidate *c = &vo->cands[i];
+        if (!c->escaped) {
+            assert(c->death >= 0);
+            nvirtual++;
+        }
+    }
+    if (vo->failed || nvirtual == 0) {
+        return length;
+    }
+    /* Recovery descriptors: one per snapshot with virtual objects. */
+    size_t arena_size = 0;
+    int nmarkers = 0;
+    for (int s = 0; s < vo->nsnaps; s++) {
+        _PyVOSnapshot *snap = &vo->snaps[s];
+        uint32_t seen = 0;
+        int nobjs = 0, nlocs = 0;
+        for (int k = 0; k < snap->nlocs; k++) {
+            _PyVOLoc *loc = &vo->locs[snap->first_loc + k];
+            if (vo->cands[loc->cand].escaped) {
+                continue;
+            }
+            nlocs++;
+            if (!(seen & (1u << loc->cand))) {
+                seen |= 1u << loc->cand;
+                nobjs++;
+            }
+        }
+        if (nlocs == 0) {
+            continue;
+        }
+        size_t size = sizeof(_PyVORecovery) + nobjs * sizeof(_PyVORecoveryObject) +
+                      nlocs * sizeof(_PyVORecoveryLoc);
+        arena_size += (size + 7) & ~(size_t)7;
+        for (int i = snap->out_start; i < snap->out_end; i++) {
+            if (_PyUop_Flags[buffer[i].opcode] & VO_EXIT_FLAGS) {
+                nmarkers++;
+            }
+        }
+    }
+    if (length + nvirtual + nmarkers > UOP_MAX_TRACE_LENGTH - 8) {
+        DPRINTF(1, "vo: trace too long\n");
+        return length;
+    }
+    char *arena = NULL;
+    if (arena_size > 0) {
+        arena = PyMem_Malloc(arena_size);
+        if (arena == NULL) {
+            return length;
+        }
+    }
+    _PyUOpInstruction *copy = PyMem_Malloc(length * sizeof(_PyUOpInstruction));
+    int16_t *use_of = PyMem_Malloc(length * sizeof(int16_t));
+    const _PyVORecovery **info_of = PyMem_Calloc(length, sizeof(_PyVORecovery *));
+    if (copy == NULL || use_of == NULL || info_of == NULL) {
+        PyMem_Free(arena);
+        PyMem_Free(copy);
+        PyMem_Free(use_of);
+        PyMem_Free(info_of);
+        return length;
+    }
+    memcpy(copy, buffer, length * sizeof(_PyUOpInstruction));
+    for (int i = 0; i < length; i++) {
+        use_of[i] = -1;
+    }
+    for (int u = 0; u < vo->nuses; u++) {
+        _PyVOUse *use = &vo->uses[u];
+        if (!vo->cands[use->cand].escaped) {
+            assert(use_of[use->out] < 0);
+            use_of[use->out] = (int16_t)u;
+        }
+    }
+    char *next = arena;
+    for (int s = 0; s < vo->nsnaps; s++) {
+        _PyVOSnapshot *snap = &vo->snaps[s];
+        int obj_of[VO_MAX_CANDIDATES];
+        for (int i = 0; i < VO_MAX_CANDIDATES; i++) {
+            obj_of[i] = -1;
+        }
+        bool any = false;
+        for (int k = 0; k < snap->nlocs; k++) {
+            any |= !vo->cands[vo->locs[snap->first_loc + k].cand].escaped;
+        }
+        if (!any) {
+            continue;
+        }
+        _PyVORecovery *rec = (_PyVORecovery *)next;
+        rec->nobjs = 0;
+        rec->nlocs = 0;
+        // Objects first, then locations (after the final object count).
+        for (int k = 0; k < snap->nlocs; k++) {
+            _PyVOLoc *loc = &vo->locs[snap->first_loc + k];
+            _PyVOCandidate *c = &vo->cands[loc->cand];
+            if (c->escaped || obj_of[loc->cand] >= 0) {
+                continue;
+            }
+            obj_of[loc->cand] = rec->nobjs;
+            _PyVORecoveryObject *obj = &rec->objs[rec->nobjs++];
+            obj->type = c->type;
+            obj->base = c->base;
+            obj->n = c->n;
+        }
+        _PyVORecoveryLoc *locs = (_PyVORecoveryLoc *)(rec->objs + rec->nobjs);
+        for (int k = 0; k < snap->nlocs; k++) {
+            _PyVOLoc *loc = &vo->locs[snap->first_loc + k];
+            if (vo->cands[loc->cand].escaped) {
+                continue;
+            }
+            _PyVORecoveryLoc *l = &locs[rec->nlocs++];
+            l->obj = (uint8_t)obj_of[loc->cand];
+            l->frame_up = (uint8_t)(snap->depth - loc->depth);
+            l->is_stack = loc->is_stack;
+            l->index = loc->index;
+        }
+        size_t size = (char *)(locs + rec->nlocs) - next;
+        next += (size + 7) & ~(size_t)7;
+        for (int i = snap->out_start; i < snap->out_end; i++) {
+            info_of[i] = rec;
+        }
+    }
+    assert(next == arena + arena_size);
+    int out = 0;
+    for (int i = 0; i < length; i++) {
+        _PyUOpInstruction inst = copy[i];
+        for (int k = 0; k < vo->ncands; k++) {
+            _PyVOCandidate *c = &vo->cands[k];
+            if (!c->escaped && c->death == i) {
+                _PyUOpInstruction *r = &buffer[out++];
+                *r = inst;
+                r->opcode = _VO_RELEASE;
+                r->oparg = c->n;
+                r->operand0 = c->base;
+                r->operand1 = 0;
+            }
+        }
+        int u = use_of[i];
+        if (u >= 0) {
+            _PyVOUse *use = &vo->uses[u];
+            _PyVOCandidate *c = &vo->cands[use->cand];
+            switch (use->kind) {
+                case VO_USE_NEW:
+                    if (c->type != NULL) {
+                        if (inst.opcode == _CALL_RECORD) {
+                            inst.operand0 = UINT64_MAX;
+                        }
+                        inst.opcode = _VO_NEW_RECORD;
+                        inst.operand1 = c->base;
+                    }
+                    else {
+                        assert(inst.opcode == _BUILD_TUPLE);
+                        inst.opcode = _VO_NEW_TUPLE;
+                        inst.operand0 = c->base;
+                    }
+                    break;
+                case VO_USE_LOAD:
+                    inst.opcode = (inst.opcode == _LOAD_ATTR_RECORD_BORROW ||
+                                   inst.opcode == _LOAD_ATTR_RECORD_TYPED_BORROW) ?
+                                  _VO_LOAD_FIELD_BORROW : _VO_LOAD_FIELD;
+                    inst.operand0 = c->base + use->field;
+                    break;
+                case VO_USE_POP:
+                    if (vo_is_pop(inst.opcode)) {
+                        inst.opcode = _POP_TOP_NOP;
+                    }
+                    break;
+                case VO_USE_NOP:
+                    inst.opcode = _NOP;
+                    break;
+                case VO_USE_UNPACK:
+                    inst.opcode = _VO_UNPACK;
+                    inst.operand0 = c->base;
+                    break;
+            }
+        }
+        if (info_of[i] != NULL && (_PyUop_Flags[inst.opcode] & VO_EXIT_FLAGS)) {
+            _PyUOpInstruction *m = &buffer[out++];
+            *m = inst;
+            m->opcode = _VO_EXIT_INFO;
+            m->oparg = 0;
+            m->operand0 = (uintptr_t)info_of[i];
+            m->operand1 = 0;
+        }
+        buffer[out++] = inst;
+        assert(out <= UOP_MAX_TRACE_LENGTH);
+    }
+    PyMem_Free(copy);
+    PyMem_Free(use_of);
+    PyMem_Free(info_of);
+    tracer->vo_arena = arena;
+    DPRINTF(1, "vo: %d virtual objects, %d -> %d uops\n", nvirtual, length, out);
+    return out;
+}
+
 static int
 optimize_uops(
     _PyThreadStateImpl *tstate,
@@ -1663,6 +2642,8 @@ optimize_uops(
                          _setup_optimizer_watchers, NULL);
 
     _Py_uop_abstractcontext_init(ctx, dependencies);
+    memset(&ctx->vo, 0, offsetof(_PyVOState, cands));
+    ctx->vo.failed = !vo_enabled();
     _Py_UOpsAbstractFrame *frame = _Py_uop_frame_new(ctx, (PyCodeObject *)func->func_code, NULL, 0);
     if (frame == NULL) {
         return 0;
@@ -1698,6 +2679,14 @@ optimize_uops(
 
         _PyUOpInstruction *out_ptr = ctx->out_buffer.next;
         _Py_UOpsAbstractFrame *frame_before = ctx->frame;
+        VOPre vo_pre;
+        bool vo_active = !ctx->vo.failed && !CURRENT_FRAME_IS_SHIM();
+        if (vo_active) {
+            vo_before(ctx, this_instr, stack_pointer, &vo_pre);
+        }
+        else if (!ctx->vo.failed) {
+            vo_escape_all(ctx, "shim frame");
+        }
 
         int fused = 0;
         if (opcode == _GRAIL_BINARY_CHECK_FUNC) {
@@ -1725,6 +2714,10 @@ optimize_uops(
         // If no ADD_OP was called during this iteration, copy the original instruction
         if (ctx->out_buffer.next == out_ptr) {
             *(ctx->out_buffer.next++) = *this_instr;
+        }
+        if (vo_active) {
+            vo_after(ctx, &vo_pre, out_ptr, ctx->out_buffer.next,
+                     stack_pointer, fused);
         }
         assert(ctx->frame != NULL);
         DUMP_UOPS(ctx, "out", out_ptr, stack_pointer);
@@ -1828,6 +2821,10 @@ remove_unneeded_uops(_PyUOpInstruction *buffer, int buffer_size)
                 }
                 else {
                     buffer[pc].opcode = _NOP;
+                    if (pc > 0 && buffer[pc - 1].opcode == _VO_EXIT_INFO) {
+                        // Its virtual-object exit marker (vo_rewrite()).
+                        buffer[pc - 1].opcode = _NOP;
+                    }
                 }
                 break;
             case _EXIT_TRACE:
@@ -1904,6 +2901,8 @@ _Py_uop_analyze_and_optimize(
 
     assert(length > 0);
 
+    length = vo_rewrite(tstate, &tstate->jit_tracer_state->opt_context,
+                        output, length);
     length = remove_unneeded_uops(output, length);
     assert(length > 0);
 

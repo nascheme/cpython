@@ -21428,6 +21428,325 @@
             break;
         }
 
+        case _VO_NEW_RECORD_r02: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef *args;
+            _PyStackRef callable;
+            _PyStackRef res;
+            _PyStackRef c;
+            oparg = CURRENT_OPARG();
+            args = &stack_pointer[-oparg];
+            callable = stack_pointer[-2 - oparg];
+            PyObject *check = (PyObject *)CURRENT_OPERAND0_64();
+            PyObject *base = (PyObject *)CURRENT_OPERAND1_64();
+            if (!_PyGrail_RecordArgsConform(
+                         (PyTypeObject *)PyStackRef_AsPyObjectBorrow(callable),
+                         args, oparg, (uint64_t)(uintptr_t)check)) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
+            for (int i = 0; i < oparg; i++) {
+                assert(PyStackRef_IsNull(shadow[i]));
+                shadow[i] = PyStackRef_MakeHeapSafe(args[i]);
+            }
+            c = callable;
+            res = PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder);
+            _tos_cache1 = c;
+            _tos_cache0 = res;
+            SET_CURRENT_CACHED_VALUES(2);
+            stack_pointer += -2 - oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_NEW_TUPLE_r01: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef *values;
+            _PyStackRef tup;
+            oparg = CURRENT_OPARG();
+            values = &stack_pointer[-oparg];
+            PyObject *base = (PyObject *)CURRENT_OPERAND0_64();
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
+            for (int i = 0; i < oparg; i++) {
+                assert(PyStackRef_IsNull(shadow[i]));
+                shadow[i] = PyStackRef_MakeHeapSafe(values[i]);
+            }
+            tup = PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder);
+            _tos_cache0 = tup;
+            SET_CURRENT_CACHED_VALUES(1);
+            stack_pointer += -oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_LOAD_FIELD_r02: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef attr;
+            _PyStackRef o;
+            owner = stack_pointer[-1];
+            PyObject *slot = (PyObject *)CURRENT_OPERAND0_64();
+            assert(PyStackRef_AsPyObjectBorrow(owner) == &_PyVO_Placeholder);
+            _PyStackRef field = ((_PyThreadStateImpl *)tstate)->vo_shadow[(uintptr_t)slot];
+            assert(!PyStackRef_IsNull(field));
+            attr = PyStackRef_DUP(field);
+            o = owner;
+            _tos_cache1 = o;
+            _tos_cache0 = attr;
+            SET_CURRENT_CACHED_VALUES(2);
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_LOAD_FIELD_r12: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef attr;
+            _PyStackRef o;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            owner = _stack_item_0;
+            PyObject *slot = (PyObject *)CURRENT_OPERAND0_64();
+            assert(PyStackRef_AsPyObjectBorrow(owner) == &_PyVO_Placeholder);
+            _PyStackRef field = ((_PyThreadStateImpl *)tstate)->vo_shadow[(uintptr_t)slot];
+            assert(!PyStackRef_IsNull(field));
+            attr = PyStackRef_DUP(field);
+            o = owner;
+            _tos_cache1 = o;
+            _tos_cache0 = attr;
+            SET_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_LOAD_FIELD_r23: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef attr;
+            _PyStackRef o;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            owner = _stack_item_1;
+            PyObject *slot = (PyObject *)CURRENT_OPERAND0_64();
+            assert(PyStackRef_AsPyObjectBorrow(owner) == &_PyVO_Placeholder);
+            _PyStackRef field = ((_PyThreadStateImpl *)tstate)->vo_shadow[(uintptr_t)slot];
+            assert(!PyStackRef_IsNull(field));
+            attr = PyStackRef_DUP(field);
+            o = owner;
+            _tos_cache2 = o;
+            _tos_cache1 = attr;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_LOAD_FIELD_BORROW_r02: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef attr;
+            _PyStackRef o;
+            owner = stack_pointer[-1];
+            PyObject *slot = (PyObject *)CURRENT_OPERAND0_64();
+            assert(PyStackRef_AsPyObjectBorrow(owner) == &_PyVO_Placeholder);
+            _PyStackRef field = ((_PyThreadStateImpl *)tstate)->vo_shadow[(uintptr_t)slot];
+            assert(!PyStackRef_IsNull(field));
+            attr = PyStackRef_Borrow(field);
+            o = owner;
+            _tos_cache1 = o;
+            _tos_cache0 = attr;
+            SET_CURRENT_CACHED_VALUES(2);
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_LOAD_FIELD_BORROW_r12: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef attr;
+            _PyStackRef o;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            owner = _stack_item_0;
+            PyObject *slot = (PyObject *)CURRENT_OPERAND0_64();
+            assert(PyStackRef_AsPyObjectBorrow(owner) == &_PyVO_Placeholder);
+            _PyStackRef field = ((_PyThreadStateImpl *)tstate)->vo_shadow[(uintptr_t)slot];
+            assert(!PyStackRef_IsNull(field));
+            attr = PyStackRef_Borrow(field);
+            o = owner;
+            _tos_cache1 = o;
+            _tos_cache0 = attr;
+            SET_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_LOAD_FIELD_BORROW_r23: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef attr;
+            _PyStackRef o;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            owner = _stack_item_1;
+            PyObject *slot = (PyObject *)CURRENT_OPERAND0_64();
+            assert(PyStackRef_AsPyObjectBorrow(owner) == &_PyVO_Placeholder);
+            _PyStackRef field = ((_PyThreadStateImpl *)tstate)->vo_shadow[(uintptr_t)slot];
+            assert(!PyStackRef_IsNull(field));
+            attr = PyStackRef_Borrow(field);
+            o = owner;
+            _tos_cache2 = o;
+            _tos_cache1 = attr;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_UNPACK_r10: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef seq;
+            _PyStackRef *values;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            oparg = CURRENT_OPARG();
+            seq = _stack_item_0;
+            values = &stack_pointer[0];
+            PyObject *base = (PyObject *)CURRENT_OPERAND0_64();
+            assert(PyStackRef_AsPyObjectBorrow(seq) == &_PyVO_Placeholder);
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
+            for (int i = oparg; --i >= 0; ) {
+                assert(!PyStackRef_IsNull(shadow[i]));
+                *values++ = PyStackRef_DUP(shadow[i]);
+            }
+            SET_CURRENT_CACHED_VALUES(0);
+            stack_pointer += oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_RELEASE_r00: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            oparg = CURRENT_OPARG();
+            PyObject *base = (PyObject *)CURRENT_OPERAND0_64();
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
+            for (int i = 0; i < oparg; i++) {
+                _PyStackRef field = shadow[i];
+                shadow[i] = PyStackRef_NULL;
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                PyStackRef_XCLOSE(field);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+            }
+            _tos_cache0 = PyStackRef_ZERO_BITS;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_EXIT_INFO_r00: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            PyObject *info = (PyObject *)CURRENT_OPERAND0_64();
+            (void)info;
+            SET_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_EXIT_INFO_r11: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            PyObject *info = (PyObject *)CURRENT_OPERAND0_64();
+            (void)info;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_EXIT_INFO_r22: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            PyObject *info = (PyObject *)CURRENT_OPERAND0_64();
+            (void)info;
+            _tos_cache1 = _stack_item_1;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_EXIT_INFO_r33: {
+            CHECK_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            _PyStackRef _stack_item_2 = _tos_cache2;
+            PyObject *info = (PyObject *)CURRENT_OPERAND0_64();
+            (void)info;
+            _tos_cache2 = _stack_item_2;
+            _tos_cache1 = _stack_item_1;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_RECOVER_r00: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            PyObject *info = (PyObject *)CURRENT_OPERAND0_64();
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            int err = _PyVO_Recover(tstate, frame, (const _PyVORecovery *)info, 0);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            if (err < 0) {
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_ERROR();
+            }
+            _tos_cache0 = PyStackRef_ZERO_BITS;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_RECOVER_ERROR_r00: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            PyObject *info = (PyObject *)CURRENT_OPERAND0_64();
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            _PyVO_Recover(tstate, frame, (const _PyVORecovery *)info, 1);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            _tos_cache0 = PyStackRef_ZERO_BITS;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _GUARD_CALLABLE_BUILTIN_O_r00: {
             CHECK_CURRENT_CACHED_VALUES(0);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());

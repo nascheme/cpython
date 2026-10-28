@@ -5520,6 +5520,83 @@
             break;
         }
 
+        case _VO_NEW_RECORD: {
+            JitOptRef res;
+            JitOptRef c;
+            res = sym_new_not_null(ctx);
+            c = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(-oparg);
+            stack_pointer[-2 - oparg] = res;
+            stack_pointer[-1 - oparg] = c;
+            stack_pointer += -oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _VO_NEW_TUPLE: {
+            JitOptRef tup;
+            tup = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(1 - oparg);
+            stack_pointer[-oparg] = tup;
+            stack_pointer += 1 - oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _VO_LOAD_FIELD: {
+            JitOptRef attr;
+            JitOptRef o;
+            attr = sym_new_not_null(ctx);
+            o = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-1] = attr;
+            stack_pointer[0] = o;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _VO_LOAD_FIELD_BORROW: {
+            JitOptRef attr;
+            JitOptRef o;
+            attr = sym_new_not_null(ctx);
+            o = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-1] = attr;
+            stack_pointer[0] = o;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _VO_UNPACK: {
+            JitOptRef *values;
+            values = &stack_pointer[-1];
+            for (int _i = oparg; --_i >= 0;) {
+                values[_i] = sym_new_not_null(ctx);
+            }
+            CHECK_STACK_BOUNDS(-1 + oparg);
+            stack_pointer += -1 + oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _VO_RELEASE: {
+            break;
+        }
+
+        case _VO_EXIT_INFO: {
+            break;
+        }
+
+        case _VO_RECOVER: {
+            break;
+        }
+
+        case _VO_RECOVER_ERROR: {
+            break;
+        }
+
         case _GUARD_CALLABLE_BUILTIN_O: {
             JitOptRef self_or_null;
             JitOptRef callable;

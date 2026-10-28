@@ -25,6 +25,9 @@ struct _gc_thread_state {
 
 
 // Every PyThreadState is actually allocated as a _PyThreadStateImpl. The
+/* Entries of _PyThreadStateImpl.vo_shadow. */
+#define _Py_VO_SHADOW_SIZE 64
+
 // PyThreadState fields are exposed as part of the C API, although most fields
 // are intended to be private. The _PyThreadStateImpl fields not exposed.
 typedef struct _PyThreadStateImpl {
@@ -38,6 +41,13 @@ typedef struct _PyThreadStateImpl {
     // The reference count field is used to synchronize deallocation of the
     // thread state during runtime finalization.
     Py_ssize_t refcount;
+
+    /* Tier 2: field values of the running executor's virtual objects (see
+     * "Virtual objects" in Python/optimizer_analysis.c), owned. Every
+     * entry is PyStackRef_NULL whenever no executor is running. JIT
+     * stencils are compiled without _Py_TIER2, so this comes before any
+     * field that depends on it. */
+    _PyStackRef vo_shadow[_Py_VO_SHADOW_SIZE];
 
     // These are addresses, but we need to convert to ints to avoid UB.
     uintptr_t c_stack_top;

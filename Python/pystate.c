@@ -1623,6 +1623,9 @@ init_threadstate(_PyThreadStateImpl *_tstate,
 #ifdef _Py_TIER2
     _tstate->jit_tracer_state = NULL;
 #endif
+    for (int i = 0; i < _Py_VO_SHADOW_SIZE; i++) {
+        _tstate->vo_shadow[i] = PyStackRef_NULL;
+    }
     tstate->delete_later = NULL;
 
     llist_init(&_tstate->mem_free_queue);

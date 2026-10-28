@@ -5877,6 +5877,102 @@ dummy_func(
             res = PyStackRef_FromPyObjectSteal(res_o);
         }
 
+        /* Virtual objects (tier 2 only; see "Virtual objects" in
+         * Python/optimizer_analysis.c). A slot that holds a virtual object
+         * holds the immortal _PyVO_Placeholder, and the thread's vo_shadow
+         * owns its fields from slot base on. Exit stubs rebuild the live
+         * ones (_VO_RECOVER). */
+
+        /* _CALL_RECORD whose result stays virtual. Deopts, consuming
+         * nothing, unless the arguments whose bit is set in check conform:
+         * a virtual record always conforms. */
+        tier2 op(_VO_NEW_RECORD, (check/4, base/4, callable, null, args[oparg] -- res, c)) {
+            DEOPT_IF(!_PyGrail_RecordArgsConform(
+                (PyTypeObject *)PyStackRef_AsPyObjectBorrow(callable),
+                args, oparg, (uint64_t)(uintptr_t)check));
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
+            for (int i = 0; i < oparg; i++) {
+                assert(PyStackRef_IsNull(shadow[i]));
+                shadow[i] = PyStackRef_MakeHeapSafe(args[i]);
+            }
+            c = callable;
+            INPUTS_DEAD();
+            res = PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder);
+        }
+
+        /* BUILD_TUPLE whose result stays virtual. */
+        tier2 op(_VO_NEW_TUPLE, (base/4, values[oparg] -- tup)) {
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
+            for (int i = 0; i < oparg; i++) {
+                assert(PyStackRef_IsNull(shadow[i]));
+                shadow[i] = PyStackRef_MakeHeapSafe(values[i]);
+            }
+            INPUTS_DEAD();
+            tup = PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder);
+        }
+
+        /* A field (or item) of a virtual object. */
+        tier2 op(_VO_LOAD_FIELD, (slot/4, owner -- attr, o)) {
+            assert(PyStackRef_AsPyObjectBorrow(owner) == &_PyVO_Placeholder);
+            _PyStackRef field = ((_PyThreadStateImpl *)tstate)->vo_shadow[(uintptr_t)slot];
+            assert(!PyStackRef_IsNull(field));
+            attr = PyStackRef_DUP(field);
+            o = owner;
+            DEAD(owner);
+        }
+
+        /* Borrowed form, under the rules of _LOAD_ATTR_RECORD_BORROW: the
+         * object stays live, so the shadow keeps the field. */
+        tier2 op(_VO_LOAD_FIELD_BORROW, (slot/4, owner -- attr, o)) {
+            assert(PyStackRef_AsPyObjectBorrow(owner) == &_PyVO_Placeholder);
+            _PyStackRef field = ((_PyThreadStateImpl *)tstate)->vo_shadow[(uintptr_t)slot];
+            assert(!PyStackRef_IsNull(field));
+            attr = PyStackRef_Borrow(field);
+            o = owner;
+            DEAD(owner);
+        }
+
+        /* UNPACK_SEQUENCE of a virtual tuple. */
+        tier2 op(_VO_UNPACK, (base/4, seq -- values[oparg])) {
+            assert(PyStackRef_AsPyObjectBorrow(seq) == &_PyVO_Placeholder);
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
+            for (int i = oparg; --i >= 0; ) {
+                assert(!PyStackRef_IsNull(shadow[i]));
+                *values++ = PyStackRef_DUP(shadow[i]);
+            }
+            DEAD(seq);
+        }
+
+        /* A virtual object died: release its oparg fields. */
+        tier2 op(_VO_RELEASE, (base/4 --)) {
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
+            for (int i = 0; i < oparg; i++) {
+                _PyStackRef field = shadow[i];
+                shadow[i] = PyStackRef_NULL;
+                PyStackRef_XCLOSE(field);
+            }
+        }
+
+        /* Marks the next uop that can leave the trace: prepare_for_execution()
+         * gives it exit stubs that rebuild the virtual objects of info (a
+         * _PyVORecovery), and removes the marker. */
+        tier2 op(_VO_EXIT_INFO, (info/4 --)) {
+            (void)info;
+        }
+
+        /* First uop of such an exit stub. */
+        tier2 op(_VO_RECOVER, (info/4 --)) {
+            int err = _PyVO_Recover(tstate, frame, (const _PyVORecovery *)info, 0);
+            if (err < 0) {
+                ERROR_NO_POP();
+            }
+        }
+
+        /* First uop of such an error stub: the exception is kept. */
+        tier2 op(_VO_RECOVER_ERROR, (info/4 --)) {
+            _PyVO_Recover(tstate, frame, (const _PyVORecovery *)info, 1);
+        }
+
         macro(CALL_RECORD) =
             unused/1 +
             unused/2 +

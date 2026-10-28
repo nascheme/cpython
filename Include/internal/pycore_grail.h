@@ -123,6 +123,11 @@ PyAPI_FUNC(PyObject *) _PyGrail_RecordFromStackRefsStealOnSuccess(PyTypeObject *
  * 64 on are always checked); the others are known to conform. */
 PyAPI_FUNC(PyObject *) _PyGrail_RecordFromStackRefsCheckedStealOnSuccess(
     PyTypeObject *, _PyStackRef *, Py_ssize_t, uint64_t check);
+/* Virtual records in tier 2 (see Python/optimizer_analysis.c). */
+PyAPI_FUNC(int) _PyGrail_RecordArgsConform(PyTypeObject *, _PyStackRef *,
+                                           Py_ssize_t, uint64_t check);
+PyAPI_FUNC(PyObject *) _PyGrail_RecordFromVirtual(PyTypeObject *,
+                                                  _PyStackRef *, Py_ssize_t);
 int _PyGrail_MatchRecord(PyObject *subject, PyObject *type, Py_ssize_t nargs,
                          PyObject *kwargs, PyObject **result);
 

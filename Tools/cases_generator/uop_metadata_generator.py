@@ -69,6 +69,7 @@ def generate_names_and_flags(analysis: Analysis, out: CWriter) -> None:
     out.emit("extern const ReplicationRange _PyUop_Replication[MAX_UOP_ID+1];\n")
     out.emit("extern const char * const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1];\n\n")
     out.emit("extern int _PyUop_num_popped(int opcode, int oparg);\n")
+    out.emit("extern int _PyUop_num_inputs(int opcode, int oparg);\n")
     out.emit(CACHING_INFO_DECL)
     out.emit(f"extern const uint16_t _PyUop_SpillsAndReloads[{MAX_CACHED_REGISTER+1}][{MAX_CACHED_REGISTER+1}];\n")
     out.emit("extern const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1];\n\n")
@@ -129,6 +130,21 @@ def generate_names_and_flags(analysis: Analysis, out: CWriter) -> None:
             popped = (-stack.base_offset).to_c()
             out.emit(f"case {uop.name}:\n")
             out.emit(f"    return {popped};\n")
+    out.emit("default:\n")
+    out.emit("    return -1;\n")
+    out.emit("}\n")
+    out.emit("}\n\n")
+    # All stack inputs, including the ones the uop only peeks at.
+    out.emit("int _PyUop_num_inputs(int opcode, int oparg)\n{\n")
+    out.emit("switch(opcode) {\n")
+    for uop in analysis.uops.values():
+        if uop.is_viable() and uop.properties.tier != 1 and not uop.is_super():
+            stack = Stack()
+            for var in reversed(uop.stack.inputs):
+                stack.pop(var, null)
+            inputs = (-stack.base_offset).to_c()
+            out.emit(f"case {uop.name}:\n")
+            out.emit(f"    return {inputs};\n")
     out.emit("default:\n")
     out.emit("    return -1;\n")
     out.emit("}\n")

@@ -75,6 +75,60 @@ typedef struct _JitOptRefBuffer {
 #define GRAIL_MAX_CONFORMING 32
 #define GRAIL_MAX_PLAN_FACTS 64
 
+/* Virtual objects: analysis state (see "Virtual objects" in
+ * Python/optimizer_analysis.c). */
+#define VO_MAX_CANDIDATES 32
+#define VO_MAX_USES 512
+#define VO_MAX_SNAPSHOTS 512
+#define VO_MAX_LOCS 2048
+
+typedef struct {
+    JitOptSymbol *sym;
+    PyTypeObject *type;     // record type, or NULL for a tuple
+    int create;             // output index of the construction
+    int death;              // output index the release goes before; -1 while live
+    uint8_t n;              // field count
+    uint8_t base;           // first shadow slot
+    bool escaped;           // stays a real allocation
+    bool safe_release;      // releasing its fields runs no code
+} _PyVOCandidate;
+
+typedef struct {
+    int out;                // output index of the uop to rewrite
+    uint8_t cand;
+    uint8_t kind;           // VO_USE_*
+    uint8_t field;
+} _PyVOUse;
+
+typedef struct {
+    int out_start;          // output uops [out_start, out_end) share the state
+    int out_end;
+    int depth;              // abstract frame depth they run at
+    int first_loc;
+    int nlocs;
+} _PyVOSnapshot;
+
+typedef struct {
+    uint8_t cand;
+    uint8_t depth;          // abstract frame depth (1: the trace's root)
+    uint8_t is_stack;
+    uint16_t index;
+} _PyVOLoc;
+
+typedef struct {
+    bool failed;            // give up on virtual objects for this trace
+    bool pending_frame;     // a frame is initialized but not yet pushed
+    int ncands;
+    int nuses;
+    int nsnaps;
+    int nlocs;
+    uint64_t shadow_used;   // shadow slots of live candidates
+    _PyVOCandidate cands[VO_MAX_CANDIDATES];
+    _PyVOUse uses[VO_MAX_USES];
+    _PyVOSnapshot snaps[VO_MAX_SNAPSHOTS];
+    _PyVOLoc locs[VO_MAX_LOCS];
+} _PyVOState;
+
 typedef struct _JitOptContext {
     char done;
     char out_of_space;
@@ -118,6 +172,7 @@ typedef struct _JitOptContext {
         const void *node;
     } grail_plans[GRAIL_MAX_PLAN_FACTS];
     int grail_plan_count;
+    _PyVOState vo;
 } JitOptContext;
 
 
@@ -185,6 +240,11 @@ typedef struct _PyJitTracerState {
     _PyJitUopBuffer code_buffer;
     _PyJitUopBuffer out_buffer;
     _PyUOpInstruction uop_array[2 * UOP_MAX_TRACE_LENGTH];
+    /* Recovery descriptors of virtual objects for the executor being
+     * built (PyMem_Malloc), handed to it as vo_data. */
+    void *vo_arena;
+    /* prepare_for_execution(): the recovery descriptor of each uop. */
+    const void *vo_exit_info[2 * UOP_MAX_TRACE_LENGTH];
 } _PyJitTracerState;
 
 typedef struct _PyExecutorLinkListNode {
@@ -224,8 +284,46 @@ typedef struct _PyExecutorObject {
     size_t jit_size;
     void *jit_code;
     _PyJitCodeRegistration *jit_registration;
+    void *vo_data;  // virtual-object recovery descriptors (PyMem_Malloc)
     _PyExitData exits[1];
 } _PyExecutorObject;
+
+/* Virtual objects at run time. A slot that holds a virtual object holds
+ * _PyVO_Placeholder (immortal); its fields are in the thread's vo_shadow.
+ * An exit stub rebuilds the live ones from a _PyVORecovery. */
+PyAPI_DATA(PyObject) _PyVO_Placeholder;
+
+typedef struct {
+    PyTypeObject *type;     // record type, or NULL for a tuple
+    uint8_t base;           // first shadow slot
+    uint8_t n;              // field count
+} _PyVORecoveryObject;
+
+typedef struct {
+    uint8_t obj;            // index into objs
+    uint8_t frame_up;       // 0: the frame the exit is taken in
+    uint8_t is_stack;
+    uint16_t index;         // local index, or stack index from the base
+} _PyVORecoveryLoc;
+
+typedef struct {
+    uint16_t nobjs;
+    uint16_t nlocs;
+    _PyVORecoveryObject objs[];   // followed by nlocs _PyVORecoveryLoc
+} _PyVORecovery;
+
+static inline const _PyVORecoveryLoc *
+_PyVORecovery_Locs(const _PyVORecovery *rec)
+{
+    return (const _PyVORecoveryLoc *)(rec->objs + rec->nobjs);
+}
+
+/* Rebuild the virtual objects of rec and store them in their slots. Returns
+ * 0, or -1 with MemoryError set (slots then hold None). With in_error, an
+ * exception is pending: it is kept and the call never fails. */
+PyAPI_FUNC(int) _PyVO_Recover(PyThreadState *tstate,
+                              struct _PyInterpreterFrame *frame,
+                              const _PyVORecovery *rec, int in_error);
 
 // Export for '_opcode' shared extension (JIT compiler).
 PyAPI_FUNC(_PyExecutorObject*) _Py_GetExecutor(PyCodeObject *code, int offset);
