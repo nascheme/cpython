@@ -285,14 +285,32 @@ _PyVO_Recover(PyThreadState *tstate, _PyInterpreterFrame *frame,
     PyObject *built[256];
     int failed = 0;
     PyObject *exc = in_error ? PyErr_GetRaisedException() : NULL;
+    const _PyVORecoveryInner *inner = _PyVORecovery_Inner(rec);
+    int next_inner = 0;
+    assert(rec->nobjs <= 256);
     for (int i = 0; i < rec->nobjs; i++) {
         const _PyVORecoveryObject *obj = &rec->objs[i];
         _PyStackRef *fields = shadow + obj->base;
-        PyObject *o;
-        if (obj->type != NULL) {
+        PyObject *o = NULL;
+        // Fields that hold an inner virtual object (built before it) hold
+        // the placeholder, which is immortal.
+        int inner_ok = 1;
+        for (; next_inner < rec->ninner && inner[next_inner].obj == i; next_inner++) {
+            const _PyVORecoveryInner *in = &inner[next_inner];
+            assert(PyStackRef_AsPyObjectBorrow(fields[in->field]) == &_PyVO_Placeholder);
+            PyObject *value = built[in->inner];
+            if (value == NULL) {
+                inner_ok = 0;
+                fields[in->field] = PyStackRef_None;
+            }
+            else {
+                fields[in->field] = PyStackRef_FromPyObjectNew(value);
+            }
+        }
+        if (inner_ok && obj->type != NULL) {
             o = _PyGrail_RecordFromVirtual(obj->type, fields, obj->n);
         }
-        else {
+        else if (inner_ok) {
             o = _PyTuple_FromStackRefStealOnSuccess(fields, obj->n);
             if (o != NULL) {
                 for (int j = 0; j < obj->n; j++) {
@@ -301,6 +319,9 @@ _PyVO_Recover(PyThreadState *tstate, _PyInterpreterFrame *frame,
             }
         }
         if (o == NULL) {
+            if (!inner_ok && !failed && !in_error) {
+                PyErr_NoMemory();
+            }
             failed = 1;
             for (int j = 0; j < obj->n; j++) {
                 _PyStackRef field = fields[j];

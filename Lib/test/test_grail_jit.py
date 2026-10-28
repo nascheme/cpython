@@ -1387,6 +1387,39 @@ def last(n):
     for i in range(n):
         p = make(i)
     return p
+
+@grail.record
+class Seg:
+    a: P
+    b: P
+
+def seg(i):
+    return Seg(make(i), make(i + 1))
+
+def length(s, i, limit):
+    if i >= limit:
+        # Leave the trace with s virtual and its fields held only by s.
+        return s.b.y - s.a.x + int(s.a is s.a) * 100
+    return s.b.y - s.a.x
+
+def segs(n, limit):
+    t = 0
+    for i in range(n):
+        t += length(seg(i), i, limit)
+    return t
+
+def step(i):
+    return make(i), i * 3
+
+def use_step(i):
+    p, k = step(i)
+    return p.y + k
+
+def steps(n):
+    t = 0
+    for i in range(n):
+        t += use_step(i)
+    return t
 """
 
 
@@ -1470,6 +1503,27 @@ class VirtualObjectTests(unittest.TestCase):
         P = m["P"]
         for _ in range(REPEAT):
             self.assertEqual(m["last"](100), P(99, 100))
+
+    def test_nested_record(self):
+        m = load_virtual()
+        n = 100
+        for _ in range(REPEAT):
+            self.assertEqual(m["segs"](n, n), 2 * n)
+        if tier2_enabled():
+            counts = executor_uop_counts(m["segs"])
+            self.assertEqual(counts["_VO_NEW_RECORD"], 3, counts)
+            self.assertNotIn("_CALL_RECORD_CHECKED", counts)
+        for limit in (0, n // 2):
+            self.assertEqual(m["segs"](n, limit), 2 * n + 100 * (n - limit))
+
+    def test_tuple_of_record(self):
+        m = load_virtual()
+        for _ in range(REPEAT):
+            self.assertEqual(m["steps"](100), sum(i + 1 + 3 * i for i in range(100)))
+        if tier2_enabled():
+            uops = executor_uops(m["steps"])
+            self.assertIn("_VO_NEW_TUPLE", uops)
+            self.assertIn("_VO_NEW_RECORD", uops)
 
     @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
     def test_ablation(self):

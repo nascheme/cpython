@@ -91,6 +91,7 @@ typedef struct {
     uint8_t base;           // first shadow slot
     bool escaped;           // stays a real allocation
     bool safe_release;      // releasing its fields runs no code
+    int8_t inner[16];       // candidate held by each field, or -1
 } _PyVOCandidate;
 
 typedef struct {
@@ -306,16 +307,31 @@ typedef struct {
     uint16_t index;         // local index, or stack index from the base
 } _PyVORecoveryLoc;
 
+/* Field field of object obj holds object inner (built earlier). */
 typedef struct {
-    uint16_t nobjs;
+    uint8_t obj;
+    uint8_t field;
+    uint8_t inner;
+} _PyVORecoveryInner;
+
+typedef struct {
+    uint16_t nobjs;         // in construction order: inner objects first
     uint16_t nlocs;
-    _PyVORecoveryObject objs[];   // followed by nlocs _PyVORecoveryLoc
+    uint16_t ninner;
+    _PyVORecoveryObject objs[];   // then nlocs _PyVORecoveryLoc, then
+                                  // ninner _PyVORecoveryInner
 } _PyVORecovery;
 
 static inline const _PyVORecoveryLoc *
 _PyVORecovery_Locs(const _PyVORecovery *rec)
 {
     return (const _PyVORecoveryLoc *)(rec->objs + rec->nobjs);
+}
+
+static inline const _PyVORecoveryInner *
+_PyVORecovery_Inner(const _PyVORecovery *rec)
+{
+    return (const _PyVORecoveryInner *)(_PyVORecovery_Locs(rec) + rec->nlocs);
 }
 
 /* Rebuild the virtual objects of rec and store them in their slots. Returns

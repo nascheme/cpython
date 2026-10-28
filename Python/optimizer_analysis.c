@@ -30,6 +30,7 @@
 #include "pycore_uop_ids.h"
 #include "pycore_range.h"
 #include "pycore_unicodeobject.h"
+#include "pycore_bitutils.h"      // _Py_popcount32()
 #include "pycore_ceval.h"
 #include "pycore_floatobject.h"
 #include "pycore_setobject.h"
@@ -1762,6 +1763,12 @@ vo_escape(JitOptContext *ctx, int i, const char *why)
     DPRINTF(2, "vo: candidate %d (created at %d) escapes: %s\n", i, c->create, why);
     c->escaped = true;
     vo_free_slots(ctx, c);
+    // A real object is built from real fields.
+    for (int k = 0; k < c->n; k++) {
+        if (c->inner[k] >= 0) {
+            vo_escape(ctx, c->inner[k], "outer escapes");
+        }
+    }
 }
 
 static void
@@ -1950,7 +1957,9 @@ vo_is_call_guard(int opcode)
 {
     return opcode == _CHECK_FUNCTION_VERSION ||
            opcode == _CHECK_FUNCTION_EXACT_ARGS ||
-           opcode == _CHECK_STACK_SPACE;
+           opcode == _CHECK_STACK_SPACE ||
+           opcode == _CHECK_IS_NOT_PY_CALLABLE ||
+           opcode == _GUARD_CALLABLE_RECORD;
 }
 
 #define VO_EXIT_FLAGS (HAS_EXIT_FLAG | HAS_DEOPT_FLAG | HAS_PERIODIC_FLAG | HAS_ERROR_FLAG)
@@ -2075,8 +2084,27 @@ vo_add_use(JitOptContext *ctx, int out, int cand, int kind, int field)
     u->field = (uint8_t)field;
 }
 
-/* Try to make the construction just emitted (out_start[0]) a candidate. */
-static void
+/* Plan node p of nodes accepts any conforming record of exact type type. */
+static bool
+vo_plan_accepts(const GrailPlan *nodes, const GrailPlan *p, PyTypeObject *type)
+{
+    uint32_t n = 1;
+    if (p->kind == _PyGrail_PLAN_UNION && p->height == 1) {
+        n = p->n;
+        p = nodes + p->first;
+    }
+    for (uint32_t i = 0; i < n; i++, p++) {
+        if (p->kind == _PyGrail_PLAN_ANY ||
+            (p->kind == _PyGrail_PLAN_RECORD && p->type == type)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Try to make the construction just emitted (out_start[0]) a candidate.
+ * Live candidates among its arguments become its inner objects. */
+static bool
 vo_new_candidate(JitOptContext *ctx, const VOPre *pre,
                  _PyUOpInstruction *out_start, JitOptRef *stack_pointer)
 {
@@ -2085,35 +2113,56 @@ vo_new_candidate(JitOptContext *ctx, const VOPre *pre,
     PyTypeObject *type = NULL;
     int n = pre->oparg;
     JitOptRef res;
+    int first_arg = 0;
+    uint64_t check = 0;
     if (opcode == _CALL_RECORD || opcode == _CALL_RECORD_CHECKED) {
         PyObject *callable = sym_get_const(ctx, pre->inputs[0]);
         if (callable == NULL || !PyType_Check(callable) ||
             !_PyGrail_IsRecordTypeFast((PyTypeObject *)callable)) {
-            return;
+            return false;
         }
         type = (PyTypeObject *)callable;
-        uint64_t check = opcode == _CALL_RECORD_CHECKED ? out_start->operand0 : UINT64_MAX;
+        check = opcode == _CALL_RECORD_CHECKED ? out_start->operand0 : UINT64_MAX;
         if (n > VO_MAX_FIELDS || !vo_record_checks_pure(type, n, check)) {
-            return;
+            return false;
         }
         res = stack_pointer[-2];
+        first_arg = 2;
     }
     else if (opcode == _BUILD_TUPLE) {
         if (n < 1 || n > VO_MAX_FIELDS) {
-            return;
+            return false;
         }
         res = stack_pointer[-1];
     }
     else {
-        return;
+        return false;
     }
-    if (vo->ncands >= VO_MAX_CANDIDATES) {
-        return;
+    if (vo->ncands >= VO_MAX_CANDIDATES || pre->npop != first_arg + n) {
+        return false;
     }
-    for (int i = 0; i < pre->npop; i++) {
+    int8_t inner[VO_MAX_FIELDS];
+    for (int k = 0; k < n; k++) {
+        inner[k] = -1;
+        int c = pre->input_cand[first_arg + k];
+        if (c < 0 || !vo_live(&vo->cands[c])) {
+            continue;
+        }
+        if (type != NULL && (check & ((uint64_t)1 << k))) {
+            // The plan check must pass for the virtual record: it always
+            // conforms, so only its type matters.
+            const GrailPlan *nodes = _PyGrail_PlanNodes(type);
+            PyTypeObject *itype = vo->cands[c].type;
+            if (itype == NULL || !vo_plan_accepts(nodes, &nodes[k], itype)) {
+                vo_escape(ctx, c, "plan of outer field");
+                continue;
+            }
+        }
+        inner[k] = (int8_t)c;
+    }
+    for (int i = 0; i < first_arg; i++) {
         if (pre->input_cand[i] >= 0) {
-            // Nested virtual objects are not supported yet.
-            return;
+            return false;
         }
     }
     int base = -1;
@@ -2125,7 +2174,7 @@ vo_new_candidate(JitOptContext *ctx, const VOPre *pre,
         }
     }
     if (base < 0) {
-        return;
+        return false;
     }
     bool safe = true;
     if (type != NULL) {
@@ -2148,9 +2197,14 @@ vo_new_candidate(JitOptContext *ctx, const VOPre *pre,
     c->base = (uint8_t)base;
     c->escaped = false;
     c->safe_release = safe;
+    memcpy(c->inner, inner, sizeof(inner));
+    for (int k = n; k < VO_MAX_FIELDS; k++) {
+        c->inner[k] = -1;
+    }
     vo->shadow_used |= mask << base;
     vo_add_use(ctx, c->create, i, VO_USE_NEW, 0);
     DPRINTF(2, "vo: candidate %d at %d, %d fields, base %d\n", i, c->create, n, base);
+    return true;
 }
 
 /* Record the locations of the live candidates (from pre) for the output
@@ -2239,6 +2293,11 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                                       (Py_ssize_t)sizeof(PyObject *));
                     if (field >= 0 && field < cand->n) {
                         vo_add_use(ctx, out, c, VO_USE_LOAD, field);
+                        int inner = cand->inner[field];
+                        if (inner >= 0 && vo_live(&vo->cands[inner])) {
+                            // The loaded value is the inner object.
+                            stack_pointer[-2] = PyJitRef_Wrap(vo->cands[inner].sym);
+                        }
                         continue;
                     }
                 }
@@ -2256,6 +2315,21 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                 if (cand->type == NULL && cand->n == pre->oparg &&
                     (vo_is_tuple_unpack(op) || op == _UNPACK_SEQUENCE)) {
                     vo_add_use(ctx, out, c, VO_USE_UNPACK, 0);
+                    // Item j ends up at stack_pointer[-1 - j].
+                    for (int j = 0; j < cand->n; j++) {
+                        int inner = cand->inner[j];
+                        if (inner >= 0 && vo_live(&vo->cands[inner])) {
+                            stack_pointer[-1 - j] = PyJitRef_Wrap(vo->cands[inner].sym);
+                        }
+                    }
+                    continue;
+                }
+            }
+            else if (opcode == _CALL_RECORD || opcode == _CALL_RECORD_CHECKED ||
+                     opcode == _BUILD_TUPLE) {
+                // An argument becomes an inner object if the result becomes
+                // a candidate (vo_new_candidate()).
+                if (i >= (opcode == _BUILD_TUPLE ? 0 : 2)) {
                     continue;
                 }
             }
@@ -2380,8 +2454,14 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
     }
     /* A new candidate. */
     if ((opcode == _CALL_RECORD || opcode == _CALL_RECORD_CHECKED ||
-         opcode == _BUILD_TUPLE) && nout == 1 && !pre->inputs_overflow) {
-        vo_new_candidate(ctx, pre, out_start, stack_pointer);
+         opcode == _BUILD_TUPLE) && !pre->inputs_overflow) {
+        if (nout != 1 || !vo_new_candidate(ctx, pre, out_start, stack_pointer)) {
+            for (int i = 0; i < pre->npop; i++) {
+                if (pre->input_cand[i] >= 0) {
+                    vo_escape(ctx, pre->input_cand[i], "outer stays real");
+                }
+            }
+        }
     }
     if (opcode == _INIT_CALL_PY_EXACT_ARGS) {
         vo->pending_frame = true;
@@ -2396,12 +2476,22 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
     bool may_die = vo_is_pop(opcode) || vo_is_tuple_unpack(opcode) ||
                    opcode == _UNPACK_SEQUENCE || opcode == _RETURN_VALUE ||
                    opcode == _DELETE_FAST;
-    for (int i = 0; i < vo->ncands; i++) {
+    // Outer objects first: an inner one lives while a live outer holds it.
+    for (int i = vo->ncands - 1; i >= 0; i--) {
         _PyVOCandidate *c = &vo->cands[i];
         if (!vo_live(c) || c->create >= out) {
             continue;
         }
-        if (vo_scan(ctx, stack_pointer, NULL, i)) {
+        bool held = false;
+        for (int o = i + 1; o < vo->ncands && !held; o++) {
+            _PyVOCandidate *outer = &vo->cands[o];
+            if (vo_live(outer)) {
+                for (int k = 0; k < outer->n; k++) {
+                    held |= outer->inner[k] == i;
+                }
+            }
+        }
+        if (held || vo_scan(ctx, stack_pointer, NULL, i)) {
             continue;
         }
         if (!may_die) {
@@ -2416,6 +2506,39 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             vo_escape_all(ctx, "unsafe release");
         }
     }
+}
+
+/* The virtual objects a recovery at snap rebuilds: those in its locations
+ * and, transitively, the virtual inner objects they hold. Sets *nlocs and
+ * *ninner, the counts of locations and of inner fields. */
+static uint32_t
+vo_snapshot_objects(_PyVOState *vo, _PyVOSnapshot *snap, int *nlocs, int *ninner)
+{
+    uint32_t mask = 0;
+    *nlocs = 0;
+    *ninner = 0;
+    for (int k = 0; k < snap->nlocs; k++) {
+        int c = vo->locs[snap->first_loc + k].cand;
+        if (!vo->cands[c].escaped) {
+            mask |= 1u << c;
+            (*nlocs)++;
+        }
+    }
+    // Outer objects have higher indices than their inner ones.
+    for (int c = vo->ncands - 1; c >= 0; c--) {
+        if (!(mask & (1u << c))) {
+            continue;
+        }
+        _PyVOCandidate *cand = &vo->cands[c];
+        for (int k = 0; k < cand->n; k++) {
+            int inner = cand->inner[k];
+            if (inner >= 0 && !vo->cands[inner].escaped) {
+                mask |= 1u << inner;
+                (*ninner)++;
+            }
+        }
+    }
+    return mask;
 }
 
 /* Rewrite the optimized trace for the candidates that did not escape:
@@ -2447,24 +2570,15 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
     int nmarkers = 0;
     for (int s = 0; s < vo->nsnaps; s++) {
         _PyVOSnapshot *snap = &vo->snaps[s];
-        uint32_t seen = 0;
-        int nobjs = 0, nlocs = 0;
-        for (int k = 0; k < snap->nlocs; k++) {
-            _PyVOLoc *loc = &vo->locs[snap->first_loc + k];
-            if (vo->cands[loc->cand].escaped) {
-                continue;
-            }
-            nlocs++;
-            if (!(seen & (1u << loc->cand))) {
-                seen |= 1u << loc->cand;
-                nobjs++;
-            }
-        }
+        int nlocs, ninner;
+        uint32_t mask = vo_snapshot_objects(vo, snap, &nlocs, &ninner);
         if (nlocs == 0) {
             continue;
         }
-        size_t size = sizeof(_PyVORecovery) + nobjs * sizeof(_PyVORecoveryObject) +
-                      nlocs * sizeof(_PyVORecoveryLoc);
+        size_t size = sizeof(_PyVORecovery) +
+                      _Py_popcount32(mask) * sizeof(_PyVORecoveryObject) +
+                      nlocs * sizeof(_PyVORecoveryLoc) +
+                      ninner * sizeof(_PyVORecoveryInner);
         arena_size += (size + 7) & ~(size_t)7;
         for (int i = snap->out_start; i < snap->out_end; i++) {
             if (_PyUop_Flags[buffer[i].opcode] & VO_EXIT_FLAGS) {
@@ -2508,31 +2622,26 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
     for (int s = 0; s < vo->nsnaps; s++) {
         _PyVOSnapshot *snap = &vo->snaps[s];
         int obj_of[VO_MAX_CANDIDATES];
-        for (int i = 0; i < VO_MAX_CANDIDATES; i++) {
-            obj_of[i] = -1;
-        }
-        bool any = false;
-        for (int k = 0; k < snap->nlocs; k++) {
-            any |= !vo->cands[vo->locs[snap->first_loc + k].cand].escaped;
-        }
-        if (!any) {
+        int nlocs, ninner;
+        uint32_t mask = vo_snapshot_objects(vo, snap, &nlocs, &ninner);
+        if (nlocs == 0) {
             continue;
         }
         _PyVORecovery *rec = (_PyVORecovery *)next;
         rec->nobjs = 0;
         rec->nlocs = 0;
-        // Objects first, then locations (after the final object count).
-        for (int k = 0; k < snap->nlocs; k++) {
-            _PyVOLoc *loc = &vo->locs[snap->first_loc + k];
-            _PyVOCandidate *c = &vo->cands[loc->cand];
-            if (c->escaped || obj_of[loc->cand] >= 0) {
-                continue;
+        rec->ninner = 0;
+        // Objects in construction order, then locations, then inner fields.
+        for (int c = 0; c < vo->ncands; c++) {
+            obj_of[c] = -1;
+            if (mask & (1u << c)) {
+                _PyVOCandidate *cand = &vo->cands[c];
+                obj_of[c] = rec->nobjs;
+                _PyVORecoveryObject *obj = &rec->objs[rec->nobjs++];
+                obj->type = cand->type;
+                obj->base = cand->base;
+                obj->n = cand->n;
             }
-            obj_of[loc->cand] = rec->nobjs;
-            _PyVORecoveryObject *obj = &rec->objs[rec->nobjs++];
-            obj->type = c->type;
-            obj->base = c->base;
-            obj->n = c->n;
         }
         _PyVORecoveryLoc *locs = (_PyVORecoveryLoc *)(rec->objs + rec->nobjs);
         for (int k = 0; k < snap->nlocs; k++) {
@@ -2546,7 +2655,24 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
             l->is_stack = loc->is_stack;
             l->index = loc->index;
         }
-        size_t size = (char *)(locs + rec->nlocs) - next;
+        _PyVORecoveryInner *inner = (_PyVORecoveryInner *)(locs + rec->nlocs);
+        for (int c = 0; c < vo->ncands; c++) {
+            if (!(mask & (1u << c))) {
+                continue;
+            }
+            _PyVOCandidate *cand = &vo->cands[c];
+            for (int k = 0; k < cand->n; k++) {
+                int ic = cand->inner[k];
+                if (ic >= 0 && !vo->cands[ic].escaped) {
+                    _PyVORecoveryInner *in = &inner[rec->ninner++];
+                    in->obj = (uint8_t)obj_of[c];
+                    in->field = (uint8_t)k;
+                    in->inner = (uint8_t)obj_of[ic];
+                }
+            }
+        }
+        assert(rec->ninner == ninner);
+        size_t size = (char *)(inner + rec->ninner) - next;
         next += (size + 7) & ~(size_t)7;
         for (int i = snap->out_start; i < snap->out_end; i++) {
             info_of[i] = rec;
@@ -2578,6 +2704,13 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                         uint64_t check = inst.opcode == _CALL_RECORD ?
                             UINT64_MAX : inst.operand0;
                         check &= ((uint64_t)1 << c->n) - 1;
+                        for (int k = 0; k < c->n; k++) {
+                            // A virtual inner record conforms to the plan
+                            // (checked in vo_new_candidate()).
+                            if (c->inner[k] >= 0 && !vo->cands[c->inner[k]].escaped) {
+                                check &= ~((uint64_t)1 << k);
+                            }
+                        }
                         inst.opcode = _VO_NEW_RECORD;
                         inst.operand0 = check | ((uint64_t)c->base << 32);
                         inst.operand1 = (uintptr_t)_PyGrail_PlanNodes(c->type);
