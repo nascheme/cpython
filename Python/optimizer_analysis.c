@@ -2281,6 +2281,7 @@ vo_new_candidate(JitOptContext *ctx, const VOPre *pre,
     c->safe_release = safe;
     c->consumed = false;
     c->origin = false;
+    c->defer_release = false;
     memcpy(c->inner, inner, sizeof(inner));
     for (int k = n; k < VO_MAX_FIELDS; k++) {
         c->inner[k] = -1;
@@ -2367,6 +2368,58 @@ vo_input_release_safe(JitOptContext *ctx, const VOPre *pre, int i,
     return (c >= 0 && vo_live(&ctx->vo.cands[c])) ||
            vo_decref_safe(ctx, pre->inputs[i]) ||
            vo_sym_present(ctx, stack_pointer, PyJitRef_Unwrap(pre->inputs[i]));
+}
+
+/* _CALL_KW_RECORD_REPLACE (record_replace_impl()) runs no code: a source
+ * of known record type, constant keyword names, leaf plans for the
+ * replaced fields (all fields unless the source is known to conform) and
+ * inputs whose release runs no code. */
+static bool
+vo_replace_pure(JitOptContext *ctx, const VOPre *pre, JitOptRef *stack_pointer)
+{
+    if (pre->inputs_overflow || pre->npop < 4) {
+        return false;
+    }
+    JitOptRef source = pre->inputs[2];
+    PyTypeObject *type = sym_get_type(source);
+    PyObject *names = sym_get_const(ctx, pre->inputs[pre->npop - 1]);
+    if (type == NULL || !_PyGrail_IsRecordTypeFast(type) ||
+        names == NULL || !PyTuple_CheckExact(names)) {
+        return false;
+    }
+    // A record type's __match_args__ are its field names.
+    PyObject *fields = _PyType_Lookup(type, &_Py_ID(__match_args__));
+    if (fields == NULL || !PyTuple_CheckExact(fields)) {
+        return false;
+    }
+    Py_ssize_t n = PyTuple_GET_SIZE(fields);
+    if (n > 64) {
+        return false;
+    }
+    uint64_t check = UINT64_MAX;
+    if (grail_known_conforming(ctx, source)) {
+        check = 0;
+        for (Py_ssize_t k = 0; k < PyTuple_GET_SIZE(names); k++) {
+            PyObject *key = PyTuple_GET_ITEM(names, k);
+            Py_ssize_t i = 0;
+            while (i < n && PyTuple_GET_ITEM(fields, i) != key) {
+                i++;
+            }
+            if (i == n) {
+                return false;
+            }
+            check |= (uint64_t)1 << i;
+        }
+    }
+    if (!vo_record_checks_pure(type, (int)n, check)) {
+        return false;
+    }
+    for (int i = 0; i < pre->npop; i++) {
+        if (!vo_input_release_safe(ctx, pre, i, stack_pointer)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /* A fused float uop: _GRAIL_FLOAT_PROGRAM reads the fields of record
@@ -2514,6 +2567,7 @@ vo_fused_candidate(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_
     c->safe_release = true;
     c->consumed = false;
     c->origin = false;
+    c->defer_release = false;
     for (int k = 0; k < VO_MAX_FIELDS; k++) {
         c->inner[k] = -1;
     }
@@ -2841,11 +2895,14 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             if (vo_is_pop(op)) {
                 // A pop, or a guard that pops, folded to a pop
                 // (eliminate_pop_guard()).
-                bool pops = (vo_is_pop(opcode) || opcode == _GUARD_IS_NONE_POP ||
-                             opcode == _GUARD_IS_NOT_NONE_POP ||
-                             opcode == _GUARD_IS_TRUE_POP ||
-                             opcode == _GUARD_IS_FALSE_POP) &&
-                            nout == 1 && pre->npop == 1;
+                bool pops = ((vo_is_pop(opcode) || opcode == _GUARD_IS_NONE_POP ||
+                              opcode == _GUARD_IS_NOT_NONE_POP ||
+                              opcode == _GUARD_IS_TRUE_POP ||
+                              opcode == _GUARD_IS_FALSE_POP) && nout == 1 &&
+                             pre->npop == 1) ||
+                            // _TO_BOOL_<type> + a pop of the input.
+                            (opcode == _TO_BOOL && pre->npop == 1 &&
+                             !pre->inputs_overflow);
                 exempt = pops &&
                          (vo_decref_safe(ctx, pre->inputs[0]) ||
                           vo_sym_present(ctx, stack_pointer,
@@ -2920,6 +2977,25 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                          t == &PyDict_Type || t == &PySet_Type ||
                          t == &PyFrozenSet_Type;
             }
+            else if (op == _CALL_KW_RECORD_REPLACE) {
+                exempt = vo_replace_pure(ctx, pre, stack_pointer);
+            }
+            else if (op == _BINARY_OP_SUBSCR_LIST_INT || op == _BINARY_OP_SUBSCR_TUPLE_INT) {
+                // Releases the container and the index.
+                exempt = vo_input_release_safe(ctx, pre, 0, stack_pointer) &&
+                         vo_input_release_safe(ctx, pre, 1, stack_pointer);
+            }
+            else if (op == _BINARY_OP_SUBSCR_SSIZE_ITEM) {
+                // A registered sequence's [int] item function (C; drafts
+                // only allocate children), as for _BINARY_OP_EXTEND.
+                exempt = true;
+            }
+            else if (op == _LOAD_ATTR_RECORD_DRAFT) {
+                // The load only allocates (child drafts, see
+                // record_draft_load() in Modules/_grail_draft.c); releasing
+                // the draft must not free it.
+                exempt = vo_input_release_safe(ctx, pre, 0, stack_pointer);
+            }
             else if (op == _STORE_ATTR_RECORD_DRAFT && nout == 1 &&
                      vo->region_deferred < _Py_VO_DEFERRED_SIZE && vo->ndefers < 256) {
                 // The old field value's release can wait
@@ -2961,8 +3037,8 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                 if (vo_any_live(ctx)) {
                     PyTypeObject *t = pre->npop > 0 && !pre->inputs_overflow ?
                         sym_get_type(pre->inputs[pre->npop - 1]) : NULL;
-                    DPRINTF(2, "vo: barrier %s (top input %s)\n", _PyOpcode_uop_name[op],
-                            t ? t->tp_name : "?");
+                    DPRINTF(2, "vo: barrier %s (top input %s) in %s\n", _PyOpcode_uop_name[op],
+                            t ? t->tp_name : "?", _PyOpcode_uop_name[opcode]);
                 }
                 vo_escape_all(ctx, "barrier");
                 break;
@@ -3089,7 +3165,16 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             continue;
         }
         if (!c->safe_release) {
-            vo_escape_all(ctx, "unsafe release");
+            // While others are live, its fields' releases wait for
+            // _VO_FLUSH, as deferred pops do.
+            if (vo_any_live(ctx) && vo->region_deferred + c->n <= _Py_VO_DEFERRED_SIZE) {
+                c->defer_release = true;
+                vo->region_deferred += c->n;
+                vo->ndefer_releases++;
+            }
+            else {
+                vo_escape_all(ctx, "unsafe release");
+            }
         }
     }
     if (!vo_any_live(ctx)) {
@@ -3391,7 +3476,7 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                 mv->operand1 = 0;
             }
             if (!c->escaped && c->death == i && !c->consumed) {
-                if (pending_flush && !c->safe_release) {
+                if (pending_flush && !c->safe_release && !c->defer_release) {
                     // Keep the order of the releases.
                     _PyUOpInstruction *f = &buffer[out++];
                     *f = inst;
@@ -3407,9 +3492,13 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                 r->operand0 = c->base | ((uint64_t)(c->type != NULL) << 32) |
                               ((uint64_t)(c->type != NULL &&
                                           _PyGrail_FloatRecordFieldCount(c->type) == c->n) << 33) |
-                              ((uint64_t)c->origin << 34);
+                              ((uint64_t)c->origin << 34) |
+                              ((uint64_t)c->defer_release << 35);
                 r->operand1 = c->type != NULL ?
                     (uintptr_t)_PyGrail_PlanNodes(c->type) : 0;
+                if (c->defer_release) {
+                    pending_flush = true;
+                }
             }
         }
         if (pending_flush && !live) {
@@ -3622,6 +3711,7 @@ optimize_uops(
         c->safe_release = true;
         c->consumed = false;
         c->origin = true;
+        c->defer_release = false;
         for (int k = 0; k < VO_MAX_FIELDS; k++) {
             c->inner[k] = -1;
         }
@@ -3904,7 +3994,7 @@ _Py_uop_analyze_and_optimize(
         _PyVOState *vo = &ctx->vo;
         bool ok = length > 0 && vo->seed >= 0 && !vo->cands[vo->seed].escaped &&
                   vo->carried >= 0 && !vo->cands[vo->carried].escaped &&
-                  vo->ndefers == 0 && vo->nguards == 0 &&
+                  vo->ndefers == 0 && vo->nguards == 0 && vo->ndefer_releases == 0 &&
                   output[0].opcode == _START_EXECUTOR;
         DPRINTF(2, "vo: loop-carried pass %s (defers %d, guards %d)\n",
                 ok ? "kept" : "dropped", vo->ndefers, vo->nguards);

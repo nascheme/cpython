@@ -1521,6 +1521,18 @@ def concats(n, acc):
         acc = concat_step(acc, i)
     return acc
 
+def holder(i, objs):
+    p = make(i)
+    with_d(i, objs[i])
+    q = make(i + 1)
+    return p.x + q.y
+
+def holders(n, objs):
+    t = 0
+    for i in range(n):
+        t += holder(i, objs)
+    return t
+
 def matcher(n, limit):
     t = 0
     for i in range(n):
@@ -1901,6 +1913,21 @@ class VirtualObjectTests(unittest.TestCase):
             threading.setprofile_all_threads(None)
         # The loop may also end before the profiler is installed.
         self.assertTrue(all(type(a) is F for a in seen))
+
+    def test_deferred_field_release(self):
+        # A virtual tuple holding an object of unknown type dies while p is
+        # virtual: the release of its items waits for _VO_FLUSH.
+        m = load_virtual()
+        LOG, Logged = m["LOG"], m["Logged"]
+        for _ in range(REPEAT):
+            objs = [Logged() for _ in range(100)]
+            self.assertEqual(m["holders"](100, objs), sum(2 * i + 2 for i in range(100)))
+            del LOG[:]
+            del objs
+            self.assertEqual(LOG, ["del"] * 100)
+        if tier2_enabled():
+            self.assertGreaterEqual(executor_uop_counts(m["holder"])["_VO_NEW_RECORD"] +
+                                    executor_uop_counts(m["holders"])["_VO_NEW_RECORD"], 2)
 
     def test_tuple_of_record(self):
         m = load_virtual()

@@ -94,6 +94,8 @@ typedef struct {
     bool consumed;          // a fused uop took over its fields at its death,
                             // or it is carried into the next iteration
                             // (no release)
+    bool defer_release;     // its release (unsafe) goes to the deferred
+                            // releases (_VO_RELEASE bit 35)
     bool origin;            // slot base + n holds the real object it was
                             // made from at the trace's entry, or NULL
     int8_t inner[16];       // candidate held by each field, or -1
@@ -127,6 +129,7 @@ typedef struct {
     bool unknown_depth;     // returned to a frame whose stack depth is not
                             // yet known (until _GUARD_IP_RETURN_VALUE)
     bool dropped_uop;       // a fusion replaced the previous output uop
+    int ndefer_releases;    // candidates with defer_release
     int steal_from;         // candidate whose slots the current element-wise
                             // uop takes over, or -1
     /* Loop-carried virtual objects (see vo_carry()). */

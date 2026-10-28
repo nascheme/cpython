@@ -6106,7 +6106,17 @@ dummy_func(
                 shadow[oparg] = PyStackRef_NULL;
                 PyStackRef_XCLOSE(origin);
             }
-            if ((bits >> 33) & 1) {
+            if ((bits >> 35) & 1) {
+                // Releases that could run code wait for _VO_FLUSH.
+                for (int i = 0; i < oparg; i++) {
+                    _PyStackRef field = shadow[i];
+                    shadow[i] = PyStackRef_NULL;
+                    if (!PyStackRef_IsNull(field) && PyStackRef_RefcountOnObject(field)) {
+                        _PyVO_DeferDecref(tstate, PyStackRef_AsPyObjectSteal(field));
+                    }
+                }
+            }
+            else if ((bits >> 33) & 1) {
                 // All fields are exact floats.
                 for (int i = 0; i < oparg; i++) {
                     _PyStackRef field = shadow[i];

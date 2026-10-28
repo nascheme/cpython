@@ -22166,7 +22166,16 @@
                 PyStackRef_XCLOSE(origin);
                 stack_pointer = _PyFrame_GetStackPointer(frame);
             }
-            if ((bits >> 33) & 1) {
+            if ((bits >> 35) & 1) {
+                for (int i = 0; i < oparg; i++) {
+                    _PyStackRef field = shadow[i];
+                    shadow[i] = PyStackRef_NULL;
+                    if (!PyStackRef_IsNull(field) && PyStackRef_RefcountOnObject(field)) {
+                        _PyVO_DeferDecref(tstate, PyStackRef_AsPyObjectSteal(field));
+                    }
+                }
+            }
+            else if ((bits >> 33) & 1) {
                 for (int i = 0; i < oparg; i++) {
                     _PyStackRef field = shadow[i];
                     shadow[i] = PyStackRef_NULL;
