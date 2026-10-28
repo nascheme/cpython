@@ -1263,7 +1263,29 @@
             left = stack_pointer[-2];
             PyObject *descr = (PyObject *)this_instr->operand0;
             _PyBinaryOpSpecializationDescr *d = (_PyBinaryOpSpecializationDescr *)descr;
-            if (d != NULL && _PyBinaryOp_IsFloatTrueDiv(d)) {
+            PyTypeObject *lt = sym_get_type(left);
+            bool speculative = lt == NULL;
+            if (speculative) {
+                lt = sym_get_probable_type(left);
+            }
+            if (d != NULL && d->guard != NULL && lt != NULL &&
+                _PySpecialize_SubscriptItemFor(d, lt) != NULL &&
+                (!speculative || lt->tp_version_tag != 0 ||
+                    PyUnstable_Type_AssignVersionTag(lt))) {
+                if (speculative) {
+                    ADD_OP(_GUARD_NOS_OBJ_TYPE_VERSION, 0, lt->tp_version_tag);
+                    sym_set_type(left, lt);
+                    watch_type(lt, dependencies);
+                }
+                if (!sym_is_compact_int(right)) {
+                    ADD_OP(_GUARD_TOS_INT, 0, 0);
+                    sym_set_compact_int(right);
+                }
+                if (ctx->out_buffer.next == out_ptr) {
+                    ADD_OP(_NOP, 0, 0);
+                }
+            }
+            else if (d != NULL && _PyBinaryOp_IsFloatTrueDiv(d)) {
                 if (!sym_matches_type(right, &PyFloat_Type)) {
                     ADD_OP(_GUARD_TOS_FLOAT, 0, 0);
                     sym_set_type(right, &PyFloat_Type);
@@ -1307,7 +1329,18 @@
             _PyBinaryOpSpecializationDescr *d = (_PyBinaryOpSpecializationDescr *)descr;
             l = left;
             r = right;
-            if (d != NULL && _PyBinaryOp_IsFloatTrueDiv(d)) {
+            PyTypeObject *lt = sym_get_type(left);
+            CHECK_STACK_BOUNDS(-2);
+            stack_pointer += -2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            ssizeargfunc item = d != NULL && d->guard != NULL && lt != NULL &&
+            sym_is_compact_int(right) ?
+            _PySpecialize_SubscriptItemFor(d, lt) : NULL;
+            if (item != NULL) {
+                ADD_OP(_BINARY_OP_SUBSCR_SSIZE_ITEM, 0, (uintptr_t)item);
+                res = sym_new_not_null(ctx);
+            }
+            else if (d != NULL && _PyBinaryOp_IsFloatTrueDiv(d)) {
                 assert(sym_matches_type(left, &PyFloat_Type));
                 assert(sym_matches_type(right, &PyFloat_Type));
                 if (PyJitRef_IsUnique(left)) {
@@ -1336,6 +1369,26 @@
             else {
                 res = sym_new_not_null(ctx);
             }
+            CHECK_STACK_BOUNDS(3);
+            stack_pointer[0] = res;
+            stack_pointer[1] = l;
+            stack_pointer[2] = r;
+            stack_pointer += 3;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _GUARD_NOS_OBJ_TYPE_VERSION: {
+            break;
+        }
+
+        case _BINARY_OP_SUBSCR_SSIZE_ITEM: {
+            JitOptRef res;
+            JitOptRef l;
+            JitOptRef r;
+            res = sym_new_not_null(ctx);
+            l = sym_new_not_null(ctx);
+            r = sym_new_not_null(ctx);
             CHECK_STACK_BOUNDS(1);
             stack_pointer[-2] = res;
             stack_pointer[-1] = l;
@@ -1345,7 +1398,10 @@
             break;
         }
 
-        case _GUARD_NOS_OBJ_TYPE_VERSION: {
+        case _STORE_SUBSCR_SSIZE_ITEM: {
+            CHECK_STACK_BOUNDS(-3);
+            stack_pointer += -3;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
             break;
         }
 
@@ -1897,6 +1953,32 @@
         }
 
         case _STORE_SUBSCR: {
+            JitOptRef sub;
+            JitOptRef container;
+            JitOptRef v;
+            sub = stack_pointer[-1];
+            container = stack_pointer[-2];
+            v = stack_pointer[-3];
+            PyTypeObject *ct = sym_get_type(container);
+            bool speculative = ct == NULL;
+            if (speculative) {
+                ct = sym_get_probable_type(container);
+            }
+            _PyAssItemFunc ass = ct != NULL ? _PySpecialize_AssItemFor(ct) : NULL;
+            if (ass != NULL && (!speculative || ct->tp_version_tag != 0 ||
+                            PyUnstable_Type_AssignVersionTag(ct))) {
+                if (speculative) {
+                    ADD_OP(_GUARD_NOS_OBJ_TYPE_VERSION, 0, ct->tp_version_tag);
+                    sym_set_type(container, ct);
+                    watch_type(ct, dependencies);
+                }
+                if (!sym_is_compact_int(sub)) {
+                    ADD_OP(_GUARD_TOS_INT, 0, 0);
+                    sym_set_compact_int(sub);
+                }
+                ADD_OP(_STORE_SUBSCR_SSIZE_ITEM, 0, (uintptr_t)ass);
+            }
+            (void)v;
             CHECK_STACK_BOUNDS(-3);
             stack_pointer += -3;
             ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);

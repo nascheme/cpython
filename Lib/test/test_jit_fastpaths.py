@@ -425,5 +425,66 @@ class ReflectedBinaryOpTests(unittest.TestCase):
             change(V(5), None)
 
 
+class ArraySubscriptTests(unittest.TestCase):
+    def test_array_items(self):
+        from array import array
+        ns = {}
+        exec("""if 1:
+            def total(a, idx):
+                t = 0
+                for i in idx:
+                    t += a[i]
+                return t
+            def fill(a, idx, v):
+                for i in idx:
+                    a[i] = v
+            """, ns)
+        total, fill = ns["total"], ns["fill"]
+        idx = list(range(-50, 50))
+        for code in "dil":
+            a = array(code, range(50))
+            for _ in range(REPEAT):
+                self.assertEqual(total(a, idx), 2 * sum(range(50)))
+            for _ in range(REPEAT):
+                fill(a, idx, 3)
+            self.assertEqual(list(a), [3] * 50)
+        if tier2_enabled():
+            self.assertIn("_BINARY_OP_SUBSCR_SSIZE_ITEM", executor_uops(total))
+            self.assertIn("_STORE_SUBSCR_SSIZE_ITEM", executor_uops(fill))
+        with self.assertRaisesRegex(IndexError, "array index out of range"):
+            total(array("i", [1]), [0, 1])
+        with self.assertRaisesRegex(IndexError, "assignment index out of range"):
+            fill(array("i", [1]), [0, -2], 0)
+        with self.assertRaises(OverflowError):
+            fill(array("b", [1, 2]), [0, 1], 1000)
+        with self.assertRaises(TypeError):
+            fill(array("i", [1, 2]), [0, 1], "x")
+
+        class Sub(array):
+            def __getitem__(self, i):
+                return 100
+
+        self.assertEqual(total(Sub("i", range(50)), idx), 100 * 100)
+
+    def test_bytearray_store(self):
+        ns = {}
+        exec("""if 1:
+            def fill(b, idx, v):
+                for i in idx:
+                    b[i] = v
+            """, ns)
+        fill = ns["fill"]
+        for _ in range(REPEAT):
+            b = bytearray(100)
+            fill(b, range(-100, 100), 7)
+            self.assertEqual(b, bytearray([7]) * 100)
+        with self.assertRaisesRegex(ValueError, "range"):
+            fill(bytearray(3), [0, 1], 256)
+        with self.assertRaises(TypeError):
+            fill(bytearray(3), [0, 1], "x")
+        with self.assertRaisesRegex(IndexError, "bytearray index out of range"):
+            fill(bytearray(3), [0, -4], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

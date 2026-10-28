@@ -501,9 +501,60 @@ dummy_func(void) {
         sym_set_type(right, d->rhs_type);
     }
 
+    op(_STORE_SUBSCR, (v, container, sub -- )) {
+        /* Item assignment of a registered container (array.array) or a
+         * bytearray, known or recorded while tracing: guard its type once
+         * and an int index, then call its ass_item directly. */
+        PyTypeObject *ct = sym_get_type(container);
+        bool speculative = ct == NULL;
+        if (speculative) {
+            ct = sym_get_probable_type(container);
+        }
+        _PyAssItemFunc ass = ct != NULL ? _PySpecialize_AssItemFor(ct) : NULL;
+        if (ass != NULL && (!speculative || ct->tp_version_tag != 0 ||
+                            PyUnstable_Type_AssignVersionTag(ct))) {
+            if (speculative) {
+                ADD_OP(_GUARD_NOS_OBJ_TYPE_VERSION, 0, ct->tp_version_tag);
+                sym_set_type(container, ct);
+                watch_type(ct, dependencies);
+            }
+            if (!sym_is_compact_int(sub)) {
+                ADD_OP(_GUARD_TOS_INT, 0, 0);
+                sym_set_compact_int(sub);
+            }
+            ADD_OP(_STORE_SUBSCR_SSIZE_ITEM, 0, (uintptr_t)ass);
+        }
+        (void)v;
+    }
+
     op(_GUARD_BINARY_OP_EXTEND, (descr/4, left, right -- left, right)) {
         _PyBinaryOpSpecializationDescr *d = (_PyBinaryOpSpecializationDescr *)descr;
-        if (d != NULL && _PyBinaryOp_IsFloatTrueDiv(d)) {
+        PyTypeObject *lt = sym_get_type(left);
+        bool speculative = lt == NULL;
+        if (speculative) {
+            lt = sym_get_probable_type(left);
+        }
+        if (d != NULL && d->guard != NULL && lt != NULL &&
+            _PySpecialize_SubscriptItemFor(d, lt) != NULL &&
+            (!speculative || lt->tp_version_tag != 0 ||
+             PyUnstable_Type_AssignVersionTag(lt))) {
+            /* A registered [int] subscript: guard the container's type
+             * (once per trace) and the index, so _BINARY_OP_EXTEND can
+             * call the item function directly. */
+            if (speculative) {
+                ADD_OP(_GUARD_NOS_OBJ_TYPE_VERSION, 0, lt->tp_version_tag);
+                sym_set_type(left, lt);
+                watch_type(lt, dependencies);
+            }
+            if (!sym_is_compact_int(right)) {
+                ADD_OP(_GUARD_TOS_INT, 0, 0);
+                sym_set_compact_int(right);
+            }
+            if (ctx->out_buffer.next == out_ptr) {
+                ADD_OP(_NOP, 0, 0);
+            }
+        }
+        else if (d != NULL && _PyBinaryOp_IsFloatTrueDiv(d)) {
             /* _BINARY_OP_EXTEND becomes _BINARY_OP_TRUEDIV_FLOAT, which
              * raises for a zero divisor itself: only the types need
              * guards. */
@@ -543,7 +594,15 @@ dummy_func(void) {
         _PyBinaryOpSpecializationDescr *d = (_PyBinaryOpSpecializationDescr *)descr;
         l = left;
         r = right;
-        if (d != NULL && _PyBinaryOp_IsFloatTrueDiv(d)) {
+        PyTypeObject *lt = sym_get_type(left);
+        ssizeargfunc item = d != NULL && d->guard != NULL && lt != NULL &&
+                            sym_is_compact_int(right) ?
+                            _PySpecialize_SubscriptItemFor(d, lt) : NULL;
+        if (item != NULL) {
+            ADD_OP(_BINARY_OP_SUBSCR_SSIZE_ITEM, 0, (uintptr_t)item);
+            res = sym_new_not_null(ctx);
+        }
+        else if (d != NULL && _PyBinaryOp_IsFloatTrueDiv(d)) {
             /* As for _BINARY_OP with float operands. */
             assert(sym_matches_type(left, &PyFloat_Type));
             assert(sym_matches_type(right, &PyFloat_Type));

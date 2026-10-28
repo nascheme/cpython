@@ -136,6 +136,8 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_GUARD_BINARY_OP_EXTEND] = HAS_EXIT_FLAG | HAS_ESCAPES_FLAG,
     [_BINARY_OP_EXTEND] = HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_GUARD_NOS_OBJ_TYPE_VERSION] = HAS_EXIT_FLAG,
+    [_BINARY_OP_SUBSCR_SSIZE_ITEM] = HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
+    [_STORE_SUBSCR_SSIZE_ITEM] = HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_BINARY_OP_PY_CHECK_FUNC] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ESCAPES_FLAG,
     [_BINARY_OP_PY_LOAD_FUNC] = HAS_EXIT_FLAG,
     [_BINARY_OP_PY_INIT_CALL] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
@@ -1373,6 +1375,24 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { 2, 1, _GUARD_NOS_OBJ_TYPE_VERSION_r12 },
             { 2, 2, _GUARD_NOS_OBJ_TYPE_VERSION_r22 },
             { 3, 3, _GUARD_NOS_OBJ_TYPE_VERSION_r33 },
+        },
+    },
+    [_BINARY_OP_SUBSCR_SSIZE_ITEM] = {
+        .best = { 2, 2, 2, 2 },
+        .entries = {
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { 3, 2, _BINARY_OP_SUBSCR_SSIZE_ITEM_r23 },
+            { -1, -1, -1 },
+        },
+    },
+    [_STORE_SUBSCR_SSIZE_ITEM] = {
+        .best = { 3, 3, 3, 3 },
+        .entries = {
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { 0, 3, _STORE_SUBSCR_SSIZE_ITEM_r30 },
         },
     },
     [_BINARY_OP_PY_CHECK_FUNC] = {
@@ -4413,6 +4433,8 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_GUARD_NOS_OBJ_TYPE_VERSION_r12] = _GUARD_NOS_OBJ_TYPE_VERSION,
     [_GUARD_NOS_OBJ_TYPE_VERSION_r22] = _GUARD_NOS_OBJ_TYPE_VERSION,
     [_GUARD_NOS_OBJ_TYPE_VERSION_r33] = _GUARD_NOS_OBJ_TYPE_VERSION,
+    [_BINARY_OP_SUBSCR_SSIZE_ITEM_r23] = _BINARY_OP_SUBSCR_SSIZE_ITEM,
+    [_STORE_SUBSCR_SSIZE_ITEM_r30] = _STORE_SUBSCR_SSIZE_ITEM,
     [_BINARY_OP_PY_CHECK_FUNC_r23] = _BINARY_OP_PY_CHECK_FUNC,
     [_BINARY_OP_PY_LOAD_FUNC_r03] = _BINARY_OP_PY_LOAD_FUNC,
     [_BINARY_OP_PY_LOAD_FUNC_r13] = _BINARY_OP_PY_LOAD_FUNC,
@@ -5167,6 +5189,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_BINARY_OP_SUBSCR_LIST_INT_r23] = "_BINARY_OP_SUBSCR_LIST_INT_r23",
     [_BINARY_OP_SUBSCR_LIST_SLICE] = "_BINARY_OP_SUBSCR_LIST_SLICE",
     [_BINARY_OP_SUBSCR_LIST_SLICE_r23] = "_BINARY_OP_SUBSCR_LIST_SLICE_r23",
+    [_BINARY_OP_SUBSCR_SSIZE_ITEM] = "_BINARY_OP_SUBSCR_SSIZE_ITEM",
+    [_BINARY_OP_SUBSCR_SSIZE_ITEM_r23] = "_BINARY_OP_SUBSCR_SSIZE_ITEM_r23",
     [_BINARY_OP_SUBSCR_STR_INT] = "_BINARY_OP_SUBSCR_STR_INT",
     [_BINARY_OP_SUBSCR_STR_INT_r23] = "_BINARY_OP_SUBSCR_STR_INT_r23",
     [_BINARY_OP_SUBSCR_TUPLE_INT] = "_BINARY_OP_SUBSCR_TUPLE_INT",
@@ -6335,6 +6359,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_STORE_SUBSCR_DICT_KNOWN_HASH_r31] = "_STORE_SUBSCR_DICT_KNOWN_HASH_r31",
     [_STORE_SUBSCR_LIST_INT] = "_STORE_SUBSCR_LIST_INT",
     [_STORE_SUBSCR_LIST_INT_r32] = "_STORE_SUBSCR_LIST_INT_r32",
+    [_STORE_SUBSCR_SSIZE_ITEM] = "_STORE_SUBSCR_SSIZE_ITEM",
+    [_STORE_SUBSCR_SSIZE_ITEM_r30] = "_STORE_SUBSCR_SSIZE_ITEM_r30",
     [_SWAP] = "_SWAP",
     [_SWAP_r11] = "_SWAP_r11",
     [_SWAP_2] = "_SWAP_2",
@@ -6667,6 +6693,10 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 2;
         case _GUARD_NOS_OBJ_TYPE_VERSION:
             return 0;
+        case _BINARY_OP_SUBSCR_SSIZE_ITEM:
+            return 2;
+        case _STORE_SUBSCR_SSIZE_ITEM:
+            return 3;
         case _BINARY_OP_PY_CHECK_FUNC:
             return 0;
         case _BINARY_OP_PY_LOAD_FUNC:

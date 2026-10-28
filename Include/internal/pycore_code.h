@@ -527,6 +527,28 @@ typedef struct {
 /* 1 if d is the float / float descriptor (lowered by the tier-2
    optimizer to _BINARY_OP_TRUEDIV_FLOAT and its in-place forms). */
 PyAPI_FUNC(int) _PyBinaryOp_IsFloatTrueDiv(const _PyBinaryOpSpecializationDescr *d);
+
+/* Exact compact-int subscripts of native sequences (array.array), registered
+   at module initialization: BINARY_OP_EXTEND recognizes the container by its
+   mp_subscript and calls item(seq, i), which normalizes a negative i and
+   raises IndexError as the subscript would. */
+PyAPI_FUNC(void) _PySpecialize_RegisterIntSubscript(binaryfunc subscript,
+                                                    ssizeargfunc item);
+/* For the tier-2 optimizer: the item function a registered [int] subscript
+   descriptor calls for a container of type tp, or NULL. */
+PyAPI_FUNC(ssizeargfunc) _PySpecialize_SubscriptItemFor(
+    const _PyBinaryOpSpecializationDescr *d, PyTypeObject *tp);
+
+/* Item assignment for the tier-2 optimizer: a container whose type has
+   mp_ass_subscript ass_subscript can be assigned with ass_item(c, i, v),
+   which normalizes a negative i and raises as the subscript would. */
+typedef int (*_PyAssItemFunc)(PyObject *, Py_ssize_t, PyObject *);
+PyAPI_FUNC(void) _PySpecialize_RegisterAssItem(objobjargproc ass_subscript,
+                                               _PyAssItemFunc ass_item);
+/* The ass_item for containers of type tp (registered, or bytearray's), or
+   NULL. */
+PyAPI_FUNC(_PyAssItemFunc) _PySpecialize_AssItemFor(PyTypeObject *tp);
+PyAPI_FUNC(int) _PyByteArray_AssItem(PyObject *op, Py_ssize_t i, PyObject *value);
 /* Comparison bit masks. */
 
 /* Note this evaluates its arguments twice each */

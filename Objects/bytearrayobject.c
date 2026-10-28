@@ -778,6 +778,14 @@ bytearray_setitem(PyObject *op, Py_ssize_t i, PyObject *value)
     return ret;
 }
 
+/* For the tier-2 optimizer: bytearray[i] = value for an int i, as
+ * bytearray_ass_subscript does it. */
+int
+_PyByteArray_AssItem(PyObject *op, Py_ssize_t i, PyObject *value)
+{
+    return bytearray_setitem(op, i, value);
+}
+
 static int
 bytearray_ass_subscript_lock_held(PyObject *op, PyObject *index, PyObject *values)
 {

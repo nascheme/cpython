@@ -12,6 +12,7 @@
 #include "pycore_call.h"          // _PyObject_CallMethod()
 #include "pycore_ceval.h"         // _PyEval_GetBuiltin()
 #include "pycore_floatobject.h"   // _PY_FLOAT_BIG_ENDIAN
+#include "pycore_code.h"          // _PySpecialize_RegisterIntSubscript()
 #include "pycore_modsupport.h"    // _PyArg_NoKeywords()
 #include "pycore_moduleobject.h"  // _PyModule_GetState()
 #include "pycore_object.h"        // _PyObject_GC_TRACK()
@@ -1217,6 +1218,34 @@ array_ass_item(PyObject *op, Py_ssize_t i, PyObject *v)
         return array_del_slice(a, i, i+1);
     return (*a->ob_descr->setitem)(a, i, v);
 }
+
+#ifndef Py_GIL_DISABLED
+/* a[i] and a[i] = v for an int i, as array_subscr and array_ass_subscr
+ * do it, registered for the specializer and the tier-2 optimizer. */
+static PyObject *
+array_item_normalized(PyObject *op, Py_ssize_t i)
+{
+    if (i < 0) {
+        i += Py_SIZE(op);
+    }
+    return array_item(op, i);
+}
+
+static int
+array_ass_item_normalized(PyObject *op, Py_ssize_t i, PyObject *v)
+{
+    arrayobject *a = arrayobject_CAST(op);
+    if (i < 0) {
+        i += Py_SIZE(a);
+    }
+    if (i < 0 || i >= Py_SIZE(a)) {
+        PyErr_SetString(PyExc_IndexError,
+                        "array assignment index out of range");
+        return -1;
+    }
+    return (*a->ob_descr->setitem)(a, i, v);
+}
+#endif
 
 static int
 setarrayitem(PyObject *a, Py_ssize_t i, PyObject *v)
@@ -3545,6 +3574,10 @@ array_modexec(PyObject *m)
     if (PyModule_AddType(m, state->ArrayType) < 0) {
         return -1;
     }
+#ifndef Py_GIL_DISABLED
+    _PySpecialize_RegisterIntSubscript(array_subscr, array_item_normalized);
+    _PySpecialize_RegisterAssItem(array_ass_subscr, array_ass_item_normalized);
+#endif
 
     typecodes = PyList_New(0);
     if (typecodes == NULL) {

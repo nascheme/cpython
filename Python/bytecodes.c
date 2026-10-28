@@ -1074,7 +1074,8 @@ dummy_func(
         }
 
         macro(BINARY_OP_EXTEND) =
-            unused/1 + _GUARD_BINARY_OP_EXTEND + rewind/-4 + _BINARY_OP_EXTEND + POP_TOP + POP_TOP;
+            unused/1 + _RECORD_NOS_TYPE + _GUARD_BINARY_OP_EXTEND + rewind/-4 +
+            _BINARY_OP_EXTEND + POP_TOP + POP_TOP;
 
         macro(BINARY_OP_INPLACE_ADD_UNICODE) =
             _GUARD_TOS_UNICODE + _GUARD_NOS_UNICODE + unused/5 + _BINARY_OP_INPLACE_ADD_UNICODE;
@@ -1082,6 +1083,39 @@ dummy_func(
         tier2 op(_GUARD_NOS_OBJ_TYPE_VERSION, (type_version/2, nos, unused -- nos, unused)) {
             PyTypeObject *tp = Py_TYPE(PyStackRef_AsPyObjectBorrow(nos));
             EXIT_IF(FT_ATOMIC_LOAD_UINT_RELAXED(tp->tp_version_tag) != type_version);
+        }
+
+        /* [int] subscripts of a registered sequence whose type the
+         * optimizer knows: the item function directly, without the
+         * descriptor's guard and action calls. */
+        tier2 op(_BINARY_OP_SUBSCR_SSIZE_ITEM, (item_fn/4, left, right -- res, l, r)) {
+            PyObject *left_o = PyStackRef_AsPyObjectBorrow(left);
+            PyObject *right_o = PyStackRef_AsPyObjectBorrow(right);
+            assert(_PyLong_CheckExactAndCompact(right_o));
+            volatile ssizeargfunc item_v = (ssizeargfunc)item_fn;
+            STAT_INC(BINARY_OP, hit);
+            PyObject *res_o = item_v(left_o, _PyLong_CompactValue((PyLongObject *)right_o));
+            if (res_o == NULL) {
+                ERROR_NO_POP();
+            }
+            res = PyStackRef_FromPyObjectSteal(res_o);
+            l = left;
+            r = right;
+            DEAD(left);
+            DEAD(right);
+        }
+
+        /* Item assignment of a container whose type the optimizer knows
+         * (see _PySpecialize_AssItemFor): the ass_item function directly. */
+        tier2 op(_STORE_SUBSCR_SSIZE_ITEM, (ass_fn/4, v, container, sub -- )) {
+            PyObject *sub_o = PyStackRef_AsPyObjectBorrow(sub);
+            assert(_PyLong_CheckExactAndCompact(sub_o));
+            volatile _PyAssItemFunc ass_v = (_PyAssItemFunc)ass_fn;
+            int err = ass_v(PyStackRef_AsPyObjectBorrow(container),
+                            _PyLong_CompactValue((PyLongObject *)sub_o),
+                            PyStackRef_AsPyObjectBorrow(v));
+            DECREF_INPUTS();
+            ERROR_IF(err);
         }
 
         /* A Python class's operator method (__add__ etc.), entered directly.
@@ -1551,7 +1585,7 @@ dummy_func(
             ERROR_IF(err);
         }
 
-        macro(STORE_SUBSCR) = _SPECIALIZE_STORE_SUBSCR + _STORE_SUBSCR;
+        macro(STORE_SUBSCR) = _SPECIALIZE_STORE_SUBSCR + _RECORD_NOS_TYPE + _STORE_SUBSCR;
 
         macro(STORE_SUBSCR_LIST_INT) =
             _GUARD_TOS_INT + _GUARD_NOS_LIST + unused/1 + _STORE_SUBSCR_LIST_INT + _POP_TOP_INT + POP_TOP;

@@ -2454,6 +2454,124 @@ LONG_FLOAT_ACTION(compactlong_float_multiply, *)
 LONG_FLOAT_ACTION(compactlong_float_true_div, /)
 #undef LONG_FLOAT_ACTION
 
+/* Exact compact-int subscripts of native sequences registered at module
+ * initialization (array.array): the guard recognizes the type by its
+ * mp_subscript, and item normalizes a negative index and raises IndexError
+ * as the subscript would. A small table, appended to under a lock (each
+ * subscript once) and read without one. */
+#define MAX_REGISTERED_SEQUENCES 4
+static struct {
+    binaryfunc subscript;
+    ssizeargfunc item;
+} registered_sequences[MAX_REGISTERED_SEQUENCES];
+static int registered_sequence_count;
+static PyMutex registered_sequences_mutex;
+
+void
+_PySpecialize_RegisterIntSubscript(binaryfunc subscript, ssizeargfunc item)
+{
+    PyMutex_Lock(&registered_sequences_mutex);
+    int n = registered_sequence_count;
+    int found = 0;
+    for (int k = 0; k < n; k++) {
+        found |= registered_sequences[k].subscript == subscript;
+    }
+    if (!found && n < MAX_REGISTERED_SEQUENCES) {
+        _Py_atomic_store_ptr(&registered_sequences[n].item, (void *)item);
+        _Py_atomic_store_ptr(&registered_sequences[n].subscript, (void *)subscript);
+        _Py_atomic_store_int_release(&registered_sequence_count, n + 1);
+    }
+    PyMutex_Unlock(&registered_sequences_mutex);
+}
+
+/* The registered item function for a container of type tp, or NULL. */
+static inline ssizeargfunc
+registered_item_for(PyTypeObject *tp)
+{
+    PyMappingMethods *mapping = tp->tp_as_mapping;
+    if (mapping == NULL) {
+        return NULL;
+    }
+    int n = _Py_atomic_load_int_acquire(&registered_sequence_count);
+    for (int k = 0; k < n; k++) {
+        if (mapping->mp_subscript ==
+            (binaryfunc)_Py_atomic_load_ptr_relaxed(&registered_sequences[k].subscript)) {
+            return (ssizeargfunc)_Py_atomic_load_ptr_relaxed(&registered_sequences[k].item);
+        }
+    }
+    return NULL;
+}
+
+static int
+registered_int_subscript_guard(PyObject *lhs, PyObject *rhs)
+{
+    return _PyLong_CheckExactAndCompact(rhs) &&
+           registered_item_for(Py_TYPE(lhs)) != NULL;
+}
+
+static PyObject *
+registered_int_subscript(PyObject *lhs, PyObject *rhs)
+{
+    ssizeargfunc item = registered_item_for(Py_TYPE(lhs));
+    return item(lhs, _PyLong_CompactValue((PyLongObject *)rhs));
+}
+
+/* For the tier-2 optimizer: the item function a registered [int]
+ * subscript descriptor calls for a container of type tp, or NULL if d is
+ * not one or tp is not its container type. */
+ssizeargfunc
+_PySpecialize_SubscriptItemFor(const _PyBinaryOpSpecializationDescr *d,
+                               PyTypeObject *tp)
+{
+    if (d->guard == registered_int_subscript_guard) {
+        return registered_item_for(tp);
+    }
+    return NULL;
+}
+
+static struct {
+    objobjargproc ass_subscript;
+    _PyAssItemFunc ass_item;
+} registered_ass[MAX_REGISTERED_SEQUENCES];
+static int registered_ass_count;
+
+void
+_PySpecialize_RegisterAssItem(objobjargproc ass_subscript, _PyAssItemFunc ass_item)
+{
+    PyMutex_Lock(&registered_sequences_mutex);
+    int n = registered_ass_count;
+    int found = 0;
+    for (int k = 0; k < n; k++) {
+        found |= registered_ass[k].ass_subscript == ass_subscript;
+    }
+    if (!found && n < MAX_REGISTERED_SEQUENCES) {
+        _Py_atomic_store_ptr(&registered_ass[n].ass_item, (void *)ass_item);
+        _Py_atomic_store_ptr(&registered_ass[n].ass_subscript, (void *)ass_subscript);
+        _Py_atomic_store_int_release(&registered_ass_count, n + 1);
+    }
+    PyMutex_Unlock(&registered_sequences_mutex);
+}
+
+_PyAssItemFunc
+_PySpecialize_AssItemFor(PyTypeObject *tp)
+{
+    PyMappingMethods *mapping = tp->tp_as_mapping;
+    if (mapping == NULL) {
+        return NULL;
+    }
+    if (mapping->mp_ass_subscript == PyByteArray_Type.tp_as_mapping->mp_ass_subscript) {
+        return _PyByteArray_AssItem;
+    }
+    int n = _Py_atomic_load_int_acquire(&registered_ass_count);
+    for (int k = 0; k < n; k++) {
+        if (mapping->mp_ass_subscript ==
+            (objobjargproc)_Py_atomic_load_ptr_relaxed(&registered_ass[k].ass_subscript)) {
+            return (_PyAssItemFunc)_Py_atomic_load_ptr_relaxed(&registered_ass[k].ass_item);
+        }
+    }
+    return NULL;
+}
+
 /* bytes[int] and bytearray[int] (GIL build: a bytearray may be resized
  * concurrently otherwise): the byte as an int, with bytes_subscript's and
  * bytearray_subscript's index handling and errors. */
@@ -2558,6 +2676,8 @@ static _PyBinaryOpSpecializationDescr binaryop_extend_descrs[] = {
     /* Tuples have no in-place add, so += concatenates too. */
     {NB_INPLACE_ADD, NULL, _PyTuple_Concat, &PyTuple_Type, 0, &PyTuple_Type, &PyTuple_Type},
 
+    /* Registered sequences (array.array) [int] */
+    {NB_SUBSCR, registered_int_subscript_guard, registered_int_subscript, NULL, 0, NULL, NULL},
     /* bytes[int], bytearray[int] */
     {NB_SUBSCR, bytes_int_subscript_guard, bytes_int_subscript, &PyLong_Type, 0, NULL, NULL},
 #ifndef Py_GIL_DISABLED
