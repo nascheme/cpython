@@ -252,12 +252,42 @@ _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
     }
 }
 
-#else
-// TODO: implement Py_DECREF specializations for Py_GIL_DISABLED build
+#elif defined(Py_REF_DEBUG)
 static inline void
 _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 {
     Py_DECREF(op);
+}
+
+#else
+/* As Py_DECREF, but an object owned by this thread with no shared
+ * references is destroyed by `destruct` directly, without
+ * _Py_MergeZeroLocalRefcount and _Py_Dealloc (as in the default build). */
+static inline void
+_Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
+{
+    uint32_t local = _Py_atomic_load_uint32_relaxed(&op->ob_ref_local);
+    if (local == _Py_IMMORTAL_REFCNT_LOCAL) {
+        _Py_DECREF_IMMORTAL_STAT_INC();
+        return;
+    }
+    _Py_DECREF_STAT_INC();
+    if (_Py_IsOwnedByCurrentThread(op)) {
+        local--;
+        _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, local);
+        if (local == 0) {
+            if (_Py_atomic_load_ssize_acquire(&op->ob_ref_shared) == 0) {
+                _PyReftracerTrack(op, PyRefTracer_DESTROY);
+                destruct(op);
+            }
+            else {
+                _Py_MergeZeroLocalRefcount(op);
+            }
+        }
+    }
+    else {
+        _Py_DecRefShared(op);
+    }
 }
 
 static inline int
@@ -473,7 +503,8 @@ static inline void Py_DECREF_MORTAL_SPECIALIZED(PyObject *op, destructor destruc
 #endif
 #else  // Py_GIL_DISABLED
 # define Py_DECREF_MORTAL(op) Py_DECREF(op)
-# define Py_DECREF_MORTAL_SPECIALIZED(op, destruct) Py_DECREF(op)
+# define Py_DECREF_MORTAL_SPECIALIZED(op, destruct) \
+    _Py_DECREF_SPECIALIZED(_PyObject_CAST(op), destruct)
 #endif
 
 /* Inline functions trading binary compatibility for speed:
