@@ -1632,8 +1632,9 @@ int effective_trace_length(_PyUOpInstruction *buffer, int length)
             return i+1-nop_count;
         }
     }
-    Py_FatalError("No terminating instruction");
-    Py_UNREACHABLE();
+    // Stats only: a trace whose terminator is not yet in uncached form
+    // counts in full rather than aborting the process.
+    return length-nop_count;
 }
 #endif
 
