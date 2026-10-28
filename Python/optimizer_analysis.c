@@ -2969,6 +2969,11 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                 // Unpacking a virtual tuple (_VO_UNPACK) releases nothing.
                 exempt = true;
             }
+            else if (op == _GET_ITER_TRAD && (opcode == _GET_ITER || opcode == _GET_ITER_TRAD)) {
+                // An iterator of a range (whose release runs no code).
+                exempt = pre->npop == 1 && !pre->inputs_overflow &&
+                         sym_matches_type(pre->inputs[0], &PyRange_Type);
+            }
             else if (op == _BINARY_SLICE) {
                 // Slicing a builtin sequence with int (or None) bounds runs
                 // no code.
