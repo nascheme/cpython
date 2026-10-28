@@ -30,6 +30,7 @@
 #include "pycore_template.h"
 #include "pycore_tuple.h"
 #include "pycore_unicodeobject.h"
+#include "pycore_uop_metadata.h"     // _PyOpcode_uop_name
 
 #include "pycore_jit.h"
 
@@ -639,6 +640,35 @@ combine_symbol_mask(const symbol_mask src, symbol_mask dest)
     }
 }
 
+/* Profiling aid: with PYTHON_JIT_UOP_MAP=<path>, append "start size name"
+ * (hex address and size) for each uop of each compiled trace, so that
+ * samples in JIT code can be attributed to uops. Addresses of freed
+ * executors may be reused; later lines take precedence. */
+static void
+write_uop_map(const _PyUOpInstruction trace[], size_t length,
+              const jit_state *state, uintptr_t code_end)
+{
+    static int initialized = 0;
+    static FILE *map = NULL;
+    if (!initialized) {
+        initialized = 1;
+        const char *path = Py_GETENV("PYTHON_JIT_UOP_MAP");
+        if (path != NULL && path[0] != '\0') {
+            map = fopen(path, "a");
+        }
+    }
+    if (map == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < length; i++) {
+        uintptr_t start = state->instruction_starts[i];
+        uintptr_t end = i + 1 < length ? state->instruction_starts[i + 1] : code_end;
+        fprintf(map, "%" PRIxPTR " %" PRIxPTR " %s\n", start, end - start,
+                _PyOpcode_uop_name[trace[i].opcode]);
+    }
+    fflush(map);
+}
+
 // Compiles executor in-place. Don't forget to call _PyJIT_Free later!
 int
 _PyJIT_Compile(_PyExecutorObject *executor, const _PyUOpInstruction trace[], size_t length)
@@ -715,6 +745,7 @@ _PyJIT_Compile(_PyExecutorObject *executor, const _PyUOpInstruction trace[], siz
         jit_free(memory, total_size);
         return -1;
     }
+    write_uop_map(trace, length, &state, (uintptr_t)memory + code_size);
     executor->jit_code = memory;
     executor->jit_size = total_size;
     executor->jit_registration = _PyJit_RegisterCode(
