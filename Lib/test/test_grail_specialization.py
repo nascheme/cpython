@@ -100,6 +100,33 @@ class RecordLoadTests(unittest.TestCase):
             sys.settrace(None)
         self.assertEqual(read2(P(9.0, 8.0)), 9.0)
 
+    def test_fused_local_draft_field_load(self):
+        # The fused instruction also reads record draft fields that need no
+        # child draft; others (a record field) take LOAD_ATTR_RECORD_DRAFT.
+        @grail.record
+        class Inner:
+            v: int
+
+        @grail.record
+        class R:
+            a: int
+            inner: Inner
+
+        def total(r, n):
+            with grail.mutate(r) as d:
+                s = 0
+                for i in range(n):
+                    d.a = d.a + 1
+                    s += d.a
+                    s += d.inner.v
+                d.inner.v = 5
+                return s, grail.finish(d)
+
+        r = R(0, Inner(10))
+        for _ in range(20):
+            self.assertEqual(total(r, 50), (sum(range(1, 51)) + 500, R(50, Inner(5))))
+        self.assertEqual(r, R(0, Inner(10)))
+
     def test_callable_field(self):
         @grail.record
         class R:

@@ -10307,22 +10307,50 @@
             _Py_CODEUNIT *attr_instr = this_instr + 1;
             _Py_CODEUNIT word = {.cache = FT_ATOMIC_LOAD_UINT16_RELAXED(*(uint16_t *)attr_instr)};
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(local);
-            if (word.op.code == LOAD_ATTR_RECORD && (word.op.arg & 1) == 0 &&
-                FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(owner_o)->tp_version_tag) ==
-                read_u32(&attr_instr[2].cache)) {
-                uint16_t index = attr_instr[4].cache;
-                PyObject *attr_o = *(PyObject **)((char *)owner_o + index);
-                assert(attr_o != NULL);
+            PyObject *attr_o = NULL;
+            #ifdef _Py_TIER2
+
+            if (tstate->interp->jit) {
+                word.op.code = 0;
+            }
+            #endif
+            if (word.op.code == LOAD_ATTR_RECORD && (word.op.arg & 1) == 0) {
+                if (FT_ATOMIC_LOAD_UINT_RELAXED(Py_TYPE(owner_o)->tp_version_tag) ==
+                    read_u32(&attr_instr[2].cache)) {
+                    uint16_t index = attr_instr[4].cache;
+                    attr_o = *(PyObject **)((char *)owner_o + index);
+                    assert(attr_o != NULL);
+                }
+            }
+            else if (word.op.code == LOAD_ATTR_RECORD_DRAFT && (word.op.arg & 1) == 0) {
+                if (_PyGrail_IsRecordDraft(owner_o) &&
+                    ((_PyGrailDraft *)owner_o)->base_version == read_u32(&attr_instr[2].cache) &&
+                    ((_PyGrailDraft *)owner_o)->root->open_owner == tstate) {
+                    _PyGrailRecordDraft *draft = (_PyGrailRecordDraft *)owner_o;
+                    uint16_t index = attr_instr[4].cache;
+                    attr_o = draft->values[index];
+                    if (attr_o == NULL) {
+                        attr_o = ((RecordObject *)draft->head.base)->fields[index];
+                        PyTypeObject *tp = Py_TYPE(attr_o);
+                        if (!(tp == &PyLong_Type || tp == &PyFloat_Type ||
+                              tp == &PyUnicode_Type || tp == &PyBool_Type ||
+                              tp == &PyTuple_Type || attr_o == Py_None)) {
+                            attr_o = NULL;
+                        }
+                    }
+                }
+            }
+            else if (word.op.code == 0 || (word.op.arg & 1) ||
+                     (_PyOpcode_Deopt[word.op.code] == LOAD_ATTR &&
+                      word.op.code != LOAD_ATTR)) {
+                FT_ATOMIC_STORE_UINT8_RELAXED(this_instr->op.code, LOAD_FAST_BORROW);
+            }
+            if (attr_o != NULL) {
                 value = PyStackRef_FromPyObjectNew(attr_o);
                 STAT_INC(LOAD_ATTR, hit);
                 SKIP_OVER(1 + INLINE_CACHE_ENTRIES_LOAD_ATTR);
             }
             else {
-                if (tstate->interp->jit || (word.op.arg & 1) ||
-                    (_PyOpcode_Deopt[word.op.code] == LOAD_ATTR &&
-                     word.op.code != LOAD_ATTR && word.op.code != LOAD_ATTR_RECORD)) {
-                    FT_ATOMIC_STORE_UINT8_RELAXED(this_instr->op.code, LOAD_FAST_BORROW);
-                }
                 value = PyStackRef_Borrow(local);
             }
             stack_pointer[0] = value;
