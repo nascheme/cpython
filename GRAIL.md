@@ -69,8 +69,10 @@ The `grail` module provides:
   `LOAD_ATTR_RECORD` (field loads at fixed offsets), `CALL_RECORD`
   (positional construction), `CALL_GENERIC` (dispatch without a frame),
   `BINARY_OP_GRAIL` and `BINARY_OP_GRAIL_KERNEL` (registered operators),
-  `MATCH_CLASS_RECORD` and `UNPACK_SEQUENCE_RECORD` (class patterns).  The
-  tier-2 optimizer types field loads from value plans.
+  `MATCH_CLASS_RECORD` and `UNPACK_SEQUENCE_RECORD` (class patterns).
+  Without the JIT, `LOAD_FAST_BORROW_ATTR_RECORD` runs a local load and a
+  following record or draft field load as one instruction.  The tier-2
+  optimizer types field loads from value plans.
 - Immutable values loaded from a shared cell by another thread switch to
   deferred reference counting, so readers do not contend on their
   reference counts.  Registrations retire replaced tables through delayed
