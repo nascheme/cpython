@@ -2991,6 +2991,15 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
         c->death = out + nout;
         vo_free_slots(ctx, c);
         DPRINTF(2, "vo: candidate %d dies before %d\n", i, c->death);
+        if ((vo_is_tuple_unpack(opcode) || opcode == _UNPACK_SEQUENCE) &&
+            pre->npop == 1 && pre->input_cand[0] == i && vo->nuses > 0 &&
+            vo->uses[vo->nuses - 1].cand == i &&
+            vo->uses[vo->nuses - 1].kind == VO_USE_UNPACK) {
+            // Its items move to the stack (_VO_UNPACK): no release.
+            vo->uses[vo->nuses - 1].field = 1;
+            c->consumed = true;
+            continue;
+        }
         if (!c->safe_release) {
             vo_escape_all(ctx, "unsafe release");
         }
@@ -3355,7 +3364,7 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                     break;
                 case VO_USE_UNPACK:
                     inst.opcode = _VO_UNPACK;
-                    inst.operand0 = c->base;
+                    inst.operand0 = c->base | ((uint64_t)use->field << 32);
                     break;
                 case VO_USE_FUSED:
                     vo_set_vbase(&inst, use->field, c->base);

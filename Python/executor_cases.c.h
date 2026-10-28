@@ -21637,11 +21637,24 @@
             values = &stack_pointer[0];
             PyObject *base = (PyObject *)CURRENT_OPERAND0_64();
             assert(PyStackRef_AsPyObjectBorrow(seq) == &_PyVO_Placeholder);
-            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
-            for (int i = oparg; --i >= 0; ) {
-                assert(!PyStackRef_IsNull(shadow[i]));
-                *values++ = PyStackRef_DUP(shadow[i]);
+            uint64_t bits = (uint64_t)(uintptr_t)base;
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uint32_t)bits;
+            if (bits >> 32) {
+                for (int i = oparg; --i >= 0; ) {
+                    assert(!PyStackRef_IsNull(shadow[i]));
+                    *values++ = shadow[i];
+                    shadow[i] = PyStackRef_NULL;
+                }
             }
+            else {
+                for (int i = oparg; --i >= 0; ) {
+                    assert(!PyStackRef_IsNull(shadow[i]));
+                    *values++ = PyStackRef_DUP(shadow[i]);
+                }
+            }
+            _tos_cache0 = PyStackRef_ZERO_BITS;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
             SET_CURRENT_CACHED_VALUES(0);
             stack_pointer += oparg;
             ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);

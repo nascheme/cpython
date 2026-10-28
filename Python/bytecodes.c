@@ -5942,13 +5942,24 @@ dummy_func(
             DEAD(owner);
         }
 
-        /* UNPACK_SEQUENCE of a virtual tuple. */
+        /* UNPACK_SEQUENCE of a virtual tuple. With bit 32 of base, the
+         * tuple dies here and its items move (no release follows). */
         tier2 op(_VO_UNPACK, (base/4, seq -- values[oparg])) {
             assert(PyStackRef_AsPyObjectBorrow(seq) == &_PyVO_Placeholder);
-            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
-            for (int i = oparg; --i >= 0; ) {
-                assert(!PyStackRef_IsNull(shadow[i]));
-                *values++ = PyStackRef_DUP(shadow[i]);
+            uint64_t bits = (uint64_t)(uintptr_t)base;
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uint32_t)bits;
+            if (bits >> 32) {
+                for (int i = oparg; --i >= 0; ) {
+                    assert(!PyStackRef_IsNull(shadow[i]));
+                    *values++ = shadow[i];
+                    shadow[i] = PyStackRef_NULL;
+                }
+            }
+            else {
+                for (int i = oparg; --i >= 0; ) {
+                    assert(!PyStackRef_IsNull(shadow[i]));
+                    *values++ = PyStackRef_DUP(shadow[i]);
+                }
             }
             DEAD(seq);
         }
