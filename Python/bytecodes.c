@@ -6038,22 +6038,24 @@ dummy_func(
             }
         }
 
-        /* Before a _RETURN_VALUE while virtual objects are live: deopt
-         * (rebuilding them) if releasing a local in mask would free it,
-         * which could run code that inspects frames. */
-        tier2 op(_VO_GUARD_LOCALS, (mask/4 --)) {
+        /* Before a _RETURN_VALUE while virtual objects are live: releasing
+         * a local in mask could free it, which could run code that inspects
+         * frames. Such a release waits for _VO_FLUSH, as for
+         * _VO_POP_TOP_DEFER. */
+        tier2 op(_VO_DEFER_LOCALS, (mask/4 --)) {
             uint64_t bits = (uint64_t)(uintptr_t)mask;
-            int freed = 0;
             for (int i = 0; bits != 0; i++, bits >>= 1) {
                 if (bits & 1) {
                     _PyStackRef v = frame->localsplus[i];
                     if (!PyStackRef_IsNull(v) && PyStackRef_RefcountOnObject(v)) {
                         PyObject *o = PyStackRef_AsPyObjectBorrow(v);
-                        freed |= !_Py_IsImmortal(o) && Py_REFCNT(o) == 1;
+                        if (!_Py_IsImmortal(o) && Py_REFCNT(o) == 1) {
+                            frame->localsplus[i] = PyStackRef_NULL;
+                            _PyVO_DeferDecref(tstate, o);
+                        }
                     }
                 }
             }
-            DEOPT_IF(freed);
         }
 
         /* A pop of a value of unknown type while virtual objects are live:

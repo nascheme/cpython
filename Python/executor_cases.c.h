@@ -21837,52 +21837,45 @@
             break;
         }
 
-        case _VO_GUARD_LOCALS_r00: {
+        case _VO_DEFER_LOCALS_r00: {
             CHECK_CURRENT_CACHED_VALUES(0);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
             PyObject *mask = (PyObject *)CURRENT_OPERAND0_64();
             uint64_t bits = (uint64_t)(uintptr_t)mask;
-            int freed = 0;
             for (int i = 0; bits != 0; i++, bits >>= 1) {
                 if (bits & 1) {
                     _PyStackRef v = frame->localsplus[i];
                     if (!PyStackRef_IsNull(v) && PyStackRef_RefcountOnObject(v)) {
                         PyObject *o = PyStackRef_AsPyObjectBorrow(v);
-                        freed |= !_Py_IsImmortal(o) && Py_REFCNT(o) == 1;
+                        if (!_Py_IsImmortal(o) && Py_REFCNT(o) == 1) {
+                            frame->localsplus[i] = PyStackRef_NULL;
+                            _PyVO_DeferDecref(tstate, o);
+                        }
                     }
                 }
-            }
-            if (freed) {
-                UOP_STAT_INC(uopcode, miss);
-                SET_CURRENT_CACHED_VALUES(0);
-                JUMP_TO_JUMP_TARGET();
             }
             SET_CURRENT_CACHED_VALUES(0);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
             break;
         }
 
-        case _VO_GUARD_LOCALS_r11: {
+        case _VO_DEFER_LOCALS_r11: {
             CHECK_CURRENT_CACHED_VALUES(1);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
             _PyStackRef _stack_item_0 = _tos_cache0;
             PyObject *mask = (PyObject *)CURRENT_OPERAND0_64();
             uint64_t bits = (uint64_t)(uintptr_t)mask;
-            int freed = 0;
             for (int i = 0; bits != 0; i++, bits >>= 1) {
                 if (bits & 1) {
                     _PyStackRef v = frame->localsplus[i];
                     if (!PyStackRef_IsNull(v) && PyStackRef_RefcountOnObject(v)) {
                         PyObject *o = PyStackRef_AsPyObjectBorrow(v);
-                        freed |= !_Py_IsImmortal(o) && Py_REFCNT(o) == 1;
+                        if (!_Py_IsImmortal(o) && Py_REFCNT(o) == 1) {
+                            frame->localsplus[i] = PyStackRef_NULL;
+                            _PyVO_DeferDecref(tstate, o);
+                        }
                     }
                 }
-            }
-            if (freed) {
-                UOP_STAT_INC(uopcode, miss);
-                _tos_cache0 = _stack_item_0;
-                SET_CURRENT_CACHED_VALUES(1);
-                JUMP_TO_JUMP_TARGET();
             }
             _tos_cache0 = _stack_item_0;
             SET_CURRENT_CACHED_VALUES(1);
@@ -21890,29 +21883,24 @@
             break;
         }
 
-        case _VO_GUARD_LOCALS_r22: {
+        case _VO_DEFER_LOCALS_r22: {
             CHECK_CURRENT_CACHED_VALUES(2);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
             _PyStackRef _stack_item_0 = _tos_cache0;
             _PyStackRef _stack_item_1 = _tos_cache1;
             PyObject *mask = (PyObject *)CURRENT_OPERAND0_64();
             uint64_t bits = (uint64_t)(uintptr_t)mask;
-            int freed = 0;
             for (int i = 0; bits != 0; i++, bits >>= 1) {
                 if (bits & 1) {
                     _PyStackRef v = frame->localsplus[i];
                     if (!PyStackRef_IsNull(v) && PyStackRef_RefcountOnObject(v)) {
                         PyObject *o = PyStackRef_AsPyObjectBorrow(v);
-                        freed |= !_Py_IsImmortal(o) && Py_REFCNT(o) == 1;
+                        if (!_Py_IsImmortal(o) && Py_REFCNT(o) == 1) {
+                            frame->localsplus[i] = PyStackRef_NULL;
+                            _PyVO_DeferDecref(tstate, o);
+                        }
                     }
                 }
-            }
-            if (freed) {
-                UOP_STAT_INC(uopcode, miss);
-                _tos_cache1 = _stack_item_1;
-                _tos_cache0 = _stack_item_0;
-                SET_CURRENT_CACHED_VALUES(2);
-                JUMP_TO_JUMP_TARGET();
             }
             _tos_cache1 = _stack_item_1;
             _tos_cache0 = _stack_item_0;
@@ -21921,7 +21909,7 @@
             break;
         }
 
-        case _VO_GUARD_LOCALS_r33: {
+        case _VO_DEFER_LOCALS_r33: {
             CHECK_CURRENT_CACHED_VALUES(3);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
             _PyStackRef _stack_item_0 = _tos_cache0;
@@ -21929,23 +21917,17 @@
             _PyStackRef _stack_item_2 = _tos_cache2;
             PyObject *mask = (PyObject *)CURRENT_OPERAND0_64();
             uint64_t bits = (uint64_t)(uintptr_t)mask;
-            int freed = 0;
             for (int i = 0; bits != 0; i++, bits >>= 1) {
                 if (bits & 1) {
                     _PyStackRef v = frame->localsplus[i];
                     if (!PyStackRef_IsNull(v) && PyStackRef_RefcountOnObject(v)) {
                         PyObject *o = PyStackRef_AsPyObjectBorrow(v);
-                        freed |= !_Py_IsImmortal(o) && Py_REFCNT(o) == 1;
+                        if (!_Py_IsImmortal(o) && Py_REFCNT(o) == 1) {
+                            frame->localsplus[i] = PyStackRef_NULL;
+                            _PyVO_DeferDecref(tstate, o);
+                        }
                     }
                 }
-            }
-            if (freed) {
-                UOP_STAT_INC(uopcode, miss);
-                _tos_cache2 = _stack_item_2;
-                _tos_cache1 = _stack_item_1;
-                _tos_cache0 = _stack_item_0;
-                SET_CURRENT_CACHED_VALUES(3);
-                JUMP_TO_JUMP_TARGET();
             }
             _tos_cache2 = _stack_item_2;
             _tos_cache1 = _stack_item_1;

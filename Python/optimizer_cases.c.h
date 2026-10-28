@@ -5611,7 +5611,7 @@
             break;
         }
 
-        case _VO_GUARD_LOCALS: {
+        case _VO_DEFER_LOCALS: {
             break;
         }
 

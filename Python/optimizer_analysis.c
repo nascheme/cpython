@@ -2684,8 +2684,8 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                 }
             }
             else if (op == _RETURN_VALUE) {
-                // Locals that may be freed by the return get a guard
-                // (_VO_GUARD_LOCALS) that leaves the trace if they would be.
+                // Locals that may be freed by the return are released
+                // later (_VO_DEFER_LOCALS) if they would be.
                 uint64_t mask = 0;
                 exempt = pre->returning_safe;
                 for (int k = 0; k < pre->nunsafe && exempt; k++) {
@@ -2694,10 +2694,14 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                     }
                 }
                 if (exempt && mask != 0) {
-                    if (vo->nguards < 64) {
+                    int n = _Py_popcount32((uint32_t)mask) +
+                            _Py_popcount32((uint32_t)(mask >> 32));
+                    if (vo->nguards < 64 &&
+                        vo->region_deferred + n <= _Py_VO_DEFERRED_SIZE) {
                         vo->guards[vo->nguards].out = (int)(p - ctx->out_buffer.start);
                         vo->guards[vo->nguards].locals = mask;
                         vo->nguards++;
+                        vo->region_deferred += n;
                     }
                     else {
                         exempt = false;
@@ -3176,20 +3180,15 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
             }
         }
         for (int g = 0; g < vo->nguards; g++) {
-            // Only needed while virtual objects are live (info_of[i]).
-            if (vo->guards[g].out == i && info_of[i] != NULL) {
-                _PyUOpInstruction *m = &buffer[out++];
-                *m = inst;
-                m->opcode = _VO_EXIT_INFO;
-                m->oparg = 0;
-                m->operand0 = (uintptr_t)info_of[i];
-                m->operand1 = 0;
+            // Only needed while virtual objects are live.
+            if (vo->guards[g].out == i && live) {
                 _PyUOpInstruction *gi = &buffer[out++];
                 *gi = inst;
-                gi->opcode = _VO_GUARD_LOCALS;
+                gi->opcode = _VO_DEFER_LOCALS;
                 gi->oparg = 0;
                 gi->operand0 = vo->guards[g].locals;
                 gi->operand1 = 0;
+                pending_flush = true;
             }
         }
         if (info_of[i] != NULL && (_PyUop_Flags[inst.opcode] & VO_EXIT_FLAGS)) {

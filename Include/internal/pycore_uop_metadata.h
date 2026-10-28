@@ -381,7 +381,7 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_VO_FLOAT_PROGRAM] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_VO_ELEMENTWISE_FLOAT] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_VO_RELEASE] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
-    [_VO_GUARD_LOCALS] = HAS_DEOPT_FLAG,
+    [_VO_DEFER_LOCALS] = 0,
     [_VO_POP_TOP_DEFER] = 0,
     [_VO_FLUSH] = HAS_ESCAPES_FLAG,
     [_VO_EXIT_INFO] = 0,
@@ -3620,13 +3620,13 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
-    [_VO_GUARD_LOCALS] = {
+    [_VO_DEFER_LOCALS] = {
         .best = { 0, 1, 2, 3 },
         .entries = {
-            { 0, 0, _VO_GUARD_LOCALS_r00 },
-            { 1, 1, _VO_GUARD_LOCALS_r11 },
-            { 2, 2, _VO_GUARD_LOCALS_r22 },
-            { 3, 3, _VO_GUARD_LOCALS_r33 },
+            { 0, 0, _VO_DEFER_LOCALS_r00 },
+            { 1, 1, _VO_DEFER_LOCALS_r11 },
+            { 2, 2, _VO_DEFER_LOCALS_r22 },
+            { 3, 3, _VO_DEFER_LOCALS_r33 },
         },
     },
     [_VO_POP_TOP_DEFER] = {
@@ -5355,10 +5355,10 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_VO_FLOAT_PROGRAM_r01] = _VO_FLOAT_PROGRAM,
     [_VO_ELEMENTWISE_FLOAT_r23] = _VO_ELEMENTWISE_FLOAT,
     [_VO_RELEASE_r00] = _VO_RELEASE,
-    [_VO_GUARD_LOCALS_r00] = _VO_GUARD_LOCALS,
-    [_VO_GUARD_LOCALS_r11] = _VO_GUARD_LOCALS,
-    [_VO_GUARD_LOCALS_r22] = _VO_GUARD_LOCALS,
-    [_VO_GUARD_LOCALS_r33] = _VO_GUARD_LOCALS,
+    [_VO_DEFER_LOCALS_r00] = _VO_DEFER_LOCALS,
+    [_VO_DEFER_LOCALS_r11] = _VO_DEFER_LOCALS,
+    [_VO_DEFER_LOCALS_r22] = _VO_DEFER_LOCALS,
+    [_VO_DEFER_LOCALS_r33] = _VO_DEFER_LOCALS,
     [_VO_POP_TOP_DEFER_r00] = _VO_POP_TOP_DEFER,
     [_VO_POP_TOP_DEFER_r10] = _VO_POP_TOP_DEFER,
     [_VO_POP_TOP_DEFER_r21] = _VO_POP_TOP_DEFER,
@@ -7129,6 +7129,11 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r02] = "_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r02",
     [_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r12] = "_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r12",
     [_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r23] = "_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r23",
+    [_VO_DEFER_LOCALS] = "_VO_DEFER_LOCALS",
+    [_VO_DEFER_LOCALS_r00] = "_VO_DEFER_LOCALS_r00",
+    [_VO_DEFER_LOCALS_r11] = "_VO_DEFER_LOCALS_r11",
+    [_VO_DEFER_LOCALS_r22] = "_VO_DEFER_LOCALS_r22",
+    [_VO_DEFER_LOCALS_r33] = "_VO_DEFER_LOCALS_r33",
     [_VO_ELEMENTWISE_FLOAT] = "_VO_ELEMENTWISE_FLOAT",
     [_VO_ELEMENTWISE_FLOAT_r23] = "_VO_ELEMENTWISE_FLOAT_r23",
     [_VO_EXIT_INFO] = "_VO_EXIT_INFO",
@@ -7140,11 +7145,6 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_VO_FLOAT_PROGRAM_r01] = "_VO_FLOAT_PROGRAM_r01",
     [_VO_FLUSH] = "_VO_FLUSH",
     [_VO_FLUSH_r00] = "_VO_FLUSH_r00",
-    [_VO_GUARD_LOCALS] = "_VO_GUARD_LOCALS",
-    [_VO_GUARD_LOCALS_r00] = "_VO_GUARD_LOCALS_r00",
-    [_VO_GUARD_LOCALS_r11] = "_VO_GUARD_LOCALS_r11",
-    [_VO_GUARD_LOCALS_r22] = "_VO_GUARD_LOCALS_r22",
-    [_VO_GUARD_LOCALS_r33] = "_VO_GUARD_LOCALS_r33",
     [_VO_LOAD_FIELD] = "_VO_LOAD_FIELD",
     [_VO_LOAD_FIELD_r02] = "_VO_LOAD_FIELD_r02",
     [_VO_LOAD_FIELD_r12] = "_VO_LOAD_FIELD_r12",
@@ -7868,7 +7868,7 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 2;
         case _VO_RELEASE:
             return 0;
-        case _VO_GUARD_LOCALS:
+        case _VO_DEFER_LOCALS:
             return 0;
         case _VO_POP_TOP_DEFER:
             return 1;
@@ -8804,7 +8804,7 @@ int _PyUop_num_inputs(int opcode, int oparg)
             return 2;
         case _VO_RELEASE:
             return 0;
-        case _VO_GUARD_LOCALS:
+        case _VO_DEFER_LOCALS:
             return 0;
         case _VO_POP_TOP_DEFER:
             return 1;
