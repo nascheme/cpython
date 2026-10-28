@@ -144,7 +144,8 @@ typedef struct _PyGrailDraft {
      * _GUARD_RECORD_DRAFT */
     PyThreadState *open_owner;
     int state;                   /* root only: 0 while open */
-    int building;
+    char building;
+    char kind;                   /* _grail_draft's KIND_RECORD, ... */
     /* record drafts: the base's type version tag, 0 once cleared */
     unsigned int base_version;
 } _PyGrailDraft;

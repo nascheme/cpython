@@ -60,6 +60,9 @@ typedef _PyGrailRecordDraft RecordDraft;
 typedef struct {
     Py_ssize_t index;
     PyObject *value;
+    /* value is the child draft of the base's item at index, so finish()
+     * compares its result with the child's base instead of the trie. */
+    int child;
 } VectorChange;
 
 typedef struct {
@@ -131,6 +134,58 @@ check(RootObject *root)
 
 /* ------------------------------------------------- creating drafts */
 
+/* Initialize the head of a new draft d of base and track it; root as in
+ * new_draft. Takes the references to root and base. */
+static inline PyObject *
+init_draft(DraftState *st, DraftObject *d, RootObject *root, PyObject *base,
+           int kind, unsigned int base_version)
+{
+    d->root = root == NULL ? d : root;
+    d->base = base;
+    d->built = NULL;
+    d->st = st;
+    d->owner = root == NULL ? _PyThreadState_GET() : NULL;
+    d->open_owner = d->owner;
+    d->base_version = base_version;
+    d->state = ROOT_OPEN;
+    d->building = 0;
+    d->kind = (char)kind;
+    _PyObject_GC_TRACK(d);
+    return (PyObject *)d;
+}
+
+/* A new record draft of base; root as in new_draft. */
+static inline PyObject *
+new_record_draft(DraftState *st, RootObject *root, PyObject *base)
+{
+    Py_ssize_t n = _PyGrail_RecordFieldCount(base);
+    RecordDraft *r = NULL;
+    if (n <= Py_grail_records_MAXSAVESIZE) {
+        r = _Py_FREELIST_POP_MEM(grail_drafts[n]);
+        if (r != NULL) {
+            assert(Py_IS_TYPE(r, &_PyGrail_FreeRecord_Type));
+            _PyObject_InitVar((PyVarObject *)r, st->record_draft_type, n);
+        }
+    }
+    if (r == NULL) {
+        r = PyObject_GC_NewVar(RecordDraft, st->record_draft_type, n);
+        if (r == NULL) {
+            return NULL;
+        }
+    }
+    r->n = n;
+    memset(r->values, 0, n * sizeof(PyObject *));
+    PyTypeObject *tp = Py_TYPE(base);
+    unsigned int version = tp->tp_version_tag;
+    if (version == 0 && PyUnstable_Type_AssignVersionTag(tp)) {
+        version = tp->tp_version_tag;
+    }
+    if (root != NULL) {
+        Py_INCREF(root);
+    }
+    return init_draft(st, &r->head, root, Py_NewRef(base), KIND_RECORD, version);
+}
+
 /* A new draft of base: a child of root, or a new root draft when root is
  * NULL. */
 static PyObject *
@@ -138,26 +193,7 @@ new_draft(DraftState *st, RootObject *root, PyObject *base, int kind)
 {
     DraftObject *d;
     if (kind == KIND_RECORD) {
-        Py_ssize_t n = _PyGrail_RecordFieldCount(base);
-        RecordDraft *r = NULL;
-        if (n <= Py_grail_records_MAXSAVESIZE) {
-            r = _Py_FREELIST_POP_MEM(grail_drafts[n]);
-            if (r != NULL) {
-                assert(Py_IS_TYPE(r, &_PyGrail_FreeRecord_Type));
-                _PyObject_InitVar((PyVarObject *)r, st->record_draft_type, n);
-            }
-        }
-        if (r == NULL) {
-            r = PyObject_GC_NewVar(RecordDraft, st->record_draft_type, n);
-            if (r == NULL) {
-                return NULL;
-            }
-        }
-        r->n = n;
-        for (Py_ssize_t i = 0; i < n; i++) {
-            r->values[i] = NULL;
-        }
-        d = &r->head;
+        return new_record_draft(st, root, base);
     }
     else if (kind == KIND_VECTOR) {
         Py_ssize_t len = st->vops->length(base);
@@ -191,31 +227,18 @@ new_draft(DraftState *st, RootObject *root, PyObject *base, int kind)
         m->changes = NULL;
         d = &m->head;
     }
-    d->root = root == NULL ? d : (RootObject *)Py_NewRef(root);
-    d->base = Py_NewRef(base);
-    d->built = NULL;
-    d->st = st;
-    d->owner = root == NULL ? _PyThreadState_GET() : NULL;
-    d->open_owner = d->owner;
-    d->base_version = 0;
-    if (kind == KIND_RECORD) {
-        PyTypeObject *tp = Py_TYPE(base);
-        if (tp->tp_version_tag != 0 || PyUnstable_Type_AssignVersionTag(tp)) {
-            d->base_version = tp->tp_version_tag;
-        }
+    if (root != NULL) {
+        Py_INCREF(root);
     }
-    d->state = ROOT_OPEN;
-    d->building = 0;
-    _PyObject_GC_TRACK(d);
-    return (PyObject *)d;
+    return init_draft(st, d, root, Py_NewRef(base), kind, 0);
 }
 
-/* A new reference: a child draft for a draftable value, else the value. */
+/* A new child draft of root for value, a record, PVector or PMap. */
 static inline PyObject *
-child(RootObject *root, PyObject *value)
+new_child(RootObject *root, PyObject *value, int kind)
 {
-    int kind = draft_kind(root->st, value);
-    return kind ? new_draft(root->st, root, value, kind) : Py_NewRef(value);
+    return kind == KIND_RECORD ? new_record_draft(root->st, root, value)
+                               : new_draft(root->st, root, value, kind);
 }
 
 /* 0 if value may be stored in a draft of root, else -1 with ValueError. */
@@ -319,7 +342,18 @@ draft_repr(PyObject *self)
     {"__reduce_ex__", _PyCFunction_CAST(draft_no_pickle), METH_FASTCALL, NULL}, \
     {"__reduce__", _PyCFunction_CAST(draft_no_pickle), METH_FASTCALL, NULL}
 
-static PyObject *build(PyObject *value);
+static void draft_dealloc(PyObject *op);
+static PyObject *build_draft(PyObject *draft);
+
+/* The finished value for a draft (borrowed from the draft, which caches
+ * it), or value itself when it is not a draft. Drafts are the only objects
+ * whose type has draft_dealloc. */
+static inline PyObject *
+build(PyObject *value)
+{
+    return Py_TYPE(value)->tp_dealloc == draft_dealloc ? build_draft(value)
+                                                       : value;
+}
 
 /* ------------------------------------------------------- record drafts */
 
@@ -351,17 +385,17 @@ static void
 draft_dealloc(PyObject *op)
 {
     PyTypeObject *tp = Py_TYPE(op);
-    DraftState *st = DRAFT(op)->st;
     if (_PyObject_GC_IS_TRACKED(op)) {
         _PyObject_GC_UNTRACK(op);
     }
     int slot = -1;
-    if (tp == st->record_draft_type) {
+    int kind = DRAFT(op)->kind;
+    if (kind == KIND_RECORD) {
         (void)record_draft_clear(op);
         Py_ssize_t n = ((RecordDraft *)op)->n;
         slot = n <= Py_grail_records_MAXSAVESIZE ? (int)n : -1;
     }
-    else if (tp == st->vector_draft_type) {
+    else if (kind == KIND_VECTOR) {
         (void)vector_draft_clear(op);
         slot = VECTOR_DRAFT_FREELIST;
     }
@@ -410,7 +444,7 @@ record_draft_load(PyObject *self, Py_ssize_t i)
     if (!kind) {
         return Py_NewRef(field);
     }
-    value = new_draft(root->st, root, field, kind);
+    value = new_child(root, field, kind);
     if (value != NULL) {
         r->values[i] = Py_NewRef(value);
     }
@@ -618,12 +652,14 @@ vector_draft_find(VectorDraft *v, Py_ssize_t i)
     return NULL;
 }
 
-/* Store a new reference to value at base index i. */
+/* Store a new reference to value at base index i; child as in
+ * VectorChange. */
 static int
-vector_draft_put(VectorDraft *v, Py_ssize_t i, PyObject *value)
+vector_draft_put(VectorDraft *v, Py_ssize_t i, PyObject *value, int child)
 {
     VectorChange *c = vector_draft_find(v, i);
     if (c != NULL) {
+        c->child = child;
         Py_SETREF(c->value, Py_NewRef(value));
         return 0;
     }
@@ -653,6 +689,7 @@ vector_draft_put(VectorDraft *v, Py_ssize_t i, PyObject *value)
     }
     v->changes[v->nchanges].index = i;
     v->changes[v->nchanges].value = Py_NewRef(value);
+    v->changes[v->nchanges].child = child;
     v->nchanges++;
     if (v->slot != NULL) {
         v->slot[i] = (uint32_t)v->nchanges;
@@ -680,7 +717,7 @@ vector_draft_get(VectorDraft *v, Py_ssize_t i)
         if (!is_draft(root->st, *slot)) {
             int kind = draft_kind(root->st, *slot);
             if (kind) {
-                PyObject *d = new_draft(root->st, root, *slot, kind);
+                PyObject *d = new_child(root, *slot, kind);
                 if (d == NULL) {
                     return NULL;
                 }
@@ -698,8 +735,8 @@ vector_draft_get(VectorDraft *v, Py_ssize_t i)
     if (!kind) {
         return Py_NewRef(item);
     }
-    PyObject *d = new_draft(root->st, root, item, kind);
-    if (d == NULL || vector_draft_put(v, i, d) < 0) {
+    PyObject *d = new_child(root, item, kind);
+    if (d == NULL || vector_draft_put(v, i, d, 1) < 0) {
         Py_XDECREF(d);
         return NULL;
     }
@@ -760,7 +797,7 @@ vector_draft_ass_subscript(PyObject *self, PyObject *key, PyObject *value)
     if (i >= v->base_len) {
         return PyList_SetItem(v->tail, i - v->base_len, Py_NewRef(value));
     }
-    return vector_draft_put(v, i, value);
+    return vector_draft_put(v, i, value, 0);
 }
 
 /* draft[i] = value for an int i (_STORE_SUBSCR_SSIZE_ITEM, registered
@@ -788,7 +825,7 @@ vector_draft_ass_item(PyObject *self, Py_ssize_t i, PyObject *value)
     if (i >= v->base_len) {
         return PyList_SetItem(v->tail, i - v->base_len, Py_NewRef(value));
     }
-    return vector_draft_put(v, i, value);
+    return vector_draft_put(v, i, value, 0);
 }
 
 static int
@@ -840,6 +877,13 @@ vector_draft_extend(PyObject *self, PyObject *iterable)
     Py_RETURN_NONE;
 }
 
+/* The base item that change c replaces (borrowed). */
+static inline PyObject *
+vector_draft_old(const _PyGrailVectorOps *ops, PyObject *base, VectorChange *c)
+{
+    return c->child ? DRAFT(c->value)->base : ops->borrow(base, c->index);
+}
+
 /* Few changes are applied with set and append; more through a transient,
  * which copies each trie path once. */
 static PyObject *
@@ -859,7 +903,7 @@ vector_draft_build(VectorDraft *v)
                 return NULL;
             }
             Py_ssize_t index = v->changes[k].index;
-            if (value != ops->borrow(base, index)) {
+            if (value != vector_draft_old(ops, base, &v->changes[k])) {
                 indices[n] = index;
                 values[n++] = value;
             }
@@ -884,7 +928,7 @@ vector_draft_build(VectorDraft *v)
             goto done;
         }
         Py_ssize_t index = v->changes[k].index;
-        if (value == ops->borrow(base, index)) {
+        if (value == vector_draft_old(ops, base, &v->changes[k])) {
             continue;
         }
         if (builder == NULL && (builder = ops->builder(base)) == NULL) {
@@ -986,7 +1030,7 @@ map_draft_lookup(MapDraft *m, PyObject *key, PyObject **value)
     if (!kind) {
         return 1;
     }
-    PyObject *d = new_draft(root->st, root, *value, kind);
+    PyObject *d = new_child(root, *value, kind);
     Py_SETREF(*value, d);
     if (d == NULL) {
         return -1;
@@ -1180,16 +1224,10 @@ static PyType_Spec map_draft_spec = {
 
 /* ------------------------------------------------------------ building */
 
-/* The finished value for a draft (borrowed from the draft, which caches
- * it), or value itself when it is not a draft. */
+/* build() of a draft. */
 static PyObject *
-build(PyObject *value)
+build_draft(PyObject *value)
 {
-    /* Drafts are the only objects whose type has draft_dealloc. */
-    PyTypeObject *t = Py_TYPE(value);
-    if (t->tp_dealloc != draft_dealloc) {
-        return value;
-    }
     DraftObject *d = DRAFT(value);
     if (d->built != NULL) {
         return d->built;
@@ -1200,11 +1238,10 @@ build(PyObject *value)
     }
     d->building = 1;
     PyObject *result;
-    DraftState *st = d->root->st;
-    if (t == st->record_draft_type) {
+    if (d->kind == KIND_RECORD) {
         result = record_draft_build((RecordDraft *)d);
     }
-    else if (t == st->vector_draft_type) {
+    else if (d->kind == KIND_VECTOR) {
         result = vector_draft_build((VectorDraft *)d);
     }
     else {
@@ -1246,15 +1283,13 @@ grail_mutate(PyObject *module, PyObject *value)
 static void
 drop_edits(DraftObject *root)
 {
-    DraftState *st = root->st;
-    PyTypeObject *tp = Py_TYPE(root);
-    if (tp == st->record_draft_type) {
+    if (root->kind == KIND_RECORD) {
         RecordDraft *r = (RecordDraft *)root;
         for (Py_ssize_t i = 0; i < r->n; i++) {
             Py_CLEAR(r->values[i]);
         }
     }
-    else if (tp == st->vector_draft_type) {
+    else if (root->kind == KIND_VECTOR) {
         VectorDraft *v = (VectorDraft *)root;
         Py_ssize_t n = v->nchanges;
         v->nchanges = 0;
