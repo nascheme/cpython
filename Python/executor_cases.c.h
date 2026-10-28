@@ -18276,8 +18276,13 @@
             PyFunctionObject *func = (PyFunctionObject *)PyStackRef_AsPyObjectBorrow(callable);
             PyObject *defaults = func->func_defaults;
             int argcount = ((PyCodeObject *)func->func_code)->co_argcount;
-            assert(defaults != NULL && oparg + has_self < argcount &&
-                   oparg + has_self >= argcount - PyTuple_GET_SIZE(defaults));
+            assert(defaults != NULL);
+            if (oparg + has_self >= argcount ||
+                     oparg + has_self < argcount - PyTuple_GET_SIZE(defaults)) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
             _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, callable, argcount, frame);
             _PyStackRef *first_non_self_local = pushed_frame->localsplus + has_self;
             pushed_frame->localsplus[0] = self_or_null;
@@ -18320,6 +18325,13 @@
                 given++;
             }
             assert(code->co_kwonlyargcount == 0);
+            if (given < argcount - (func->func_defaults == NULL ? 0 :
+                         PyTuple_GET_SIZE(func->func_defaults)) ||
+                     (given > argcount && !(code->co_flags & CO_VARARGS))) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
             PyObject *kwdict = NULL;
             if (code->co_flags & CO_VARKEYWORDS) {
                 _PyFrame_SetStackPointer(frame, stack_pointer);

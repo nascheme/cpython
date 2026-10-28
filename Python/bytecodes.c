@@ -4890,8 +4890,10 @@ dummy_func(
             PyFunctionObject *func = (PyFunctionObject *)PyStackRef_AsPyObjectBorrow(callable);
             PyObject *defaults = func->func_defaults;
             int argcount = ((PyCodeObject *)func->func_code)->co_argcount;
-            assert(defaults != NULL && oparg + has_self < argcount &&
-                   oparg + has_self >= argcount - PyTuple_GET_SIZE(defaults));
+            assert(defaults != NULL);
+            /* The optimizer may not know whether there is a self. */
+            DEOPT_IF(oparg + has_self >= argcount ||
+                     oparg + has_self < argcount - PyTuple_GET_SIZE(defaults));
             _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, callable, argcount, frame);
             _PyStackRef *first_non_self_local = pushed_frame->localsplus + has_self;
             pushed_frame->localsplus[0] = self_or_null;
@@ -4922,6 +4924,10 @@ dummy_func(
                 given++;
             }
             assert(code->co_kwonlyargcount == 0);
+            /* The optimizer may not know whether there is a self. */
+            DEOPT_IF(given < argcount - (func->func_defaults == NULL ? 0 :
+                                         PyTuple_GET_SIZE(func->func_defaults)) ||
+                     (given > argcount && !(code->co_flags & CO_VARARGS)));
             PyObject *kwdict = NULL;
             if (code->co_flags & CO_VARKEYWORDS) {
                 kwdict = PyDict_New();

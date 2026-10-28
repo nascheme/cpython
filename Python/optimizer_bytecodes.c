@@ -1426,19 +1426,28 @@ dummy_func(void) {
         // A guarded function, called with its trailing parameters left to
         // their defaults: push the frame directly.
         // Or one with *args or **kwargs, called with positional arguments.
+        // The uops check the argument count again when self_or_null is
+        // not known here, so one of its two possibilities must fit.
         PyFunctionObject *func = (PyFunctionObject *)sym_get_const(ctx, callable);
-        if (func != NULL && PyFunction_Check(func) &&
-            (sym_is_null(self_or_null) || sym_is_not_null(self_or_null))) {
+        if (func != NULL && PyFunction_Check(func)) {
             PyCodeObject *co = (PyCodeObject *)func->func_code;
-            int given = oparg + sym_is_not_null(self_or_null);
             int varargs = co->co_flags & (CO_VARARGS | CO_VARKEYWORDS);
             Py_ssize_t ndefaults = func->func_defaults == NULL ? 0 :
                                    PyTuple_GET_SIZE(func->func_defaults);
+            int fits = 0;
+            for (int has_self = 0; has_self <= 1; has_self++) {
+                if ((has_self ? sym_is_null(self_or_null)
+                              : sym_is_not_null(self_or_null))) {
+                    continue;
+                }
+                int given = oparg + has_self;
+                fits |= given >= co->co_argcount - ndefaults &&
+                        (given < co->co_argcount ||
+                         (varargs && (given == co->co_argcount ||
+                                      (co->co_flags & CO_VARARGS))));
+            }
             if ((co->co_flags & CO_OPTIMIZED) && co->co_kwonlyargcount == 0 &&
-                given >= co->co_argcount - ndefaults &&
-                (given < co->co_argcount ||
-                 (varargs && (given == co->co_argcount ||
-                              (co->co_flags & CO_VARARGS))))) {
+                fits) {
                 ADD_OP(_CHECK_STACK_SPACE_OPERAND, 0, co->co_framesize);
                 ADD_OP(varargs ? _INIT_CALL_PY_VARARGS : _INIT_CALL_PY_DEFAULTS,
                        oparg, 0);
