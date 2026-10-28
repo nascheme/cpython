@@ -5863,6 +5863,31 @@ dummy_func(
             }
             int npos = total - nkw;
             assert(nkw <= 8 && npos <= argcount);
+            /* Keyword-only parameters not passed take their defaults, read
+             * now: __kwdefaults__ can change without a new version. */
+            int kwonly = code->co_kwonlyargcount;
+            PyObject *kwvalues[8];
+            int nkwvalues = 0;
+            uint64_t passed_bits = 0;  /* parameters < 64 passed by keyword */
+            uint64_t s = (uint64_t)(uintptr_t)slots;
+            for (int j = 0; j < nkw; j++, s >>= 8) {
+                passed_bits |= (uint64_t)1 << (s & 0x3f);
+            }
+            for (int i = argcount; i < argcount + kwonly; i++) {
+                int passed = (passed_bits >> i) & 1;
+                if (!passed) {
+                    PyObject *kwdefaults = func->func_kwdefaults;
+                    PyObject *value = NULL;
+                    if (kwdefaults != NULL && PyDict_CheckExact(kwdefaults)) {
+                        /* Borrowed; str keys compare without raising. */
+                        value = PyDict_GetItemWithError(kwdefaults,
+                            PyTuple_GET_ITEM(code->co_localsplusnames, i));
+                        assert(!PyErr_Occurred());
+                    }
+                    DEOPT_IF(value == NULL || nkwvalues == 8);
+                    kwvalues[nkwvalues++] = value;
+                }
+            }
             STAT_INC(CALL, hit);
             _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, callable, 0, frame);
             _PyStackRef *locals = pushed_frame->localsplus;
@@ -5882,6 +5907,11 @@ dummy_func(
                         locals[i] = PyStackRef_FromPyObjectNew(
                             PyTuple_GET_ITEM(defaults, i - first_default));
                     }
+                }
+            }
+            for (int i = argcount, k = 0; k < nkwvalues; i++) {
+                if (PyStackRef_IsNull(locals[i])) {
+                    locals[i] = PyStackRef_FromPyObjectNew(kwvalues[k++]);
                 }
             }
             INPUTS_DEAD();

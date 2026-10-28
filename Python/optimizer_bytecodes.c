@@ -1496,12 +1496,24 @@ dummy_func(void) {
                 filled |= (uint64_t)1 << found;
                 slots |= (uint64_t)found << (8 * j);
             }
-            // Missing positional parameters need defaults; keyword-only
-            // ones must all be passed.
+            // Missing positional parameters need defaults, missing
+            // keyword-only ones (at most 8) entries in __kwdefaults__, which
+            // _INIT_CALL_PY_KW reads (and deopts without).
+            int missing_kwonly = 0;
+            PyObject *kwdefaults = func->func_kwdefaults;
             for (int i = 0; ok && i < nparams; i++) {
-                if (!(filled & ((uint64_t)1 << i)) &&
-                    (i >= co->co_argcount || i < co->co_argcount - ndefaults)) {
-                    ok = 0;
+                if (filled & ((uint64_t)1 << i)) {
+                    continue;
+                }
+                if (i < co->co_argcount) {
+                    ok = i >= co->co_argcount - ndefaults;
+                }
+                else {
+                    PyObject *name = PyTuple_GET_ITEM(co->co_localsplusnames, i);
+                    ok = ++missing_kwonly <= 8 && kwdefaults != NULL &&
+                         PyDict_CheckExact(kwdefaults) &&
+                         PyDict_GetItemWithError(kwdefaults, name) != NULL;
+                    assert(!PyErr_Occurred());
                 }
             }
             if (ok) {

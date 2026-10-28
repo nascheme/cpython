@@ -3748,6 +3748,27 @@ class TestUopsOptimization(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "multiple values"):
             f(1, a=2)
 
+    def test_call_py_kw_kwonly_defaults(self):
+        def g(a, *, k=1, m=5):
+            return a + 10 * k + 100 * m
+
+        def testfunc(n):
+            total = 0
+            for _ in range(n):
+                total += g(1, k=2) + g(1, m=3)
+            return total
+
+        res, ex = self._run_with_optimizer(testfunc, TIER2_THRESHOLD)
+        self.assertEqual(res, (521 + 311) * TIER2_THRESHOLD)
+        self.assertIsNotNone(ex)
+        self.assertEqual(count_ops(ex, "_INIT_CALL_PY_KW"), 2)
+        # Changed in place, without a new function version.
+        g.__kwdefaults__["m"] = 7
+        self.assertEqual(testfunc(2), (721 + 311) * 2)
+        del g.__kwdefaults__["m"]
+        with self.assertRaisesRegex(TypeError, "keyword-only argument: 'm'"):
+            testfunc(1)
+
     def test_set_type_version_sets_type(self):
         class C:
             A = 1

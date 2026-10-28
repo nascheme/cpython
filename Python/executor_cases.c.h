@@ -20768,6 +20768,39 @@
             }
             int npos = total - nkw;
             assert(nkw <= 8 && npos <= argcount);
+            int kwonly = code->co_kwonlyargcount;
+            PyObject *kwvalues[8];
+            int nkwvalues = 0;
+            uint64_t passed_bits = 0;
+            uint64_t s = (uint64_t)(uintptr_t)slots;
+            for (int j = 0; j < nkw; j++, s >>= 8) {
+                passed_bits |= (uint64_t)1 << (s & 0x3f);
+            }
+            for (int i = argcount; i < argcount + kwonly; i++) {
+                int passed = (passed_bits >> i) & 1;
+                if (!passed) {
+                    PyObject *kwdefaults = func->func_kwdefaults;
+                    PyObject *value = NULL;
+                    if (kwdefaults != NULL && PyDict_CheckExact(kwdefaults)) {
+                        stack_pointer[0] = kwnames;
+                        stack_pointer += 1;
+                        ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                        _PyFrame_SetStackPointer(frame, stack_pointer);
+                        value = PyDict_GetItemWithError(kwdefaults,
+                            PyTuple_GET_ITEM(code->co_localsplusnames, i));
+                        assert(!PyErr_Occurred());
+                        stack_pointer = _PyFrame_GetStackPointer(frame);
+                        stack_pointer += -1;
+                    }
+                    if (value == NULL || nkwvalues == 8) {
+                        UOP_STAT_INC(uopcode, miss);
+                        _tos_cache0 = kwnames;
+                        SET_CURRENT_CACHED_VALUES(1);
+                        JUMP_TO_JUMP_TARGET();
+                    }
+                    kwvalues[nkwvalues++] = value;
+                }
+            }
             STAT_INC(CALL, hit);
             _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, callable, 0, frame);
             _PyStackRef *locals = pushed_frame->localsplus;
@@ -20787,6 +20820,11 @@
                         locals[i] = PyStackRef_FromPyObjectNew(
                             PyTuple_GET_ITEM(defaults, i - first_default));
                     }
+                }
+            }
+            for (int i = argcount, k = 0; k < nkwvalues; i++) {
+                if (PyStackRef_IsNull(locals[i])) {
+                    locals[i] = PyStackRef_FromPyObjectNew(kwvalues[k++]);
                 }
             }
             stack_pointer += -2 - oparg;
