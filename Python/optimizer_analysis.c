@@ -2607,6 +2607,20 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
         if (pre->opcode == _JUMP_TO_TOP && pre->any_live) {
             vo_carry(ctx, out);
         }
+        if (pre->opcode == _EXIT_TRACE && pre->any_live &&
+            !pre->locs_overflow && !pre->pending_locs && !vo->unknown_depth) {
+            // The trace ends with an exit: rebuild them there
+            // (_VO_RECOVER before the _EXIT_TRACE), not at construction.
+            vo_snapshot(ctx, pre, out, out + nout);
+            for (int i = 0; i < vo->ncands; i++) {
+                _PyVOCandidate *c = &vo->cands[i];
+                if (vo_live(c)) {
+                    c->death = out;
+                    c->consumed = true;
+                    DPRINTF(2, "vo: candidate %d rebuilt at the final exit\n", i);
+                }
+            }
+        }
         if (pre->opcode == _JUMP_TO_TOP && ctx->curr_frame_depth == 1) {
             _Py_UOpsAbstractFrame *f = &ctx->frames[0];
             for (int k = 0; k < 64 && k < f->locals_len; k++) {
@@ -3236,6 +3250,11 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
             _PyVOCandidate *c = &vo->cands[k];
             live = !c->escaped && c->create < i && i < c->death;
         }
+        // The final exit's recovery rebuilds them, then flushes.
+        bool final_exit = inst.opcode == _EXIT_TRACE && info_of[i] != NULL && i > 0;
+        if (final_exit) {
+            pending_flush = false;
+        }
         for (int k = 0; k < vo->ncands; k++) {
             _PyVOCandidate *c = &vo->cands[k];
             if (k == vo->carried && !c->escaped && c->death == i &&
@@ -3358,8 +3377,16 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                 pending_flush = true;
             }
         }
+        if (final_exit) {
+            _PyUOpInstruction *m = &buffer[out++];
+            *m = inst;
+            m->opcode = _VO_RECOVER;
+            m->oparg = 0;
+            m->operand0 = (uintptr_t)info_of[i];
+            m->operand1 = 0;
+        }
         // Nothing is virtual before the entry prologue (after uop 0).
-        if (info_of[i] != NULL && i > 0 && (_PyUop_Flags[inst.opcode] & VO_EXIT_FLAGS)) {
+        else if (info_of[i] != NULL && i > 0 && (_PyUop_Flags[inst.opcode] & VO_EXIT_FLAGS)) {
             _PyUOpInstruction *m = &buffer[out++];
             *m = inst;
             m->opcode = _VO_EXIT_INFO;

@@ -1744,6 +1744,21 @@ class VirtualObjectTests(unittest.TestCase):
         for _ in range(3):
             self.assertEqual(carried(n, start, -1, -1), expected)
 
+    def test_final_exit(self):
+        # A trace cut at the length limit while p is virtual ends with an
+        # exit that rebuilds it (_VO_RECOVER before the _EXIT_TRACE).
+        lines = ["def long_body(n):", "    t = 0", "    for i in range(n):",
+                 "        p = make(i)"]
+        lines += ["        t += p.x" if k % 2 else "        t -= p.y" for k in range(400)]
+        lines += ["        if i == n - 1:", "            return t, p", "    return t, None"]
+        m = load_virtual()
+        exec("\n".join(lines), m)
+        n = 100
+        for _ in range(REPEAT):
+            self.assertEqual(m["long_body"](n, ), (-200 * n, m["P"](n - 1, n)))
+        if tier2_enabled():
+            self.assertIn("_VO_NEW_RECORD", executor_uops(m["long_body"]))
+
     def test_tuple_of_record(self):
         m = load_virtual()
         for _ in range(REPEAT):
