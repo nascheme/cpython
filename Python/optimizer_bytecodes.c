@@ -1916,6 +1916,14 @@ dummy_func(void) {
             break;
         }
         stack_pointer = ctx->frame->stack_pointer;
+        if (ctx->frame->func == NULL) {
+            // Out of the trace's first frame: the function the tracer saw
+            // (globals still fold only after a version guard).
+            PyFunctionObject *func = (PyFunctionObject *)this_instr[1].operand1;
+            if (func != NULL && func->func_code == (PyObject *)returning_code) {
+                ctx->frame->func = func;
+            }
+        }
 
         RELOAD_STACK();
         res = temp;

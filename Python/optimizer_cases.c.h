@@ -2277,6 +2277,12 @@
                 break;
             }
             stack_pointer = ctx->frame->stack_pointer;
+            if (ctx->frame->func == NULL) {
+                PyFunctionObject *func = (PyFunctionObject *)this_instr[1].operand1;
+                if (func != NULL && func->func_code == (PyObject *)returning_code) {
+                    ctx->frame->func = func;
+                }
+            }
             res = temp;
             CHECK_STACK_BOUNDS(1);
             stack_pointer[0] = res;

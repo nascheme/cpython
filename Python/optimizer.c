@@ -1285,6 +1285,14 @@ _PyJit_translate_single_bytecode_to_trace(
         PyObject *code = PyStackRef_AsPyObjectBorrow(frame->f_executable);
         Py_INCREF(code);
         ADD_TO_TRACE(_RECORD_CODE, 0, (uintptr_t)code, 0);
+        // And the function, for the optimizer's frame after a return out
+        // of the trace's first frame (operand1, a strong reference).
+        PyObject *func = PyStackRef_AsPyObjectBorrow(frame->f_funcobj);
+        uop_buffer_last(trace)->operand1 = 0;
+        if (func != NULL && PyFunction_Check(func) &&
+            ((PyFunctionObject *)func)->func_code == code) {
+            uop_buffer_last(trace)->operand1 = (uintptr_t)Py_NewRef(func);
+        }
         ADD_TO_TRACE(guard_ip, 0, (uintptr_t)next_instr, 0);
         if (PyCode_Check(code)) {
             /* Record stack depth, in operand1 */
@@ -1446,6 +1454,9 @@ _PyJit_FinalizeTracing(PyThreadState *tstate, int err)
     for (_PyUOpInstruction *inst = buffer->start; inst < buffer->next; inst++) {
         if (_PyUop_Flags[inst->opcode] & HAS_RECORDS_VALUE_FLAG) {
             Py_XDECREF((PyObject *)(uintptr_t)inst->operand0);
+            if (inst->opcode == _RECORD_CODE) {
+                Py_XDECREF((PyObject *)(uintptr_t)inst->operand1);
+            }
         }
     }
     Py_CLEAR(tracer->initial_state.code);
@@ -1991,6 +2002,10 @@ uop_optimize(
         }
         else if (_PyUop_Flags[opcode] & HAS_RECORDS_VALUE_FLAG) {
             Py_XDECREF((PyObject *)(uintptr_t)buffer[pc].operand0);
+            if (opcode == _RECORD_CODE) {
+                Py_XDECREF((PyObject *)(uintptr_t)buffer[pc].operand1);
+                buffer[pc].operand1 = 0;
+            }
             buffer[pc].opcode = _NOP;
         }
         else if (is_terminator(&buffer[pc])) {
