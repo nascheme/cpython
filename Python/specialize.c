@@ -2543,6 +2543,12 @@ _PyBinaryOp_IsFloatTrueDiv(const _PyBinaryOpSpecializationDescr *d)
     return d->action == floats_true_div;
 }
 
+int
+_PyBinaryOp_RunsNoCode(const _PyBinaryOpSpecializationDescr *d)
+{
+    return d->action != str_format;
+}
+
 /*  long-float */
 
 static inline int

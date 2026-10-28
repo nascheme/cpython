@@ -1758,7 +1758,8 @@ vo_find(JitOptContext *ctx, JitOptRef ref)
 static void
 vo_free_slots(JitOptContext *ctx, _PyVOCandidate *c)
 {
-    uint64_t mask = (c->n == 64 ? UINT64_MAX : (((uint64_t)1 << c->n) - 1)) << c->base;
+    int n = c->n + c->origin;
+    uint64_t mask = (n == 64 ? UINT64_MAX : (((uint64_t)1 << n) - 1)) << c->base;
     ctx->vo.shadow_used &= ~mask;
 }
 
@@ -1880,6 +1881,33 @@ vo_record_checks_pure(PyTypeObject *type, int n, uint64_t check)
         }
     }
     return true;
+}
+
+/* A function of the math module that returns a float for float and int
+ * arguments (or raises). */
+static bool
+vo_math_float_function(PyObject *callable)
+{
+    static const char *const names[] = {
+        "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
+        "asinh", "acosh", "atanh", "exp", "exp2", "expm1", "log2", "log10",
+        "log1p", "sqrt", "cbrt", "fabs", "erf", "erfc", "gamma", "lgamma",
+        "degrees", "radians", NULL};
+    if (callable == NULL || !PyCFunction_CheckExact(callable)) {
+        return false;
+    }
+    PyObject *module = ((PyCFunctionObject *)callable)->m_module;
+    if (module == NULL || !PyUnicode_Check(module) ||
+        !_PyUnicode_EqualToASCIIString(module, "math")) {
+        return false;
+    }
+    const char *name = ((PyCFunctionObject *)callable)->m_ml->ml_name;
+    for (int i = 0; names[i] != NULL; i++) {
+        if (strcmp(name, names[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /* A call of a math function, or of abs/min/max, with exact float and int
@@ -2072,7 +2100,7 @@ vo_before(JitOptContext *ctx, _PyUOpInstruction *this_instr,
     pre->returning_safe = false;
     int opcode = this_instr->opcode;
     if (opcode == _CALL_RECORD || opcode == _CALL_RECORD_CHECKED ||
-        opcode == _BUILD_TUPLE || pre->any_live) {
+        opcode == _BUILD_TUPLE || pre->any_live || vo_is_pop(opcode)) {
         pre->npop = _PyUop_num_inputs(opcode, this_instr->oparg);
         if (pre->npop < 0) {
             pre->npop = 0;
@@ -2250,6 +2278,7 @@ vo_new_candidate(JitOptContext *ctx, const VOPre *pre,
     c->escaped = false;
     c->safe_release = safe;
     c->consumed = false;
+    c->origin = false;
     memcpy(c->inner, inner, sizeof(inner));
     for (int k = n; k < VO_MAX_FIELDS; k++) {
         c->inner[k] = -1;
@@ -2482,6 +2511,7 @@ vo_fused_candidate(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_
     c->escaped = false;
     c->safe_release = true;
     c->consumed = false;
+    c->origin = false;
     for (int k = 0; k < VO_MAX_FIELDS; k++) {
         c->inner[k] = -1;
     }
@@ -2489,6 +2519,67 @@ vo_fused_candidate(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_
     vo_add_use(ctx, c->create, i, VO_USE_NEW, 0);
     DPRINTF(2, "vo: candidate %d at %d (element-wise), %d fields, base %d\n",
             i, c->create, (int)n, base);
+}
+
+/* At the loop's end (_JUMP_TO_TOP): a live record held only by one local
+ * of the trace's root frame is carried into the next iteration. The first
+ * pass notes the local; optimize_uops() then runs again with that local
+ * made virtual at the trace's entry (the seed, _VO_ENTER_LOCAL). In that
+ * second pass the candidate found here moves into the seed's slots
+ * (_VO_MOVE) instead of escaping, if it is in the same local with the same
+ * type. */
+static void
+vo_carry(JitOptContext *ctx, int out)
+{
+    _PyVOState *vo = &ctx->vo;
+    if (ctx->curr_frame_depth != 1) {
+        return;
+    }
+    _Py_UOpsAbstractFrame *f = &ctx->frames[0];
+    for (int i = 0; i < vo->ncands; i++) {
+        _PyVOCandidate *c = &vo->cands[i];
+        if (!vo_live(c) || c->type == NULL || !c->safe_release) {
+            continue;
+        }
+        bool other = false;
+        for (int k = 0; k < c->n; k++) {
+            other |= c->inner[k] >= 0 && vo_live(&vo->cands[c->inner[k]]);
+        }
+        for (int o = 0; o < vo->ncands && !other; o++) {
+            if (vo_live(&vo->cands[o])) {
+                for (int k = 0; k < vo->cands[o].n; k++) {
+                    other |= vo->cands[o].inner[k] == i;
+                }
+            }
+        }
+        int local = -1;
+        for (int k = 0; k < f->locals_len && !other; k++) {
+            if (PyJitRef_Unwrap(f->locals[k]) == c->sym) {
+                other = local >= 0;
+                local = k;
+            }
+        }
+        for (JitOptRef *p = f->stack; p < f->stack_pointer && !other; p++) {
+            other = PyJitRef_Unwrap(*p) == c->sym;
+        }
+        if (other || local < 0 || local > 255 || c->n + 1 > VO_MAX_FIELDS) {
+            continue;
+        }
+        if (vo->seed < 0) {
+            vo->carry_local = local;
+            vo->carry_type = c->type;
+            vo->carry_n = c->n;
+            DPRINTF(2, "vo: candidate %d carried in local %d\n", i, local);
+            return;
+        }
+        if (local == vo->seed_local && c->type == vo->cands[vo->seed].type) {
+            c->death = out;
+            c->consumed = true;
+            vo->carried = i;
+            DPRINTF(2, "vo: candidate %d carried into the seed\n", i);
+            return;
+        }
+    }
 }
 
 /* After the abstract interpreter ran pre's uop, emitting
@@ -2501,7 +2592,28 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
     int opcode = pre->opcode;
     int nout = (int)(out_end - out_start);
     int out = (int)(out_start - ctx->out_buffer.start);
+    if (vo_is_pop(opcode) && pre->npop == 1 && !pre->inputs_overflow &&
+        !vo_decref_safe(ctx, pre->inputs[0])) {
+        // The release of the entry value of a local of the loop's frame:
+        // its type can be guarded at the entry (second pass, vo_carry()).
+        JitOptSymbol *sym = PyJitRef_Unwrap(pre->inputs[0]);
+        for (int k = 0; k < 64 && sym != NULL; k++) {
+            if (vo->entry_sym[k] == sym) {
+                vo->entry_popped |= (uint64_t)1 << k;
+            }
+        }
+    }
     if (ctx->done) {
+        if (pre->opcode == _JUMP_TO_TOP && pre->any_live) {
+            vo_carry(ctx, out);
+        }
+        if (pre->opcode == _JUMP_TO_TOP && ctx->curr_frame_depth == 1) {
+            _Py_UOpsAbstractFrame *f = &ctx->frames[0];
+            for (int k = 0; k < 64 && k < f->locals_len; k++) {
+                PyTypeObject *t = sym_get_type(f->locals[k]);
+                vo->end_type[k] = t != NULL && vo_safe_scalar_type(t) ? t : NULL;
+            }
+        }
         vo_escape_all(ctx, "optimizer stopped");
         return;
     }
@@ -2674,12 +2786,14 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                          (vo_decref_safe(ctx, pre->inputs[0]) ||
                           vo_sym_present(ctx, stack_pointer,
                                          PyJitRef_Unwrap(pre->inputs[0])));
+
                 // Otherwise a release that would free the value waits
                 // until no virtual object is live (_VO_POP_TOP_DEFER).
                 if (!exempt && op == _POP_TOP && pops &&
                     vo->region_deferred < _Py_VO_DEFERRED_SIZE && vo->ndefers < 256) {
                     vo->defers[vo->ndefers++] = (int)(p - ctx->out_buffer.start);
                     vo->region_deferred++;
+                    DPRINTF(2, "vo: deferred pop at %d\n", (int)(p - ctx->out_buffer.start));
                     exempt = true;
                 }
             }
@@ -2714,14 +2828,26 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             else if (op == _CALL_BUILTIN_CLASS) {
                 exempt = vo_pure_builtin_call(ctx, pre);
             }
+            else if (op == _CHECK_PERIODIC) {
+                // Becomes _VO_CHECK_PERIODIC, which leaves the trace to
+                // run pending calls.
+                exempt = true;
+            }
             else if (op == _GRAIL_CALL_GENERIC_FOLDED ||
                      op == _GRAIL_CALL_GENERIC_SELECT_TIER_TWO) {
                 // Releases the generic, which the trace's globals hold.
                 exempt = vo_input_release_safe(ctx, pre, 0, stack_pointer);
             }
-            else if (op == _BINARY_OP_TRUEDIV_FLOAT || op == _BINARY_OP_EXTEND ||
-                     op == _COMPARE_OP_FLOAT_INT || op == _COMPARE_OP_FLOAT_INT_CONST) {
+            else if (op == _BINARY_OP_TRUEDIV_FLOAT ||
+                     op == _COMPARE_OP_FLOAT_INT || op == _COMPARE_OP_FLOAT_INT_CONST ||
+                     op == _GUARD_BINARY_OP_EXTEND) {
+                // Only escape to raise (the guards check types).
                 exempt = true;
+            }
+            else if (op == _BINARY_OP_EXTEND) {
+                // Its guard fixed the operand types: only str % x runs code.
+                exempt = _PyBinaryOp_RunsNoCode(
+                    (const _PyBinaryOpSpecializationDescr *)p->operand0);
             }
             else if (op == _CALL_RECORD || op == _CALL_RECORD_CHECKED) {
                 PyObject *callable = pre->npop > 0 && !pre->inputs_overflow ?
@@ -2979,7 +3105,9 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
             }
         }
     }
-    if (length + nvirtual + nmarkers + 2 * vo->nguards + 2 * vo->ndefers >
+    if (length + nvirtual + nmarkers + 2 * vo->nguards + 2 * vo->ndefers + 2 +
+        _Py_popcount32((uint32_t)vo->guard_locals) +
+        _Py_popcount32((uint32_t)(vo->guard_locals >> 32)) >
         UOP_MAX_TRACE_LENGTH - 8) {
         DPRINTF(1, "vo: trace too long\n");
         return length;
@@ -3037,6 +3165,7 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                 obj->type = cand->type;
                 obj->base = cand->base;
                 obj->n = cand->n;
+                obj->origin = cand->origin;
             }
         }
         _PyVORecoveryLoc *locs = (_PyVORecoveryLoc *)(rec->objs + rec->nobjs);
@@ -3081,6 +3210,27 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
     int next_defer = 0;
     for (int i = 0; i < length; i++) {
         _PyUOpInstruction inst = copy[i];
+        for (int k = 0; i == 1 && k < 64 && vo->seed >= 0; k++) {
+            if (vo->guard_locals & ((uint64_t)1 << k)) {
+                _PyUOpInstruction *e = &buffer[out++];
+                *e = inst;
+                e->opcode = _VO_GUARD_LOCAL_TYPE;
+                e->oparg = k;
+                e->operand0 = (uintptr_t)vo->end_type[k];
+                e->operand1 = 0;
+            }
+        }
+        if (i == 1 && vo->seed >= 0 && !vo->cands[vo->seed].escaped) {
+            // Entry-only prologue: the seed's local becomes virtual.
+            _PyVOCandidate *c = &vo->cands[vo->seed];
+            assert(copy[0].opcode == _START_EXECUTOR);
+            _PyUOpInstruction *e = &buffer[out++];
+            *e = inst;
+            e->opcode = _VO_ENTER_LOCAL;
+            e->oparg = vo->seed_local;
+            e->operand0 = (uintptr_t)c->type;
+            e->operand1 = c->base | ((uint64_t)c->n << 8);
+        }
         bool live = false;
         for (int k = 0; k < vo->ncands && !live; k++) {
             _PyVOCandidate *c = &vo->cands[k];
@@ -3088,6 +3238,17 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
         }
         for (int k = 0; k < vo->ncands; k++) {
             _PyVOCandidate *c = &vo->cands[k];
+            if (k == vo->carried && !c->escaped && c->death == i &&
+                c->base != vo->cands[vo->seed].base) {
+                // Into the seed's slots for the next iteration.
+                _PyUOpInstruction *mv = &buffer[out++];
+                *mv = inst;
+                mv->opcode = _VO_MOVE;
+                mv->oparg = 0;
+                mv->operand0 = c->base | ((uint64_t)vo->cands[vo->seed].base << 8) |
+                               ((uint64_t)c->n << 16);
+                mv->operand1 = 0;
+            }
             if (!c->escaped && c->death == i && !c->consumed) {
                 if (pending_flush && !c->safe_release) {
                     // Keep the order of the releases.
@@ -3104,7 +3265,8 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                 r->oparg = c->n;
                 r->operand0 = c->base | ((uint64_t)(c->type != NULL) << 32) |
                               ((uint64_t)(c->type != NULL &&
-                                          _PyGrail_FloatRecordFieldCount(c->type) == c->n) << 33);
+                                          _PyGrail_FloatRecordFieldCount(c->type) == c->n) << 33) |
+                              ((uint64_t)c->origin << 34);
                 r->operand1 = c->type != NULL ?
                     (uintptr_t)_PyGrail_PlanNodes(c->type) : 0;
             }
@@ -3116,6 +3278,9 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
             f->oparg = 0;
             f->operand0 = f->operand1 = 0;
             pending_flush = false;
+        }
+        if (live && inst.opcode == _CHECK_PERIODIC) {
+            inst.opcode = _VO_CHECK_PERIODIC;
         }
         while (next_defer < vo->ndefers && vo->defers[next_defer] < i) {
             next_defer++;
@@ -3193,7 +3358,8 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                 pending_flush = true;
             }
         }
-        if (info_of[i] != NULL && (_PyUop_Flags[inst.opcode] & VO_EXIT_FLAGS)) {
+        // Nothing is virtual before the entry prologue (after uop 0).
+        if (info_of[i] != NULL && i > 0 && (_PyUop_Flags[inst.opcode] & VO_EXIT_FLAGS)) {
             _PyUOpInstruction *m = &buffer[out++];
             *m = inst;
             m->opcode = _VO_EXIT_INFO;
@@ -3212,6 +3378,15 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
     return out;
 }
 
+/* A loop-carried record for the second pass (vo_carry()). */
+typedef struct {
+    int local;
+    PyTypeObject *type;
+    int n;
+    uint64_t guard_locals;          // locals whose entry type is guarded
+    PyTypeObject *guard_type[64];
+} VOSeed;
+
 static int
 optimize_uops(
     _PyThreadStateImpl *tstate,
@@ -3219,7 +3394,8 @@ optimize_uops(
     int trace_len,
     int curr_stacklen,
     _PyUOpInstruction *output,
-    _PyBloomFilter *dependencies
+    _PyBloomFilter *dependencies,
+    const VOSeed *seed
 )
 {
     assert(!PyErr_Occurred());
@@ -3242,6 +3418,9 @@ optimize_uops(
     ctx->vo.ndefers = 0;
     ctx->vo.region_deferred = 0;
     ctx->vo.failed = !vo_enabled();
+    ctx->vo.carry_local = -1;
+    ctx->vo.seed = -1;
+    ctx->vo.carried = -1;
     _Py_UOpsAbstractFrame *frame = _Py_uop_frame_new(ctx, (PyCodeObject *)func->func_code, NULL, 0);
     if (frame == NULL) {
         return 0;
@@ -3249,6 +3428,43 @@ optimize_uops(
     frame->func = func;
     ctx->curr_frame_depth++;
     ctx->frame = frame;
+    for (int k = 0; k < 64 && k < frame->locals_len; k++) {
+        ctx->vo.entry_sym[k] = PyJitRef_Unwrap(frame->locals[k]);
+    }
+    if (seed != NULL && !ctx->vo.failed) {
+        for (int k = 0; k < 64 && k < frame->locals_len; k++) {
+            if (seed->guard_locals & ((uint64_t)1 << k)) {
+                sym_set_type(frame->locals[k], seed->guard_type[k]);
+                ctx->vo.guard_locals |= (uint64_t)1 << k;
+                ctx->vo.end_type[k] = seed->guard_type[k];
+            }
+        }
+    }
+    if (seed != NULL && !ctx->vo.failed && seed->local < frame->locals_len) {
+        // The local's record, made virtual at the entry (_VO_ENTER_LOCAL):
+        // its fields in slots 0..n-1, the record itself in slot n.
+        _PyVOCandidate *c = &ctx->vo.cands[0];
+        JitOptRef ref = frame->locals[seed->local];
+        sym_set_type(ref, seed->type);
+        grail_set_conforming(ctx, ref);
+        c->sym = PyJitRef_Unwrap(ref);
+        c->type = seed->type;
+        c->create = -1;
+        c->death = -1;
+        c->n = (uint8_t)seed->n;
+        c->base = 0;
+        c->escaped = false;
+        c->safe_release = true;
+        c->consumed = false;
+        c->origin = true;
+        for (int k = 0; k < VO_MAX_FIELDS; k++) {
+            c->inner[k] = -1;
+        }
+        ctx->vo.ncands = 1;
+        ctx->vo.shadow_used = ((uint64_t)1 << (seed->n + 1)) - 1;
+        ctx->vo.seed = 0;
+        ctx->vo.seed_local = seed->local;
+    }
     _Py_uop_sym_set_stack_depth(ctx, curr_stacklen, frame->stack_pointer);
 
     _PyUOpInstruction *this_instr = NULL;
@@ -3495,8 +3711,46 @@ _Py_uop_analyze_and_optimize(
 {
     OPT_STAT_INC(optimizer_attempts);
 
+    JitOptContext *ctx = &tstate->jit_tracer_state->opt_context;
+    // The abstract interpreter rewrites some trace entries in place: keep
+    // the trace for a second pass (loop-carried virtual objects).
+    _PyUOpInstruction *trace_copy = NULL;
+    int trace_len = length;
+    if (vo_enabled()) {
+        trace_copy = PyMem_Malloc(length * sizeof(_PyUOpInstruction));
+        if (trace_copy != NULL) {
+            memcpy(trace_copy, buffer, length * sizeof(_PyUOpInstruction));
+        }
+    }
     length = optimize_uops(
-        tstate, buffer, length, curr_stacklen, output, dependencies);
+        tstate, buffer, trace_len, curr_stacklen, output, dependencies, NULL);
+    if (length > 0 && trace_copy != NULL && ctx->vo.carry_local >= 0 &&
+        output[0].opcode == _START_EXECUTOR) {
+        VOSeed seed = {ctx->vo.carry_local, ctx->vo.carry_type, ctx->vo.carry_n, 0, {NULL}};
+        for (int k = 0; k < 64; k++) {
+            if ((ctx->vo.entry_popped & ((uint64_t)1 << k)) && ctx->vo.end_type[k] != NULL) {
+                seed.guard_locals |= (uint64_t)1 << k;
+                seed.guard_type[k] = ctx->vo.end_type[k];
+            }
+        }
+        memcpy(buffer, trace_copy, trace_len * sizeof(_PyUOpInstruction));
+        length = optimize_uops(
+            tstate, buffer, trace_len, curr_stacklen, output, dependencies, &seed);
+        _PyVOState *vo = &ctx->vo;
+        bool ok = length > 0 && vo->seed >= 0 && !vo->cands[vo->seed].escaped &&
+                  vo->carried >= 0 && !vo->cands[vo->carried].escaped &&
+                  vo->ndefers == 0 && vo->nguards == 0 &&
+                  output[0].opcode == _START_EXECUTOR;
+        DPRINTF(2, "vo: loop-carried pass %s (defers %d, guards %d)\n",
+                ok ? "kept" : "dropped", vo->ndefers, vo->nguards);
+        if (!ok) {
+            memcpy(buffer, trace_copy, trace_len * sizeof(_PyUOpInstruction));
+            length = optimize_uops(
+                tstate, buffer, trace_len, curr_stacklen, output, dependencies, NULL);
+            ctx->vo.carry_local = -1;
+        }
+    }
+    PyMem_Free(trace_copy);
 
     if (length == 0) {
         return length;

@@ -5611,6 +5611,22 @@
             break;
         }
 
+        case _VO_ENTER_LOCAL: {
+            break;
+        }
+
+        case _VO_GUARD_LOCAL_TYPE: {
+            break;
+        }
+
+        case _VO_MOVE: {
+            break;
+        }
+
+        case _VO_CHECK_PERIODIC: {
+            break;
+        }
+
         case _VO_DEFER_LOCALS: {
             break;
         }
@@ -5670,7 +5686,14 @@
             args = &stack_pointer[-oparg];
             self_or_null = stack_pointer[-1 - oparg];
             callable = stack_pointer[-2 - oparg];
-            res = sym_new_not_null(ctx);
+            PyTypeObject *arg_type = sym_get_type(args[0]);
+            if (sym_is_null(self_or_null) && vo_math_float_function(sym_get_const(ctx, callable)) &&
+                (arg_type == &PyFloat_Type || arg_type == &PyLong_Type)) {
+                res = sym_new_type(ctx, &PyFloat_Type);
+            }
+            else {
+                res = sym_new_not_null(ctx);
+            }
             c = callable;
             if (sym_is_not_null(self_or_null)) {
                 args--;

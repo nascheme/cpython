@@ -1493,6 +1493,19 @@ def dot(a, b):
 def v3(i):
     return V3(i * 1.0, 2.0, -0.5)
 
+def bigger(a, b):
+    return F(a.x if a.x > b.x else b.x, a.y if a.y > b.y else b.y)
+
+def carried(n, start, stop_at, raise_at):
+    acc = start
+    for i in range(n):
+        if i == stop_at:
+            break
+        if i == raise_at:
+            raise ValueError(acc)
+        acc = bigger(acc, F(i * 1.0, (n - i) * 1.0))
+    return acc
+
 def fused_step(i, c, limit):
     d = (v3(i) + c) - c
     if i >= limit:
@@ -1700,6 +1713,36 @@ class VirtualObjectTests(unittest.TestCase):
             assert m["segs"](n, n) == 2 * n
         """
         assert_python_ok("-c", code, PYTHON_GRAIL_RECORD_FREELIST="0")
+
+    def test_loop_carried(self):
+        # The accumulator stays virtual across iterations: made virtual at
+        # the trace's entry, its next value moved into its slots at the end.
+        m = load_virtual()
+        F, carried = m["F"], m["carried"]
+        n = 100
+        start = F(-1.0, -1.0)
+        expected = F((n - 1) * 1.0, n * 1.0)
+        for _ in range(REPEAT):
+            self.assertEqual(carried(n, start, -1, -1), expected)
+        if tier2_enabled():
+            counts = executor_uop_counts(carried)
+            self.assertEqual(counts["_VO_ENTER_LOCAL"], 1, counts)
+            self.assertNotIn("_CALL_RECORD_CHECKED", counts)
+            self.assertNotIn("_CALL_RECORD", counts)
+        # Leaving at the first iteration gives back the entry object itself.
+        self.assertIs(carried(n, start, 0, -1), start)
+        for stop in (1, n // 2, n - 1):
+            self.assertEqual(carried(n, start, stop, -1),
+                             F((stop - 1) * 1.0, n * 1.0))
+        for at in (1, n // 2, n - 1):
+            with self.assertRaises(ValueError) as cm:
+                carried(n, start, -1, at)
+            self.assertEqual(cm.exception.args[0], F((at - 1) * 1.0, n * 1.0))
+        # Entry with another type: the prologue deopts.
+        # Entry with another value: the prologue deopts.
+        self.assertIsNone(carried(n, None, 0, -1))
+        for _ in range(3):
+            self.assertEqual(carried(n, start, -1, -1), expected)
 
     def test_tuple_of_record(self):
         m = load_virtual()

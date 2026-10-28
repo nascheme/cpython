@@ -6021,6 +6021,13 @@ dummy_func(
             _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uint32_t)bits;
             const _PyGrailPlanNode *plans = (bits >> 32) & 1 ?
                 (const _PyGrailPlanNode *)nodes : NULL;
+            if ((bits >> 34) & 1) {
+                // The real object it was made from, if any (no code runs:
+                // a conforming record of a type whose release is safe).
+                _PyStackRef origin = shadow[oparg];
+                shadow[oparg] = PyStackRef_NULL;
+                PyStackRef_XCLOSE(origin);
+            }
             if ((bits >> 33) & 1) {
                 // All fields are exact floats.
                 for (int i = 0; i < oparg; i++) {
@@ -6046,6 +6053,59 @@ dummy_func(
                     }
                 }
             }
+        }
+
+        /* Loop-carried virtual objects: entry-only prologue of a loop
+         * trace (_JUMP_TO_TOP skips it). Local oparg must hold a conforming
+         * record of exact type type; it becomes virtual: its fields from
+         * shadow slot (slots & 0xff) on, the record itself after them, so
+         * that an exit before it is replaced gives back the same object. */
+        tier2 op(_VO_ENTER_LOCAL, (type/4, slots/4 --)) {
+            _PyStackRef v = frame->localsplus[oparg];
+            PyObject *o = PyStackRef_IsNull(v) ? NULL : PyStackRef_AsPyObjectBorrow(v);
+            DEOPT_IF(o == NULL || Py_TYPE(o) != (PyTypeObject *)type);
+            DEOPT_IF(!((RecordObject *)o)->conforming);
+            uintptr_t bits = (uintptr_t)slots;
+            int n = (int)(bits >> 8);
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (bits & 0xff);
+            for (int i = 0; i < n; i++) {
+                assert(PyStackRef_IsNull(shadow[i]));
+                shadow[i] = PyStackRef_FromPyObjectNew(((RecordObject *)o)->fields[i]);
+            }
+            assert(PyStackRef_IsNull(shadow[n]));
+            shadow[n] = PyStackRef_RefcountOnObject(v) ? v : PyStackRef_FromPyObjectNew(o);
+            frame->localsplus[oparg] = PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder);
+        }
+
+        /* Entry-only prologue of a loop trace: local oparg holds an object
+         * of exact type type, as at the end of an iteration, so that the
+         * release of that value runs no code. */
+        tier2 op(_VO_GUARD_LOCAL_TYPE, (type/4 --)) {
+            _PyStackRef v = frame->localsplus[oparg];
+            DEOPT_IF(PyStackRef_IsNull(v));
+            DEOPT_IF(Py_TYPE(PyStackRef_AsPyObjectBorrow(v)) != (PyTypeObject *)type);
+        }
+
+        /* Before _JUMP_TO_TOP: move the n fields of the virtual object
+         * carried into the next iteration to the slots it starts in. */
+        tier2 op(_VO_MOVE, (slots/4 --)) {
+            uintptr_t bits = (uintptr_t)slots;
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow;
+            int from = (int)(bits & 0xff), to = (int)((bits >> 8) & 0xff);
+            int n = (int)(bits >> 16);
+            memmove(shadow + to, shadow + from, n * sizeof(_PyStackRef));
+            for (int i = from; i < from + n; i++) {
+                if (i < to || i >= to + n) {
+                    shadow[i] = PyStackRef_NULL;
+                }
+            }
+        }
+
+        /* _CHECK_PERIODIC while virtual objects are live: pending calls run
+         * code, so leave the trace (rebuilding them) to handle them. */
+        tier2 op(_VO_CHECK_PERIODIC, (--)) {
+            uintptr_t breaker = _Py_atomic_load_uintptr_relaxed(&tstate->eval_breaker);
+            DEOPT_IF(breaker & _PY_EVAL_EVENTS_MASK);
         }
 
         /* Before a _RETURN_VALUE while virtual objects are live: releasing

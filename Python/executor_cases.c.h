@@ -21812,6 +21812,13 @@
             _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uint32_t)bits;
             const _PyGrailPlanNode *plans = (bits >> 32) & 1 ?
             (const _PyGrailPlanNode *)nodes : NULL;
+            if ((bits >> 34) & 1) {
+                _PyStackRef origin = shadow[oparg];
+                shadow[oparg] = PyStackRef_NULL;
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                PyStackRef_XCLOSE(origin);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+            }
             if ((bits >> 33) & 1) {
                 for (int i = 0; i < oparg; i++) {
                     _PyStackRef field = shadow[i];
@@ -21842,6 +21849,248 @@
             _tos_cache1 = PyStackRef_ZERO_BITS;
             _tos_cache2 = PyStackRef_ZERO_BITS;
             SET_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_ENTER_LOCAL_r00: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            oparg = CURRENT_OPARG();
+            PyObject *type = (PyObject *)CURRENT_OPERAND0_64();
+            PyObject *slots = (PyObject *)CURRENT_OPERAND1_64();
+            _PyStackRef v = frame->localsplus[oparg];
+            PyObject *o = PyStackRef_IsNull(v) ? NULL : PyStackRef_AsPyObjectBorrow(v);
+            if (o == NULL || Py_TYPE(o) != (PyTypeObject *)type) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            if (!((RecordObject *)o)->conforming) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            uintptr_t bits = (uintptr_t)slots;
+            int n = (int)(bits >> 8);
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (bits & 0xff);
+            for (int i = 0; i < n; i++) {
+                assert(PyStackRef_IsNull(shadow[i]));
+                shadow[i] = PyStackRef_FromPyObjectNew(((RecordObject *)o)->fields[i]);
+            }
+            assert(PyStackRef_IsNull(shadow[n]));
+            shadow[n] = PyStackRef_RefcountOnObject(v) ? v : PyStackRef_FromPyObjectNew(o);
+            frame->localsplus[oparg] = PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder);
+            _tos_cache0 = PyStackRef_ZERO_BITS;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_GUARD_LOCAL_TYPE_r00: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            oparg = CURRENT_OPARG();
+            PyObject *type = (PyObject *)CURRENT_OPERAND0_64();
+            _PyStackRef v = frame->localsplus[oparg];
+            if (PyStackRef_IsNull(v)) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            if (Py_TYPE(PyStackRef_AsPyObjectBorrow(v)) != (PyTypeObject *)type) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            SET_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_GUARD_LOCAL_TYPE_r11: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            oparg = CURRENT_OPARG();
+            PyObject *type = (PyObject *)CURRENT_OPERAND0_64();
+            _PyStackRef v = frame->localsplus[oparg];
+            if (PyStackRef_IsNull(v)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(1);
+                JUMP_TO_JUMP_TARGET();
+            }
+            if (Py_TYPE(PyStackRef_AsPyObjectBorrow(v)) != (PyTypeObject *)type) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(1);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_GUARD_LOCAL_TYPE_r22: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            oparg = CURRENT_OPARG();
+            PyObject *type = (PyObject *)CURRENT_OPERAND0_64();
+            _PyStackRef v = frame->localsplus[oparg];
+            if (PyStackRef_IsNull(v)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            if (Py_TYPE(PyStackRef_AsPyObjectBorrow(v)) != (PyTypeObject *)type) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache1 = _stack_item_1;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_GUARD_LOCAL_TYPE_r33: {
+            CHECK_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            _PyStackRef _stack_item_2 = _tos_cache2;
+            oparg = CURRENT_OPARG();
+            PyObject *type = (PyObject *)CURRENT_OPERAND0_64();
+            _PyStackRef v = frame->localsplus[oparg];
+            if (PyStackRef_IsNull(v)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = _stack_item_2;
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            if (Py_TYPE(PyStackRef_AsPyObjectBorrow(v)) != (PyTypeObject *)type) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = _stack_item_2;
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache2 = _stack_item_2;
+            _tos_cache1 = _stack_item_1;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_MOVE_r00: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            PyObject *slots = (PyObject *)CURRENT_OPERAND0_64();
+            uintptr_t bits = (uintptr_t)slots;
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow;
+            int from = (int)(bits & 0xff), to = (int)((bits >> 8) & 0xff);
+            int n = (int)(bits >> 16);
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            memmove(shadow + to, shadow + from, n * sizeof(_PyStackRef));
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            for (int i = from; i < from + n; i++) {
+                if (i < to || i >= to + n) {
+                    shadow[i] = PyStackRef_NULL;
+                }
+            }
+            _tos_cache0 = PyStackRef_ZERO_BITS;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_CHECK_PERIODIC_r00: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            uintptr_t breaker = _Py_atomic_load_uintptr_relaxed(&tstate->eval_breaker);
+            if (breaker & _PY_EVAL_EVENTS_MASK) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            SET_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_CHECK_PERIODIC_r11: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            uintptr_t breaker = _Py_atomic_load_uintptr_relaxed(&tstate->eval_breaker);
+            if (breaker & _PY_EVAL_EVENTS_MASK) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(1);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_CHECK_PERIODIC_r22: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            uintptr_t breaker = _Py_atomic_load_uintptr_relaxed(&tstate->eval_breaker);
+            if (breaker & _PY_EVAL_EVENTS_MASK) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache1 = _stack_item_1;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_CHECK_PERIODIC_r33: {
+            CHECK_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            _PyStackRef _stack_item_2 = _tos_cache2;
+            uintptr_t breaker = _Py_atomic_load_uintptr_relaxed(&tstate->eval_breaker);
+            if (breaker & _PY_EVAL_EVENTS_MASK) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = _stack_item_2;
+                _tos_cache1 = _stack_item_1;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            _tos_cache2 = _stack_item_2;
+            _tos_cache1 = _stack_item_1;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(3);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
             break;
         }

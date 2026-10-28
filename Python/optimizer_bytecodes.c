@@ -2316,7 +2316,14 @@ dummy_func(void) {
     }
 
     op(_CALL_BUILTIN_O, (callable, self_or_null, args[oparg] -- res, c, s)) {
-        res = sym_new_not_null(ctx);
+        PyTypeObject *arg_type = sym_get_type(args[0]);
+        if (sym_is_null(self_or_null) && vo_math_float_function(sym_get_const(ctx, callable)) &&
+            (arg_type == &PyFloat_Type || arg_type == &PyLong_Type)) {
+            res = sym_new_type(ctx, &PyFloat_Type);
+        }
+        else {
+            res = sym_new_not_null(ctx);
+        }
         c = callable;
         if (sym_is_not_null(self_or_null)) {
             args--;

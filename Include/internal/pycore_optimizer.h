@@ -91,8 +91,11 @@ typedef struct {
     uint8_t base;           // first shadow slot
     bool escaped;           // stays a real allocation
     bool safe_release;      // releasing its fields runs no code
-    bool consumed;          // a fused uop took over its fields at its death
+    bool consumed;          // a fused uop took over its fields at its death,
+                            // or it is carried into the next iteration
                             // (no release)
+    bool origin;            // slot base + n holds the real object it was
+                            // made from at the trace's entry, or NULL
     int8_t inner[16];       // candidate held by each field, or -1
 } _PyVOCandidate;
 
@@ -126,6 +129,21 @@ typedef struct {
     bool dropped_uop;       // a fusion replaced the previous output uop
     int steal_from;         // candidate whose slots the current element-wise
                             // uop takes over, or -1
+    /* Loop-carried virtual objects (see vo_carry()). */
+    int carry_local;        // first pass: a local of the root frame that
+                            // carries a candidate into the next iteration
+    PyTypeObject *carry_type;
+    int carry_n;
+    int seed;               // second pass: candidate made at the entry from
+                            // that local (_VO_ENTER_LOCAL), or -1
+    int seed_local;
+    int carried;            // second pass: the candidate carried in it, or -1
+    JitOptSymbol *entry_sym[64];   // the root frame's locals at the entry
+    uint64_t entry_popped;  // first pass: locals whose entry value is
+                            // released unsafely while candidates are live
+    PyTypeObject *end_type[64];    // first pass: their type at the loop's end
+    uint64_t guard_locals;  // second pass: locals of type end_type at the
+                            // entry (_VO_GUARD_LOCAL_TYPE)
     int ncands;
     int nuses;
     int nsnaps;
@@ -313,6 +331,7 @@ typedef struct {
     PyTypeObject *type;     // record type, or NULL for a tuple
     uint8_t base;           // first shadow slot
     uint8_t n;              // field count
+    uint8_t origin;         // slot base + n may hold the real object itself
 } _PyVORecoveryObject;
 
 /* Where a virtual object is: a local, a stack slot counted from the base of

@@ -322,7 +322,18 @@ _PyVO_Recover(PyThreadState *tstate, _PyInterpreterFrame *frame,
                 fields[in->field] = PyStackRef_FromPyObjectNew(value);
             }
         }
-        if (inner_ok && obj->type != NULL) {
+        if (obj->origin && !PyStackRef_IsNull(fields[obj->n])) {
+            // Made at the trace's entry from this real object (unchanged
+            // since): that object, not a copy.
+            o = PyStackRef_AsPyObjectSteal(fields[obj->n]);
+            fields[obj->n] = PyStackRef_NULL;
+            for (int j = 0; j < obj->n; j++) {
+                _PyStackRef field = fields[j];
+                fields[j] = PyStackRef_NULL;
+                PyStackRef_XCLOSE(field);
+            }
+        }
+        else if (inner_ok && obj->type != NULL) {
             o = _PyGrail_RecordFromVirtual(obj->type, fields, obj->n);
         }
         else if (inner_ok) {
@@ -1676,7 +1687,13 @@ prepare_for_execution(_PyUOpInstruction *buffer, int length,
         if (base_opcode == _JUMP_TO_TOP) {
             assert(_PyUop_Uncached[buffer[0].opcode] == _START_EXECUTOR);
             buffer[i].format = UOP_FORMAT_JUMP;
-            buffer[i].jump_target = 1;
+            // Past the entry-only prologue (virtual objects).
+            int top = 1;
+            while (_PyUop_Uncached[buffer[top].opcode] == _VO_ENTER_LOCAL ||
+                   _PyUop_Uncached[buffer[top].opcode] == _VO_GUARD_LOCAL_TYPE) {
+                top++;
+            }
+            buffer[i].jump_target = top;
         }
     }
     return next_spare;
