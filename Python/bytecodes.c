@@ -4878,6 +4878,35 @@ dummy_func(
             new_frame = PyStackRef_Wrap(pushed_frame);
         }
 
+        /* Tier 2, emitted by the optimizer for a guarded function whose
+         * call leaves trailing parameters to their defaults (no *args,
+         * **kwargs or keyword-only parameters): as _INIT_CALL_PY_EXACT_ARGS,
+         * then the defaults. The function's version covers __code__ and
+         * __defaults__.
+         */
+        tier2 op(_INIT_CALL_PY_DEFAULTS, (callable, self_or_null, args[oparg] -- new_frame)) {
+            int has_self = !PyStackRef_IsNull(self_or_null);
+            STAT_INC(CALL, hit);
+            PyFunctionObject *func = (PyFunctionObject *)PyStackRef_AsPyObjectBorrow(callable);
+            PyObject *defaults = func->func_defaults;
+            int argcount = ((PyCodeObject *)func->func_code)->co_argcount;
+            assert(defaults != NULL && oparg + has_self < argcount &&
+                   oparg + has_self >= argcount - PyTuple_GET_SIZE(defaults));
+            _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, callable, argcount, frame);
+            _PyStackRef *first_non_self_local = pushed_frame->localsplus + has_self;
+            pushed_frame->localsplus[0] = self_or_null;
+            for (int i = 0; i < oparg; i++) {
+                first_non_self_local[i] = args[i];
+            }
+            Py_ssize_t first_default = argcount - PyTuple_GET_SIZE(defaults);
+            for (int i = oparg + has_self; i < argcount; i++) {
+                pushed_frame->localsplus[i] = PyStackRef_FromPyObjectNew(
+                    PyTuple_GET_ITEM(defaults, i - first_default));
+            }
+            INPUTS_DEAD();
+            new_frame = PyStackRef_Wrap(pushed_frame);
+        }
+
         op(_PUSH_FRAME, (new_frame -- )) {
             assert(!IS_PEP523_HOOKED(tstate));
             _PyInterpreterFrame *temp = PyStackRef_Unwrap(new_frame);

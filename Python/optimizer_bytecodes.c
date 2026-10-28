@@ -1423,6 +1423,25 @@ dummy_func(void) {
     }
 
     op(_PY_FRAME_GENERAL, (callable, self_or_null, args[oparg] -- new_frame)) {
+        // A guarded function, called with its trailing parameters left to
+        // their defaults: push the frame directly.
+        PyFunctionObject *func = (PyFunctionObject *)sym_get_const(ctx, callable);
+        if (func != NULL && PyFunction_Check(func) && func->func_defaults != NULL &&
+            (sym_is_null(self_or_null) || sym_is_not_null(self_or_null))) {
+            PyCodeObject *co = (PyCodeObject *)func->func_code;
+            int given = oparg + sym_is_not_null(self_or_null);
+            if ((co->co_flags & (CO_VARARGS | CO_VARKEYWORDS)) == 0 &&
+                (co->co_flags & CO_OPTIMIZED) && co->co_kwonlyargcount == 0 &&
+                given < co->co_argcount &&
+                given >= co->co_argcount - PyTuple_GET_SIZE(func->func_defaults)) {
+                ADD_OP(_CHECK_STACK_SPACE_OPERAND, 0, co->co_framesize);
+                ADD_OP(_INIT_CALL_PY_DEFAULTS, oparg, 0);
+            }
+        }
+        new_frame = PyJitRef_WrapInvalid(frame_new_from_symbol(ctx, callable, NULL, 0));
+    }
+
+    op(_INIT_CALL_PY_DEFAULTS, (callable, self_or_null, args[oparg] -- new_frame)) {
         new_frame = PyJitRef_WrapInvalid(frame_new_from_symbol(ctx, callable, NULL, 0));
     }
 
@@ -1799,14 +1818,32 @@ dummy_func(void) {
         res = sym_new_type(ctx, &PyBool_Type);
         PyTypeObject *inst_type = sym_get_type(instance);
         PyTypeObject *cls_o = (PyTypeObject *)sym_get_const(ctx, cls);
-        if (inst_type && cls_o && sym_matches_type(cls, &PyType_Type)) {
+        // The metaclass may be a Python class that inherits type's
+        // __instancecheck__ (the answer is cached in the metaclass); the
+        // executor then depends on the metaclass.
+        PyTypeObject *meta = cls_o != NULL && PyType_Check(cls_o)
+                             ? Py_TYPE(cls_o) : NULL;
+        int known_check = meta == &PyType_Type ||
+            (meta != NULL && (meta->tp_flags & Py_TPFLAGS_HEAPTYPE) &&
+             _PyType_HasTypeInstanceCheck(meta, 0) &&
+             meta->tp_version_tag != 0);
+        // The below check is equivalent to PyObject_TypeCheck(inst, cls);
+        // if it fails, inst.__class__ could still say otherwise.
+        PyObject *out = NULL;
+        if (inst_type && known_check) {
+            out = inst_type == cls_o || PyType_IsSubtype(inst_type, cls_o)
+                  ? Py_True
+                  : _PyType_HasDefaultClassAttr(inst_type) ? Py_False : NULL;
+        }
+        if (out != NULL) {
             // isinstance(inst, cls) where both inst and cls have
             // known types, meaning we can deduce either True or False
-
-            // The below check is equivalent to PyObject_TypeCheck(inst, cls)
-            PyObject *out = Py_False;
-            if (inst_type == cls_o || PyType_IsSubtype(inst_type, cls_o)) {
-                out = Py_True;
+            if (meta != &PyType_Type) {
+                watch_type(meta, dependencies);
+            }
+            if (out == Py_False) {
+                // Its __class__ must stay the default one.
+                watch_type(inst_type, dependencies);
             }
             sym_set_const(res, out);
             optimize_pop_top(ctx, this_instr, cls);

@@ -327,6 +327,7 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_INIT_CALL_PY_EXACT_ARGS_3] = HAS_PURE_FLAG,
     [_INIT_CALL_PY_EXACT_ARGS_4] = HAS_PURE_FLAG,
     [_INIT_CALL_PY_EXACT_ARGS] = HAS_ARG_FLAG | HAS_PURE_FLAG,
+    [_INIT_CALL_PY_DEFAULTS] = HAS_ARG_FLAG,
     [_PUSH_FRAME] = HAS_SYNC_SP_FLAG | HAS_NEEDS_GUARD_IP_FLAG,
     [_GUARD_NOS_NULL] = HAS_EXIT_FLAG,
     [_GUARD_THIRD_NULL] = HAS_EXIT_FLAG,
@@ -3091,6 +3092,15 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_INIT_CALL_PY_DEFAULTS] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 1, 0, _INIT_CALL_PY_DEFAULTS_r01 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
     [_PUSH_FRAME] = {
         .best = { 1, 1, 1, 1 },
         .entries = {
@@ -4754,6 +4764,7 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_INIT_CALL_PY_EXACT_ARGS_3_r01] = _INIT_CALL_PY_EXACT_ARGS_3,
     [_INIT_CALL_PY_EXACT_ARGS_4_r01] = _INIT_CALL_PY_EXACT_ARGS_4,
     [_INIT_CALL_PY_EXACT_ARGS_r01] = _INIT_CALL_PY_EXACT_ARGS,
+    [_INIT_CALL_PY_DEFAULTS_r01] = _INIT_CALL_PY_DEFAULTS,
     [_PUSH_FRAME_r10] = _PUSH_FRAME,
     [_GUARD_NOS_NULL_r02] = _GUARD_NOS_NULL,
     [_GUARD_NOS_NULL_r12] = _GUARD_NOS_NULL,
@@ -5868,6 +5879,8 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_IMPORT_NAME_r21] = "_IMPORT_NAME_r21",
     [_INIT_CALL_BOUND_METHOD_EXACT_ARGS] = "_INIT_CALL_BOUND_METHOD_EXACT_ARGS",
     [_INIT_CALL_BOUND_METHOD_EXACT_ARGS_r00] = "_INIT_CALL_BOUND_METHOD_EXACT_ARGS_r00",
+    [_INIT_CALL_PY_DEFAULTS] = "_INIT_CALL_PY_DEFAULTS",
+    [_INIT_CALL_PY_DEFAULTS_r01] = "_INIT_CALL_PY_DEFAULTS_r01",
     [_INIT_CALL_PY_EXACT_ARGS] = "_INIT_CALL_PY_EXACT_ARGS",
     [_INIT_CALL_PY_EXACT_ARGS_r01] = "_INIT_CALL_PY_EXACT_ARGS_r01",
     [_INIT_CALL_PY_EXACT_ARGS_0] = "_INIT_CALL_PY_EXACT_ARGS_0",
@@ -7009,6 +7022,8 @@ int _PyUop_num_popped(int opcode, int oparg)
         case _INIT_CALL_PY_EXACT_ARGS_4:
             return 2 + oparg;
         case _INIT_CALL_PY_EXACT_ARGS:
+            return 2 + oparg;
+        case _INIT_CALL_PY_DEFAULTS:
             return 2 + oparg;
         case _PUSH_FRAME:
             return 1;

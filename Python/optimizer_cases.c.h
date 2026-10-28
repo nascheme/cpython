@@ -4335,9 +4335,24 @@
         /* _MONITOR_CALL is not a viable micro-op for tier 2 */
 
         case _PY_FRAME_GENERAL: {
+            JitOptRef self_or_null;
             JitOptRef callable;
             JitOptRef new_frame;
+            self_or_null = stack_pointer[-1 - oparg];
             callable = stack_pointer[-2 - oparg];
+            PyFunctionObject *func = (PyFunctionObject *)sym_get_const(ctx, callable);
+            if (func != NULL && PyFunction_Check(func) && func->func_defaults != NULL &&
+                (sym_is_null(self_or_null) || sym_is_not_null(self_or_null))) {
+                PyCodeObject *co = (PyCodeObject *)func->func_code;
+                int given = oparg + sym_is_not_null(self_or_null);
+                if ((co->co_flags & (CO_VARARGS | CO_VARKEYWORDS)) == 0 &&
+                    (co->co_flags & CO_OPTIMIZED) && co->co_kwonlyargcount == 0 &&
+                    given < co->co_argcount &&
+                    given >= co->co_argcount - PyTuple_GET_SIZE(func->func_defaults)) {
+                    ADD_OP(_CHECK_STACK_SPACE_OPERAND, 0, co->co_framesize);
+                    ADD_OP(_INIT_CALL_PY_DEFAULTS, oparg, 0);
+                }
+            }
             new_frame = PyJitRef_WrapInvalid(frame_new_from_symbol(ctx, callable, NULL, 0));
             CHECK_STACK_BOUNDS(-1 - oparg);
             stack_pointer[-2 - oparg] = new_frame;
@@ -4523,6 +4538,18 @@
             } else {
                 new_frame = PyJitRef_WrapInvalid(frame_new_from_symbol(ctx, callable, NULL, 0));
             }
+            CHECK_STACK_BOUNDS(-1 - oparg);
+            stack_pointer[-2 - oparg] = new_frame;
+            stack_pointer += -1 - oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _INIT_CALL_PY_DEFAULTS: {
+            JitOptRef callable;
+            JitOptRef new_frame;
+            callable = stack_pointer[-2 - oparg];
+            new_frame = PyJitRef_WrapInvalid(frame_new_from_symbol(ctx, callable, NULL, 0));
             CHECK_STACK_BOUNDS(-1 - oparg);
             stack_pointer[-2 - oparg] = new_frame;
             stack_pointer += -1 - oparg;
@@ -4972,10 +4999,39 @@
             res = sym_new_type(ctx, &PyBool_Type);
             PyTypeObject *inst_type = sym_get_type(instance);
             PyTypeObject *cls_o = (PyTypeObject *)sym_get_const(ctx, cls);
-            if (inst_type && cls_o && sym_matches_type(cls, &PyType_Type)) {
-                PyObject *out = Py_False;
-                if (inst_type == cls_o || PyType_IsSubtype(inst_type, cls_o)) {
-                    out = Py_True;
+            PyTypeObject *meta = cls_o != NULL && PyType_Check(cls_o)
+            ? Py_TYPE(cls_o) : NULL;
+            int known_check = meta == &PyType_Type ||
+            (meta != NULL && (meta->tp_flags & Py_TPFLAGS_HEAPTYPE) &&
+             _PyType_HasTypeInstanceCheck(meta, 0) &&
+             meta->tp_version_tag != 0);
+            PyObject *out = NULL;
+            if (inst_type && known_check) {
+                CHECK_STACK_BOUNDS(-3);
+                stack_pointer[-4] = res;
+                stack_pointer += -3;
+                ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                out = inst_type == cls_o || PyType_IsSubtype(inst_type, cls_o)
+                ? Py_True
+            : _PyType_HasDefaultClassAttr(inst_type) ? Py_False : NULL;
+                stack_pointer += 3;
+            }
+            if (out != NULL) {
+                if (meta != &PyType_Type) {
+                    CHECK_STACK_BOUNDS(-3);
+                    stack_pointer[-4] = res;
+                    stack_pointer += -3;
+                    ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                    watch_type(meta, dependencies);
+                    stack_pointer += 3;
+                }
+                if (out == Py_False) {
+                    CHECK_STACK_BOUNDS(-3);
+                    stack_pointer[-4] = res;
+                    stack_pointer += -3;
+                    ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                    watch_type(inst_type, dependencies);
+                    stack_pointer += 3;
                 }
                 sym_set_const(res, out);
                 optimize_pop_top(ctx, this_instr, cls);

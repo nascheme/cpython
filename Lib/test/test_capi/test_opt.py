@@ -3653,6 +3653,59 @@ class TestUopsOptimization(unittest.TestCase):
         self.assertNotIn("_TO_BOOL_BOOL", uops)
         self.assertIn(self.guard_is_true, uops)
 
+    def test_call_isinstance_metaclass_without_instancecheck(self):
+        class Meta(type):
+            pass
+
+        class Node(metaclass=Meta):
+            pass
+
+        ns = {"Node": Node}
+        exec(textwrap.dedent("""
+            def testfunc(n):
+                x = 0
+                for _ in range(n):
+                    y = isinstance(42, Node)
+                    if not y:
+                        x += 1
+                return x
+        """), ns)
+        testfunc = ns["testfunc"]
+
+        res, ex = self._run_with_optimizer(testfunc, TIER2_THRESHOLD)
+        self.assertEqual(res, TIER2_THRESHOLD)
+        self.assertIsNotNone(ex)
+        uops = get_opnames(ex)
+        self.assertNotIn("_CALL_ISINSTANCE", uops)
+        # Giving the metaclass an __instancecheck__ invalidates the executor.
+        Meta.__instancecheck__ = lambda cls, inst: True
+        self.assertFalse(ex.is_valid())
+        self.assertEqual(testfunc(10), 0)
+
+    def test_call_py_defaults(self):
+        def f(a, b=2, c=[3]):
+            return a + b + c[0]
+
+        class C:
+            def m(self, x, y=10):
+                return x + y
+
+        def testfunc(n):
+            total = 0
+            o = C()
+            for _ in range(n):
+                total += f(1) + f(1, 5) + o.m(1)
+            return total
+
+        res, ex = self._run_with_optimizer(testfunc, TIER2_THRESHOLD)
+        self.assertEqual(res, (6 + 9 + 11) * TIER2_THRESHOLD)
+        self.assertIsNotNone(ex)
+        uops = get_opnames(ex)
+        self.assertIn("_INIT_CALL_PY_DEFAULTS", uops)
+        # New defaults change the function's version.
+        f.__defaults__ = (20, [30])
+        self.assertEqual(testfunc(3), (51 + 36 + 11) * 3)
+
     def test_set_type_version_sets_type(self):
         class C:
             A = 1

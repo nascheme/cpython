@@ -18260,6 +18260,46 @@
             break;
         }
 
+        case _INIT_CALL_PY_DEFAULTS_r01: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef *args;
+            _PyStackRef self_or_null;
+            _PyStackRef callable;
+            _PyStackRef new_frame;
+            oparg = CURRENT_OPARG();
+            args = &stack_pointer[-oparg];
+            self_or_null = stack_pointer[-1 - oparg];
+            callable = stack_pointer[-2 - oparg];
+            int has_self = !PyStackRef_IsNull(self_or_null);
+            STAT_INC(CALL, hit);
+            PyFunctionObject *func = (PyFunctionObject *)PyStackRef_AsPyObjectBorrow(callable);
+            PyObject *defaults = func->func_defaults;
+            int argcount = ((PyCodeObject *)func->func_code)->co_argcount;
+            assert(defaults != NULL && oparg + has_self < argcount &&
+                   oparg + has_self >= argcount - PyTuple_GET_SIZE(defaults));
+            _PyInterpreterFrame *pushed_frame = _PyFrame_PushUnchecked(tstate, callable, argcount, frame);
+            _PyStackRef *first_non_self_local = pushed_frame->localsplus + has_self;
+            pushed_frame->localsplus[0] = self_or_null;
+            for (int i = 0; i < oparg; i++) {
+                first_non_self_local[i] = args[i];
+            }
+            Py_ssize_t first_default = argcount - PyTuple_GET_SIZE(defaults);
+            for (int i = oparg + has_self; i < argcount; i++) {
+                pushed_frame->localsplus[i] = PyStackRef_FromPyObjectNew(
+                    PyTuple_GET_ITEM(defaults, i - first_default));
+            }
+            new_frame = PyStackRef_Wrap(pushed_frame);
+            _tos_cache0 = new_frame;
+            _tos_cache1 = PyStackRef_ZERO_BITS;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
+            SET_CURRENT_CACHED_VALUES(1);
+            stack_pointer += -2 - oparg;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _PUSH_FRAME_r10: {
             CHECK_CURRENT_CACHED_VALUES(1);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
