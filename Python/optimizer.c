@@ -843,6 +843,16 @@ _PyJit_translate_single_bytecode_to_trace(
         }
     }
 
+    // A binary operator's shim (BINARY_OP_PY) returning past the trace's
+    // root: the trace started inside the operator method, which usually
+    // has many callers, so do not continue into the one recorded.
+    if (old_code == (PyCodeObject *)&_Py_BinaryOpCleanup &&
+        opcode == RETURN_VALUE &&
+        tracer->translator_state.frame_depth <= 0) {
+        ADD_TO_TRACE(_EXIT_TRACE, 0, 0, target);
+        goto done;
+    }
+
     if (opcode == NOP) {
         return 1;
     }
@@ -1054,8 +1064,15 @@ _PyJit_translate_single_bytecode_to_trace(
                 }
                 else if (uop == _PUSH_FRAME) {
                     _PyJitTracerTranslatorState *ts_depth = &tracer->translator_state;
-                    ts_depth->frame_depth++;
-                    assert(ts_depth->frame_depth < MAX_ABSTRACT_FRAME_DEPTH);
+                    // These also push a shim frame (_Py_BinaryOpCleanup,
+                    // _Py_InitCleanup), which returns too; the fitness
+                    // penalty stays one frame's (charging the shim gave
+                    // shorter, slower traces).
+                    ts_depth->frame_depth +=
+                        (opcode == BINARY_OP_PY ||
+                         opcode == CALL_ALLOC_AND_ENTER_INIT) ? 2 : 1;
+                    // Fitness allows MAX_ABSTRACT_FRAME_DEPTH - 1 pushes.
+                    assert(ts_depth->frame_depth < 2 * MAX_ABSTRACT_FRAME_DEPTH);
                     int32_t frame_penalty = compute_frame_penalty(tstate->interp->opt_config.fitness_initial);
                     ts_depth->fitness -= frame_penalty;
                     DPRINTF(3, "  _PUSH_FRAME: depth=%d, penalty=-%d -> fitness=%d\n",
@@ -1076,8 +1093,12 @@ _PyJit_translate_single_bytecode_to_trace(
                                 ts_depth->fitness);
                     }
                     else {
-                        // Symmetric with push: net-zero frame impact.
-                        ts_depth->fitness += frame_penalty;
+                        // Symmetric with push: net-zero frame impact. A
+                        // shim frame was not charged on push.
+                        if (old_code != (PyCodeObject *)&_Py_BinaryOpCleanup &&
+                            old_code != (PyCodeObject *)&_Py_InitCleanup) {
+                            ts_depth->fitness += frame_penalty;
+                        }
                         ts_depth->frame_depth--;
                         DPRINTF(3, "  %s: return reward=+%d, depth=%d -> fitness=%d\n",
                                 _PyOpcode_uop_name[uop], frame_penalty,
