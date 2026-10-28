@@ -103,6 +103,28 @@ PyAPI_FUNC(const _PyGrailPlanNode *) _PyGrail_PlanNodes(PyTypeObject *type);
 PyAPI_FUNC(int) _PyGrail_PlanConforms(const _PyGrailPlanNode *nodes,
                                       const _PyGrailPlanNode *p, PyObject *value);
 
+/* 1 if value conforms to plan node p, a leaf or a union of leaves of
+ * nodes (tier-2 virtual records check their arguments inline with it). */
+static inline int
+_PyGrail_PlanLeafConforms(const _PyGrailPlanNode *nodes,
+                          const _PyGrailPlanNode *p, PyObject *value)
+{
+    uint32_t n = 1;
+    if (p->kind == _PyGrail_PLAN_UNION) {
+        n = p->n;
+        p = nodes + p->first;
+    }
+    for (uint32_t i = 0; i < n; i++, p++) {
+        if (p->kind == _PyGrail_PLAN_ANY ||
+            (Py_TYPE(value) == p->type &&
+             (p->kind == _PyGrail_PLAN_EXACT ||
+              ((RecordObject *)value)->conforming))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Field count of a record (UNPACK_SEQUENCE_RECORD's guard). */
 static inline Py_ssize_t
 _PyGrail_RecordFieldCount(PyObject *record)
@@ -124,8 +146,6 @@ PyAPI_FUNC(PyObject *) _PyGrail_RecordFromStackRefsStealOnSuccess(PyTypeObject *
 PyAPI_FUNC(PyObject *) _PyGrail_RecordFromStackRefsCheckedStealOnSuccess(
     PyTypeObject *, _PyStackRef *, Py_ssize_t, uint64_t check);
 /* Virtual records in tier 2 (see Python/optimizer_analysis.c). */
-PyAPI_FUNC(int) _PyGrail_RecordArgsConform(PyTypeObject *, _PyStackRef *,
-                                           Py_ssize_t, uint64_t check);
 PyAPI_FUNC(PyObject *) _PyGrail_RecordFromVirtual(PyTypeObject *,
                                                   _PyStackRef *, Py_ssize_t);
 int _PyGrail_MatchRecord(PyObject *subject, PyObject *type, Py_ssize_t nargs,

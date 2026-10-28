@@ -594,7 +594,7 @@ NON_ESCAPING_FUNCTIONS = (
     "_PyGrail_IsPositionalRecordCall",
     "_PyGrail_IsRecordTypeFast",
     "_PyGrail_IsRecordDraft",
-    "_PyGrail_RecordArgsConform",
+    "_PyGrail_PlanLeafConforms",
     "_PyGrail_IsDraft",
     "_PyGrail_IsDraftWithMethod",
     "_PyFrame_SetStackPointer",

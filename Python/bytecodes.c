@@ -5884,13 +5884,23 @@ dummy_func(
          * ones (_VO_RECOVER). */
 
         /* _CALL_RECORD whose result stays virtual. Deopts, consuming
-         * nothing, unless the arguments whose bit is set in check conform:
-         * a virtual record always conforms. */
-        tier2 op(_VO_NEW_RECORD, (check/4, base/4, callable, null, args[oparg] -- res, c)) {
-            DEOPT_IF(!_PyGrail_RecordArgsConform(
-                (PyTypeObject *)PyStackRef_AsPyObjectBorrow(callable),
-                args, oparg, (uint64_t)(uintptr_t)check));
-            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
+         * nothing, unless the arguments whose bit is set in the low 32 bits
+         * of check conform to their plans in nodes (leaves or unions of
+         * leaves): a virtual record always conforms. The first shadow slot
+         * is in the high 32 bits of check. */
+        tier2 op(_VO_NEW_RECORD, (check/4, nodes/4, callable, null, args[oparg] -- res, c)) {
+            uint64_t bits = (uint64_t)(uintptr_t)check;
+            const _PyGrailPlanNode *plans = (const _PyGrailPlanNode *)nodes;
+            uint32_t mask = (uint32_t)bits;
+            int ok = 1;
+            for (int i = 0; mask != 0; i++, mask >>= 1) {
+                if (mask & 1) {
+                    ok &= _PyGrail_PlanLeafConforms(
+                        plans, &plans[i], PyStackRef_AsPyObjectBorrow(args[i]));
+                }
+            }
+            DEOPT_IF(!ok);
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (bits >> 32);
             for (int i = 0; i < oparg; i++) {
                 assert(PyStackRef_IsNull(shadow[i]));
                 shadow[i] = PyStackRef_MakeHeapSafe(args[i]);
@@ -5943,13 +5953,30 @@ dummy_func(
             DEAD(seq);
         }
 
-        /* A virtual object died: release its oparg fields. */
-        tier2 op(_VO_RELEASE, (base/4 --)) {
-            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
+        /* A virtual object died: release its oparg fields (the first one
+         * is in the low 32 bits of base). For a record (bit 32 of base),
+         * nodes are its plans (it conforms), so exact float and int fields
+         * are released directly. Operands are never NULL in JIT code, hence
+         * the bit. */
+        tier2 op(_VO_RELEASE, (base/4, nodes/4 --)) {
+            uint64_t bits = (uint64_t)(uintptr_t)base;
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uint32_t)bits;
+            const _PyGrailPlanNode *plans = (bits >> 32) ?
+                (const _PyGrailPlanNode *)nodes : NULL;
             for (int i = 0; i < oparg; i++) {
                 _PyStackRef field = shadow[i];
                 shadow[i] = PyStackRef_NULL;
-                PyStackRef_XCLOSE(field);
+                if (plans != NULL && plans[i].kind == _PyGrail_PLAN_EXACT &&
+                    plans[i].type == &PyFloat_Type) {
+                    PyStackRef_CLOSE_SPECIALIZED(field, _PyFloat_ExactDealloc);
+                }
+                else if (plans != NULL && plans[i].kind == _PyGrail_PLAN_EXACT &&
+                         plans[i].type == &PyLong_Type) {
+                    PyStackRef_CLOSE_SPECIALIZED(field, _PyLong_ExactDealloc);
+                }
+                else {
+                    PyStackRef_XCLOSE(field);
+                }
             }
         }
 

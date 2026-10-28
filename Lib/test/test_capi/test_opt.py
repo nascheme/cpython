@@ -2513,9 +2513,14 @@ class TestUopsOptimization(unittest.TestCase):
         self.assertIsNotNone(ex)
         uops = get_opnames(ex)
 
-        self.assertIn("_BUILD_TUPLE", uops)
-        self.assertIn("_UNPACK_SEQUENCE_UNIQUE_TUPLE", uops)
-        self.assertNotIn("_UNPACK_SEQUENCE_TUPLE", uops)
+        if "_VO_NEW_TUPLE" in uops:
+            # Grail: the tuple is virtual (see test_grail_jit).
+            self.assertIn("_VO_UNPACK", uops)
+            self.assertNotIn("_BUILD_TUPLE", uops)
+        else:
+            self.assertIn("_BUILD_TUPLE", uops)
+            self.assertIn("_UNPACK_SEQUENCE_UNIQUE_TUPLE", uops)
+            self.assertNotIn("_UNPACK_SEQUENCE_TUPLE", uops)
 
     def test_non_unique_tuple_unpack(self):
         def f(n):
@@ -2552,9 +2557,14 @@ class TestUopsOptimization(unittest.TestCase):
         self.assertIsNotNone(ex)
         uops = get_opnames(ex)
 
-        self.assertIn("_BUILD_TUPLE", uops)
-        self.assertIn("_UNPACK_SEQUENCE_UNIQUE_THREE_TUPLE", uops)
-        self.assertNotIn("_UNPACK_SEQUENCE_TUPLE", uops)
+        if "_VO_NEW_TUPLE" in uops:
+            # Grail: the tuple is virtual (see test_grail_jit).
+            self.assertIn("_VO_UNPACK", uops)
+            self.assertNotIn("_BUILD_TUPLE", uops)
+        else:
+            self.assertIn("_BUILD_TUPLE", uops)
+            self.assertIn("_UNPACK_SEQUENCE_UNIQUE_THREE_TUPLE", uops)
+            self.assertNotIn("_UNPACK_SEQUENCE_TUPLE", uops)
 
     def test_non_unique_three_tuple_unpack(self):
         def f(n):
@@ -2591,10 +2601,15 @@ class TestUopsOptimization(unittest.TestCase):
         self.assertIsNotNone(ex)
         uops = get_opnames(ex)
 
-        self.assertIn("_BUILD_TUPLE", uops)
-        self.assertIn("_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE", uops)
-        self.assertNotIn("_UNPACK_SEQUENCE_TWO_TUPLE", uops)
-        self.assertNotIn("_UNPACK_SEQUENCE_TUPLE", uops)
+        if "_VO_NEW_TUPLE" in uops:
+            # Grail: the tuple is virtual (see test_grail_jit).
+            self.assertIn("_VO_UNPACK", uops)
+            self.assertNotIn("_BUILD_TUPLE", uops)
+        else:
+            self.assertIn("_BUILD_TUPLE", uops)
+            self.assertIn("_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE", uops)
+            self.assertNotIn("_UNPACK_SEQUENCE_TWO_TUPLE", uops)
+            self.assertNotIn("_UNPACK_SEQUENCE_TUPLE", uops)
 
     def test_non_unique_two_tuple_unpack(self):
         def f(n):

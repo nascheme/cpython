@@ -2287,6 +2287,10 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                 }
             }
             else if (opcode == _RETURN_VALUE) {
+                DPRINTF(2, "vo: return at depth %d -> %d, caller %s\n", pre->depth,
+                        ctx->curr_frame_depth,
+                        pre->caller_locals == NULL ? "none" :
+                        ctx->frame->locals == pre->caller_locals ? "same" : "other");
                 if (pre->caller_locals != NULL &&
                     ctx->curr_frame_depth == pre->depth - 1 &&
                     ctx->frame->locals == pre->caller_locals) {
@@ -2301,7 +2305,8 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             else if (_PyUop_Flags[opcode] & HAS_RECORDS_VALUE_FLAG) {
                 continue;
             }
-            vo_escape(ctx, c, _PyOpcode_uop_name[opcode]);
+            DPRINTF(2, "vo: used by %s\n", _PyOpcode_uop_name[opcode]);
+            vo_escape(ctx, c, "use");
         }
         /* Uops that read or write locals other than by moving them. */
         if ((_PyUop_Flags[opcode] & HAS_LOCAL_FLAG) && !vo_is_move(opcode) &&
@@ -2341,7 +2346,10 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                                                p->operand0 : UINT64_MAX);
             }
             if (!exempt) {
-                vo_escape_all(ctx, _PyOpcode_uop_name[op]);
+                if (vo_any_live(ctx)) {
+                    DPRINTF(2, "vo: barrier %s\n", _PyOpcode_uop_name[op]);
+                }
+                vo_escape_all(ctx, "barrier");
                 break;
             }
         }
@@ -2555,8 +2563,9 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                 *r = inst;
                 r->opcode = _VO_RELEASE;
                 r->oparg = c->n;
-                r->operand0 = c->base;
-                r->operand1 = 0;
+                r->operand0 = c->base | ((uint64_t)(c->type != NULL) << 32);
+                r->operand1 = c->type != NULL ?
+                    (uintptr_t)_PyGrail_PlanNodes(c->type) : 0;
             }
         }
         int u = use_of[i];
@@ -2566,11 +2575,12 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
             switch (use->kind) {
                 case VO_USE_NEW:
                     if (c->type != NULL) {
-                        if (inst.opcode == _CALL_RECORD) {
-                            inst.operand0 = UINT64_MAX;
-                        }
+                        uint64_t check = inst.opcode == _CALL_RECORD ?
+                            UINT64_MAX : inst.operand0;
+                        check &= ((uint64_t)1 << c->n) - 1;
                         inst.opcode = _VO_NEW_RECORD;
-                        inst.operand1 = c->base;
+                        inst.operand0 = check | ((uint64_t)c->base << 32);
+                        inst.operand1 = (uintptr_t)_PyGrail_PlanNodes(c->type);
                     }
                     else {
                         assert(inst.opcode == _BUILD_TUPLE);

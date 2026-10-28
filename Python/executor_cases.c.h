@@ -21439,15 +21439,23 @@
             args = &stack_pointer[-oparg];
             callable = stack_pointer[-2 - oparg];
             PyObject *check = (PyObject *)CURRENT_OPERAND0_64();
-            PyObject *base = (PyObject *)CURRENT_OPERAND1_64();
-            if (!_PyGrail_RecordArgsConform(
-                         (PyTypeObject *)PyStackRef_AsPyObjectBorrow(callable),
-                         args, oparg, (uint64_t)(uintptr_t)check)) {
+            PyObject *nodes = (PyObject *)CURRENT_OPERAND1_64();
+            uint64_t bits = (uint64_t)(uintptr_t)check;
+            const _PyGrailPlanNode *plans = (const _PyGrailPlanNode *)nodes;
+            uint32_t mask = (uint32_t)bits;
+            int ok = 1;
+            for (int i = 0; mask != 0; i++, mask >>= 1) {
+                if (mask & 1) {
+                    ok &= _PyGrail_PlanLeafConforms(
+                        plans, &plans[i], PyStackRef_AsPyObjectBorrow(args[i]));
+                }
+            }
+            if (!ok) {
                 UOP_STAT_INC(uopcode, miss);
                 SET_CURRENT_CACHED_VALUES(0);
                 JUMP_TO_JUMP_TARGET();
             }
-            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (bits >> 32);
             for (int i = 0; i < oparg; i++) {
                 assert(PyStackRef_IsNull(shadow[i]));
                 shadow[i] = PyStackRef_MakeHeapSafe(args[i]);
@@ -21456,6 +21464,7 @@
             res = PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder);
             _tos_cache1 = c;
             _tos_cache0 = res;
+            _tos_cache2 = PyStackRef_ZERO_BITS;
             SET_CURRENT_CACHED_VALUES(2);
             stack_pointer += -2 - oparg;
             ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
@@ -21645,13 +21654,27 @@
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
             oparg = CURRENT_OPARG();
             PyObject *base = (PyObject *)CURRENT_OPERAND0_64();
-            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uintptr_t)base;
+            PyObject *nodes = (PyObject *)CURRENT_OPERAND1_64();
+            uint64_t bits = (uint64_t)(uintptr_t)base;
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uint32_t)bits;
+            const _PyGrailPlanNode *plans = (bits >> 32) ?
+            (const _PyGrailPlanNode *)nodes : NULL;
             for (int i = 0; i < oparg; i++) {
                 _PyStackRef field = shadow[i];
                 shadow[i] = PyStackRef_NULL;
-                _PyFrame_SetStackPointer(frame, stack_pointer);
-                PyStackRef_XCLOSE(field);
-                stack_pointer = _PyFrame_GetStackPointer(frame);
+                if (plans != NULL && plans[i].kind == _PyGrail_PLAN_EXACT &&
+                    plans[i].type == &PyFloat_Type) {
+                    PyStackRef_CLOSE_SPECIALIZED(field, _PyFloat_ExactDealloc);
+                }
+                else if (plans != NULL && plans[i].kind == _PyGrail_PLAN_EXACT &&
+                         plans[i].type == &PyLong_Type) {
+                    PyStackRef_CLOSE_SPECIALIZED(field, _PyLong_ExactDealloc);
+                }
+                else {
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    PyStackRef_XCLOSE(field);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                }
             }
             _tos_cache0 = PyStackRef_ZERO_BITS;
             _tos_cache1 = PyStackRef_ZERO_BITS;
