@@ -5953,6 +5953,62 @@ dummy_func(
             DEAD(seq);
         }
 
+        /* _GRAIL_FLOAT_PROGRAM with virtual record arguments: byte k of
+         * vbases is 1 + the first shadow slot of argument k's fields, or 0
+         * for a real argument. */
+        tier2 op(_VO_FLOAT_PROGRAM, (program/4, vbases/4, callable, self_or_null, args[oparg] -- res)) {
+            const _PyGrailFloatProgram *prog = (const _PyGrailFloatProgram *)program;
+            uint32_t bases = (uint32_t)(uintptr_t)vbases;
+            assert(prog->nargs == oparg && PyStackRef_IsNull(self_or_null));
+            EXIT_IF(!_PyGrail_FloatProgramArgsOkVirtual(prog, args, bases));
+            STAT_INC(CALL, hit);
+            PyObject *res_o = PyFloat_FromDouble(_PyGrail_FloatProgramEvalVirtual(
+                prog, args, ((_PyThreadStateImpl *)tstate)->vo_shadow, bases));
+            if (res_o == NULL) {
+                ERROR_NO_POP();
+            }
+            DECREF_INPUTS();
+            res = PyStackRef_FromPyObjectSteal(res_o);
+        }
+
+        /* _GRAIL_ELEMENTWISE_FLOAT with virtual operands or result: bytes
+         * 0, 1 and 2 of vbases are 1 + the first shadow slot of the left
+         * operand's, right operand's and result's fields, or 0 for a real
+         * object. No operand is reused. */
+        tier2 op(_VO_ELEMENTWISE_FLOAT, (type/4, vbases/4, left, right -- res, l, r)) {
+            PyObject *left_o = PyStackRef_AsPyObjectBorrow(left);
+            PyObject *right_o = PyStackRef_AsPyObjectBorrow(right);
+            uint32_t bases = (uint32_t)(uintptr_t)vbases;
+            int kind = oparg >> 2;
+            if (kind == 2) {
+                EXIT_IF(!PyFloat_CheckExact(left_o));
+            }
+            else if (!(bases & 0xff)) {
+                EXIT_IF(Py_TYPE(left_o) != (PyTypeObject *)type);
+                EXIT_IF(!((RecordObject *)left_o)->conforming);
+            }
+            if (kind == 1) {
+                EXIT_IF(!PyFloat_CheckExact(right_o));
+            }
+            else if (!(bases & 0xff00)) {
+                EXIT_IF(Py_TYPE(right_o) != (PyTypeObject *)type);
+                EXIT_IF(!((RecordObject *)right_o)->conforming);
+            }
+            STAT_INC(BINARY_OP, hit);
+            PyObject *res_o;
+            int err = _PyGrail_ElementwiseFloatVirtual(
+                (PyTypeObject *)type, oparg & 3, kind, left_o, right_o,
+                ((_PyThreadStateImpl *)tstate)->vo_shadow, bases, &res_o);
+            if (err < 0) {
+                ERROR_NO_POP();
+            }
+            res = (bases & 0xff0000) ? PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder) :
+                                       PyStackRef_FromPyObjectSteal(res_o);
+            l = left;
+            r = right;
+            INPUTS_DEAD();
+        }
+
         /* A virtual object died: release its oparg fields (the first one
          * is in the low 32 bits of base). For a record (bit 32 of base),
          * nodes are its plans (it conforms), so exact float and int fields

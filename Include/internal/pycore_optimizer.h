@@ -121,6 +121,7 @@ typedef struct {
     bool pending_frame;     // a frame is initialized but not yet pushed
     bool unknown_depth;     // returned to a frame whose stack depth is not
                             // yet known (until _GUARD_IP_RETURN_VALUE)
+    bool dropped_uop;       // a fusion replaced the previous output uop
     int ncands;
     int nuses;
     int nsnaps;

@@ -518,6 +518,8 @@ NON_ESCAPING_FUNCTIONS = (
     "_PyGrail_GenericSelect",
     "_PyGrail_FloatProgramArgsOk",
     "_PyGrail_FloatProgramEval",
+    "_PyGrail_FloatProgramArgsOkVirtual",
+    "_PyGrail_FloatProgramEvalVirtual",
     "PyCFunction_GET_FLAGS",
     "PyCFunction_GET_FUNCTION",
     "PyCFunction_GET_SELF",

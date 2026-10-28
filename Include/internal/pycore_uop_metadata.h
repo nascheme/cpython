@@ -378,6 +378,8 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_VO_LOAD_FIELD] = 0,
     [_VO_LOAD_FIELD_BORROW] = 0,
     [_VO_UNPACK] = HAS_ARG_FLAG,
+    [_VO_FLOAT_PROGRAM] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
+    [_VO_ELEMENTWISE_FLOAT] = HAS_ARG_FLAG | HAS_EXIT_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_VO_RELEASE] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
     [_VO_GUARD_LOCALS] = HAS_DEOPT_FLAG,
     [_VO_POP_TOP_DEFER] = 0,
@@ -3591,6 +3593,24 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_VO_FLOAT_PROGRAM] = {
+        .best = { 0, 0, 0, 0 },
+        .entries = {
+            { 1, 0, _VO_FLOAT_PROGRAM_r01 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+        },
+    },
+    [_VO_ELEMENTWISE_FLOAT] = {
+        .best = { 2, 2, 2, 2 },
+        .entries = {
+            { -1, -1, -1 },
+            { -1, -1, -1 },
+            { 3, 2, _VO_ELEMENTWISE_FLOAT_r23 },
+            { -1, -1, -1 },
+        },
+    },
     [_VO_RELEASE] = {
         .best = { 0, 0, 0, 0 },
         .entries = {
@@ -5332,6 +5352,8 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_VO_LOAD_FIELD_BORROW_r12] = _VO_LOAD_FIELD_BORROW,
     [_VO_LOAD_FIELD_BORROW_r23] = _VO_LOAD_FIELD_BORROW,
     [_VO_UNPACK_r10] = _VO_UNPACK,
+    [_VO_FLOAT_PROGRAM_r01] = _VO_FLOAT_PROGRAM,
+    [_VO_ELEMENTWISE_FLOAT_r23] = _VO_ELEMENTWISE_FLOAT,
     [_VO_RELEASE_r00] = _VO_RELEASE,
     [_VO_GUARD_LOCALS_r00] = _VO_GUARD_LOCALS,
     [_VO_GUARD_LOCALS_r11] = _VO_GUARD_LOCALS,
@@ -7107,11 +7129,15 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r02] = "_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r02",
     [_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r12] = "_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r12",
     [_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r23] = "_UNPACK_SEQUENCE_UNIQUE_TWO_TUPLE_r23",
+    [_VO_ELEMENTWISE_FLOAT] = "_VO_ELEMENTWISE_FLOAT",
+    [_VO_ELEMENTWISE_FLOAT_r23] = "_VO_ELEMENTWISE_FLOAT_r23",
     [_VO_EXIT_INFO] = "_VO_EXIT_INFO",
     [_VO_EXIT_INFO_r00] = "_VO_EXIT_INFO_r00",
     [_VO_EXIT_INFO_r11] = "_VO_EXIT_INFO_r11",
     [_VO_EXIT_INFO_r22] = "_VO_EXIT_INFO_r22",
     [_VO_EXIT_INFO_r33] = "_VO_EXIT_INFO_r33",
+    [_VO_FLOAT_PROGRAM] = "_VO_FLOAT_PROGRAM",
+    [_VO_FLOAT_PROGRAM_r01] = "_VO_FLOAT_PROGRAM_r01",
     [_VO_FLUSH] = "_VO_FLUSH",
     [_VO_FLUSH_r00] = "_VO_FLUSH_r00",
     [_VO_GUARD_LOCALS] = "_VO_GUARD_LOCALS",
@@ -7836,6 +7862,10 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 1;
         case _VO_UNPACK:
             return 1;
+        case _VO_FLOAT_PROGRAM:
+            return 2 + oparg;
+        case _VO_ELEMENTWISE_FLOAT:
+            return 2;
         case _VO_RELEASE:
             return 0;
         case _VO_GUARD_LOCALS:
@@ -8768,6 +8798,10 @@ int _PyUop_num_inputs(int opcode, int oparg)
             return 1;
         case _VO_UNPACK:
             return 1;
+        case _VO_FLOAT_PROGRAM:
+            return 2 + oparg;
+        case _VO_ELEMENTWISE_FLOAT:
+            return 2;
         case _VO_RELEASE:
             return 0;
         case _VO_GUARD_LOCALS:

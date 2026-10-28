@@ -908,6 +908,85 @@ _PyGrail_ElementwiseFloat(PyTypeObject *type, int op, int kind,
     return (PyObject *)self;
 }
 
+/* _PyGrail_ElementwiseFloat for virtual operands or result (tier-2 virtual
+ * objects, see Python/optimizer_analysis.c). Byte k of vbases (k = 0 left,
+ * 1 right, 2 result) is 0 for a real object, or 1 + the first slot of a
+ * virtual record's fields in shadow. Real record operands are checked by
+ * the caller (exact type, conforming); virtual ones conform. A virtual
+ * result gets new float references in its slots; a real one is returned.
+ * Returns -1 with MemoryError, leaving the result slots NULL. */
+int
+_PyGrail_ElementwiseFloatVirtual(PyTypeObject *type, int op, int kind,
+                                 PyObject *a, PyObject *b, _PyStackRef *shadow,
+                                 uint32_t vbases, PyObject **res)
+{
+    Py_ssize_t n = (type->tp_basicsize - (Py_ssize_t)offsetof(RecordObject, fields)) /
+                   (Py_ssize_t)sizeof(PyObject *);
+    unsigned int abase = vbases & 0xff, bbase = (vbases >> 8) & 0xff;
+    unsigned int rbase = (vbases >> 16) & 0xff;
+    double scalar = kind == 1 ? PyFloat_AS_DOUBLE(b) :
+                    kind == 2 ? PyFloat_AS_DOUBLE(a) : 0.0;
+    double values[16];
+    assert(n <= 16);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        double x, y;
+        if (kind == 2) {
+            x = scalar;
+        }
+        else {
+            x = PyFloat_AS_DOUBLE(abase ?
+                PyStackRef_AsPyObjectBorrow(shadow[abase - 1 + i]) :
+                ((RecordObject *)a)->fields[i]);
+        }
+        if (kind == 1) {
+            y = scalar;
+        }
+        else {
+            y = PyFloat_AS_DOUBLE(bbase ?
+                PyStackRef_AsPyObjectBorrow(shadow[bbase - 1 + i]) :
+                ((RecordObject *)b)->fields[i]);
+        }
+        values[i] = kernel_double_op(op, x, y);
+    }
+    if (rbase) {
+        _PyStackRef *out = shadow + rbase - 1;
+        for (Py_ssize_t i = 0; i < n; i++) {
+            PyObject *f = PyFloat_FromDouble(values[i]);
+            if (f == NULL) {
+                for (Py_ssize_t j = 0; j < i; j++) {
+                    PyStackRef_CLOSE(out[j]);
+                    out[j] = PyStackRef_NULL;
+                }
+                return -1;
+            }
+            assert(PyStackRef_IsNull(out[i]));
+            out[i] = PyStackRef_FromPyObjectSteal(f);
+        }
+        *res = NULL;
+        return 0;
+    }
+    RecordObject *self = record_alloc(type, n);
+    if (self == NULL) {
+        return -1;
+    }
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *f = PyFloat_FromDouble(values[i]);
+        if (f == NULL) {
+            for (Py_ssize_t j = 0; j < i; j++) {
+                Py_DECREF(self->fields[j]);
+            }
+            record_free(self, type);
+            _Py_DECREF_TYPE(type);
+            return -1;
+        }
+        self->fields[i] = f;
+    }
+    self->conforming = 1;
+    _PyObject_GC_TRACK(self);
+    *res = (PyObject *)self;
+    return 0;
+}
+
 static PyMutex float_programs_mutex;
 static const _PyGrailFloatProgram *float_programs[512];
 static int float_programs_count;
@@ -991,7 +1070,19 @@ int
 _PyGrail_FloatProgramArgsOk(const _PyGrailFloatProgram *program,
                             _PyStackRef *args)
 {
+    return _PyGrail_FloatProgramArgsOkVirtual(program, args, 0);
+}
+
+/* As _PyGrail_FloatProgramArgsOk; virtual record arguments (byte k of
+ * vbases non-zero, see _PyGrail_FloatProgramEvalVirtual) conform. */
+int
+_PyGrail_FloatProgramArgsOkVirtual(const _PyGrailFloatProgram *program,
+                                   _PyStackRef *args, uint32_t vbases)
+{
     for (int i = 0; i < program->nargs; i++) {
+        if ((vbases >> (8 * i)) & 0xff) {
+            continue;
+        }
         PyObject *arg = PyStackRef_AsPyObjectBorrow(args[i]);
         PyTypeObject *type = program->types[i];
         if (Py_TYPE(arg) != type ||
@@ -1003,27 +1094,36 @@ _PyGrail_FloatProgramArgsOk(const _PyGrailFloatProgram *program,
 }
 
 /* One float operation per program step, in program order, so the result is
- * bit for bit what the Python function computes. */
+ * bit for bit what the Python function computes. Byte k of vbases is 0 when
+ * argument k is a real object, or 1 + the first shadow slot of the fields
+ * of a virtual record (tier-2 virtual objects). */
 static inline double
-float_program_load(uint8_t c, _PyStackRef *args)
+float_program_load(uint8_t c, _PyStackRef *args, const _PyStackRef *shadow,
+                   uint32_t vbases)
 {
-    PyObject *arg = PyStackRef_AsPyObjectBorrow(args[(c >> 4) & 3]);
+    int a = (c >> 4) & 3;
     int field = c & 15;
+    unsigned int base = (vbases >> (8 * a)) & 0xff;
+    if (base) {
+        assert(field != _PyGrail_FLOAT_SCALAR);
+        return PyFloat_AS_DOUBLE(PyStackRef_AsPyObjectBorrow(shadow[base - 1 + field]));
+    }
+    PyObject *arg = PyStackRef_AsPyObjectBorrow(args[a]);
     return PyFloat_AS_DOUBLE(field == _PyGrail_FLOAT_SCALAR ? arg :
                              ((RecordObject *)arg)->fields[field]);
 }
 
-double
-_PyGrail_FloatProgramEval(const _PyGrailFloatProgram *program,
-                          _PyStackRef *args)
+static inline double
+float_program_eval(const _PyGrailFloatProgram *program, _PyStackRef *args,
+                   const _PyStackRef *shadow, uint32_t vbases)
 {
     if (program->npairs) {
         const uint8_t (*pairs)[2] = program->pairs;
-        double acc = float_program_load(pairs[0][0], args) *
-                     float_program_load(pairs[0][1], args);
+        double acc = float_program_load(pairs[0][0], args, shadow, vbases) *
+                     float_program_load(pairs[0][1], args, shadow, vbases);
         for (int k = 1; k < program->npairs; k++) {
-            double p = float_program_load(pairs[k][0], args) *
-                       float_program_load(pairs[k][1], args);
+            double p = float_program_load(pairs[k][0], args, shadow, vbases) *
+                       float_program_load(pairs[k][1], args, shadow, vbases);
             acc = (program->negate >> k) & 1 ? acc - p : acc + p;
         }
         return acc;
@@ -1033,13 +1133,9 @@ _PyGrail_FloatProgramEval(const _PyGrailFloatProgram *program,
     for (int i = 0; i < program->len; i++) {
         uint8_t c = program->code[i];
         switch (c >> 6) {
-            case 0: {
-                PyObject *arg = PyStackRef_AsPyObjectBorrow(args[(c >> 4) & 3]);
-                int field = c & 15;
-                stack[sp++] = PyFloat_AS_DOUBLE(field == _PyGrail_FLOAT_SCALAR ? arg :
-                                                ((RecordObject *)arg)->fields[field]);
+            case 0:
+                stack[sp++] = float_program_load(c, args, shadow, vbases);
                 break;
-            }
             case 1:
                 sp--;
                 stack[sp - 1] = stack[sp - 1] + stack[sp];
@@ -1056,6 +1152,21 @@ _PyGrail_FloatProgramEval(const _PyGrailFloatProgram *program,
     }
     assert(sp == 1);
     return stack[0];
+}
+
+double
+_PyGrail_FloatProgramEval(const _PyGrailFloatProgram *program,
+                          _PyStackRef *args)
+{
+    return float_program_eval(program, args, NULL, 0);
+}
+
+double
+_PyGrail_FloatProgramEvalVirtual(const _PyGrailFloatProgram *program,
+                                 _PyStackRef *args, const _PyStackRef *shadow,
+                                 uint32_t vbases)
+{
+    return float_program_eval(program, args, shadow, vbases);
 }
 
 void

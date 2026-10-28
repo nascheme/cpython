@@ -354,6 +354,15 @@ PyAPI_FUNC(int) _PyGrail_FloatProgramArgsOk(const _PyGrailFloatProgram *,
                                             _PyStackRef *);
 PyAPI_FUNC(double) _PyGrail_FloatProgramEval(const _PyGrailFloatProgram *,
                                              _PyStackRef *);
+/* Forms for virtual record arguments (tier-2 virtual objects). */
+PyAPI_FUNC(int) _PyGrail_FloatProgramArgsOkVirtual(const _PyGrailFloatProgram *,
+                                                   _PyStackRef *, uint32_t);
+PyAPI_FUNC(double) _PyGrail_FloatProgramEvalVirtual(const _PyGrailFloatProgram *,
+                                                    _PyStackRef *, const _PyStackRef *,
+                                                    uint32_t);
+PyAPI_FUNC(int) _PyGrail_ElementwiseFloatVirtual(PyTypeObject *, int, int,
+                                                 PyObject *, PyObject *, _PyStackRef *,
+                                                 uint32_t, PyObject **);
 #endif
 PyAPI_FUNC(PyObject *) _PyGrail_Substitutable(PyObject *, PyObject *);
 PyAPI_FUNC(PyObject *) _PyGrail_DefaultRepr(PyObject *, PyObject *);

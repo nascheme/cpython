@@ -1457,6 +1457,7 @@ grail_drop_recursion_check(JitOptContext *ctx)
     if (ctx->out_buffer.next > ctx->out_buffer.start &&
         ctx->out_buffer.next[-1].opcode == _CHECK_RECURSION_REMAINING) {
         ctx->out_buffer.next--;
+        ctx->vo.dropped_uop = true;
     }
 }
 
@@ -1692,6 +1693,7 @@ enum {
     VO_USE_POP,         // a pop: becomes _POP_TOP_NOP
     VO_USE_NOP,         // a guard it passes: removed
     VO_USE_UNPACK,      // unpacking of a tuple
+    VO_USE_FUSED,       // operand (field: its index) of a fused float uop
 };
 
 #define VO_MAX_FIELDS 16
@@ -2306,6 +2308,150 @@ vo_snapshot(JitOptContext *ctx, const VOPre *pre, int start, int end)
     }
 }
 
+/* The fused float uop of a fused range (grail_fuse_elementwise(),
+ * grail_fuse_float_call()), or NULL. */
+static _PyUOpInstruction *
+vo_fused_op(_PyUOpInstruction *start, _PyUOpInstruction *end)
+{
+    for (_PyUOpInstruction *p = start; p < end; p++) {
+        if (p->opcode == _GRAIL_FLOAT_PROGRAM || p->opcode == _GRAIL_ELEMENTWISE_FLOAT) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
+/* Releasing pre's input i runs no code. */
+static bool
+vo_input_release_safe(JitOptContext *ctx, const VOPre *pre, int i,
+                      JitOptRef *stack_pointer)
+{
+    if (pre->inputs_overflow || i >= pre->npop) {
+        return false;
+    }
+    int c = pre->input_cand[i];
+    return (c >= 0 && vo_live(&ctx->vo.cands[c])) ||
+           vo_decref_safe(ctx, pre->inputs[i]) ||
+           vo_sym_present(ctx, stack_pointer, PyJitRef_Unwrap(pre->inputs[i]));
+}
+
+/* A fused float uop: _GRAIL_FLOAT_PROGRAM reads the fields of record
+ * arguments and _GRAIL_ELEMENTWISE_FLOAT those of record operands, so
+ * virtual ones are read from their shadow slots (_VO_FLOAT_PROGRAM,
+ * _VO_ELEMENTWISE_FLOAT). The uops and the pops of the operands that
+ * follow _GRAIL_ELEMENTWISE_FLOAT run no code when the real inputs are
+ * safe to release. */
+static void
+vo_fused_inputs(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
+                _PyUOpInstruction *out_end, JitOptRef *stack_pointer)
+{
+    _PyVOState *vo = &ctx->vo;
+    _PyUOpInstruction *f = vo_fused_op(out_start, out_end);
+    int fout = f == NULL ? -1 : (int)(f - ctx->out_buffer.start);
+    bool ew = f != NULL && f->opcode == _GRAIL_ELEMENTWISE_FLOAT && f + 3 == out_end;
+    for (int i = 0; i < pre->npop && i < VO_MAX_INPUTS; i++) {
+        int c = pre->input_cand[i];
+        if (c < 0 || !vo_live(&vo->cands[c])) {
+            continue;
+        }
+        _PyVOCandidate *cand = &vo->cands[c];
+        bool ok = false;
+        if (f != NULL && f->opcode == _GRAIL_FLOAT_PROGRAM && i >= 2) {
+            const _PyGrailFloatProgram *prog = (const _PyGrailFloatProgram *)f->operand0;
+            ok = cand->type != NULL && i - 2 < prog->nargs && prog->types[i - 2] == cand->type;
+            if (ok) {
+                vo_add_use(ctx, fout, c, VO_USE_FUSED, i - 2);
+            }
+        }
+        else if (ew && i < 2) {
+            int kind = f->oparg >> 2;
+            ok = cand->type == (PyTypeObject *)f->operand0 &&
+                 (i == 0 ? kind != 2 : kind != 1);
+            if (ok) {
+                // The pops after the uop: r first, then l.
+                vo_add_use(ctx, fout, c, VO_USE_FUSED, i);
+                vo_add_use(ctx, fout + (i == 1 ? 1 : 2), c, VO_USE_POP, 0);
+            }
+        }
+        if (!ok) {
+            DPRINTF(2, "vo: used by fused %s\n",
+                    f ? _PyOpcode_uop_name[f->opcode] : "?");
+            vo_escape(ctx, c, "fused call");
+        }
+    }
+    for (_PyUOpInstruction *p = out_start; p < out_end; p++) {
+        if (!(_PyUop_Flags[p->opcode] & HAS_ESCAPES_FLAG)) {
+            continue;
+        }
+        bool exempt = false;
+        if (p == f && f->opcode == _GRAIL_FLOAT_PROGRAM) {
+            exempt = true;
+            for (int i = 0; i < pre->npop; i++) {
+                exempt &= vo_input_release_safe(ctx, pre, i, stack_pointer);
+            }
+        }
+        else if (p == f && ew) {
+            exempt = true;
+        }
+        else if (ew && (p == f + 1 || p == f + 2)) {
+            exempt = vo_input_release_safe(ctx, pre, p == f + 1 ? 1 : 0, stack_pointer);
+        }
+        if (!exempt) {
+            if (vo_any_live(ctx)) {
+                DPRINTF(2, "vo: barrier %s (fused)\n", _PyOpcode_uop_name[p->opcode]);
+            }
+            vo_escape_all(ctx, "barrier");
+            break;
+        }
+    }
+}
+
+/* The result of _GRAIL_ELEMENTWISE_FLOAT: a record of exact floats. */
+static void
+vo_fused_candidate(JitOptContext *ctx, _PyUOpInstruction *out_start,
+                   _PyUOpInstruction *out_end, JitOptRef *stack_pointer)
+{
+    _PyVOState *vo = &ctx->vo;
+    _PyUOpInstruction *f = vo_fused_op(out_start, out_end);
+    if (f == NULL || f->opcode != _GRAIL_ELEMENTWISE_FLOAT || f + 3 != out_end ||
+        vo->ncands >= VO_MAX_CANDIDATES) {
+        return;
+    }
+    PyTypeObject *type = (PyTypeObject *)f->operand0;
+    Py_ssize_t n = _PyGrail_FloatRecordFieldCount(type);
+    if (n < 1 || n > VO_MAX_FIELDS) {
+        return;
+    }
+    int base = -1;
+    uint64_t mask = ((uint64_t)1 << n) - 1;
+    for (int b = 0; b + n <= _Py_VO_SHADOW_SIZE; b++) {
+        if (!(vo->shadow_used & (mask << b))) {
+            base = b;
+            break;
+        }
+    }
+    if (base < 0) {
+        return;
+    }
+    int i = vo->ncands++;
+    _PyVOCandidate *c = &vo->cands[i];
+    c->sym = PyJitRef_Unwrap(stack_pointer[-1]);
+    c->type = type;
+    c->create = (int)(f - ctx->out_buffer.start);
+    c->death = -1;
+    c->n = (uint8_t)n;
+    c->base = (uint8_t)base;
+    c->escaped = false;
+    c->safe_release = true;
+    for (int k = 0; k < VO_MAX_FIELDS; k++) {
+        c->inner[k] = -1;
+    }
+    vo->shadow_used |= mask << base;
+    vo_add_use(ctx, c->create, i, VO_USE_NEW, 0);
+    DPRINTF(2, "vo: candidate %d at %d (element-wise), %d fields, base %d\n",
+            i, c->create, (int)n, base);
+}
+
 /* After the abstract interpreter ran pre's uop, emitting
  * [out_start, out_end). */
 static void
@@ -2322,12 +2468,11 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
     }
     if (pre->any_live) {
         if (fused) {
-            vo_escape_all(ctx, "fused call");
-            return;
+            vo_fused_inputs(ctx, pre, out_start, out_end, stack_pointer);
         }
         /* Inputs: is each candidate input consumed by a uop that knows
          * virtual objects? */
-        for (int i = 0; i < pre->npop && i < VO_MAX_INPUTS; i++) {
+        for (int i = 0; i < pre->npop && i < VO_MAX_INPUTS && !fused; i++) {
             int c = pre->input_cand[i];
             if (c < 0 || !vo_live(&vo->cands[c])) {
                 continue;
@@ -2425,6 +2570,35 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                     continue;
                 }
             }
+            else if (opcode == _GRAIL_BINARY_CHECK_FUNC) {
+                // Folded for the known operand types: the implementation
+                // is a constant, and only the other operand's type may be
+                // guarded.
+                bool reads = false;
+                for (_PyUOpInstruction *p = out_start; p < out_end; p++) {
+                    int o = p->opcode;
+                    reads |= !(o == _GRAIL_BINARY_LOAD_IMPL ||
+                               (o == _GUARD_TYPE_VERSION && i == 0) ||
+                               (o == _GUARD_NOS_OBJ_TYPE_VERSION && i == 1));
+                }
+                if (!reads) {
+                    continue;
+                }
+            }
+            else if (opcode == _GRAIL_BINARY_INIT_CALL) {
+                // The operands move into the implementation's frame.
+                if (i < 2) {
+                    continue;
+                }
+            }
+            else if (opcode == _GRAIL_CALL_GENERIC_SELECT_TIER_TWO) {
+                // The selection reads the first argument's type, unless it
+                // is folded for its known type.
+                if (i >= 3 || (i == 2 && nout == 1 && op == _GRAIL_CALL_GENERIC_FOLDED &&
+                               out_start->operand0 == 0)) {
+                    continue;
+                }
+            }
             else if (_PyUop_Flags[opcode] & HAS_RECORDS_VALUE_FLAG) {
                 continue;
             }
@@ -2441,7 +2615,7 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             }
         }
         /* Barriers. */
-        for (_PyUOpInstruction *p = out_start; p < out_end; p++) {
+        for (_PyUOpInstruction *p = out_start; p < out_end && !fused; p++) {
             int op = p->opcode;
             if (!(_PyUop_Flags[op] & HAS_ESCAPES_FLAG)) {
                 continue;
@@ -2487,6 +2661,11 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             }
             else if (op == _CALL_BUILTIN_CLASS) {
                 exempt = vo_pure_builtin_call(ctx, pre);
+            }
+            else if (op == _GRAIL_CALL_GENERIC_FOLDED ||
+                     op == _GRAIL_CALL_GENERIC_SELECT_TIER_TWO) {
+                // Releases the generic, which the trace's globals hold.
+                exempt = vo_input_release_safe(ctx, pre, 0, stack_pointer);
             }
             else if (op == _BINARY_OP_TRUEDIV_FLOAT || op == _BINARY_OP_EXTEND ||
                      op == _COMPARE_OP_FLOAT_INT || op == _COMPARE_OP_FLOAT_INT_CONST) {
@@ -2562,6 +2741,9 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
         }
     }
     /* A new candidate. */
+    if (fused) {
+        vo_fused_candidate(ctx, out_start, out_end, stack_pointer);
+    }
     if ((opcode == _CALL_RECORD || opcode == _CALL_RECORD_CHECKED ||
          opcode == _BUILD_TUPLE) && !pre->inputs_overflow) {
         if (nout != 1 || !vo_new_candidate(ctx, pre, out_start, stack_pointer)) {
@@ -2572,7 +2754,7 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             }
         }
     }
-    if (opcode == _INIT_CALL_PY_EXACT_ARGS) {
+    if (opcode == _INIT_CALL_PY_EXACT_ARGS || opcode == _GRAIL_BINARY_INIT_CALL) {
         vo->pending_frame = true;
     }
     else if (opcode == _PUSH_FRAME) {
@@ -2584,7 +2766,7 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
     /* Deaths. */
     bool may_die = vo_is_pop(opcode) || vo_is_tuple_unpack(opcode) ||
                    opcode == _UNPACK_SEQUENCE || opcode == _RETURN_VALUE ||
-                   opcode == _DELETE_FAST;
+                   opcode == _DELETE_FAST || fused;
     // Outer objects first: an inner one lives while a live outer holds it.
     for (int i = vo->ncands - 1; i >= 0; i--) {
         _PyVOCandidate *c = &vo->cands[i];
@@ -2653,6 +2835,23 @@ vo_snapshot_objects(_PyVOState *vo, _PyVOSnapshot *snap, int *nlocs, int *ninner
     return mask;
 }
 
+/* A virtual operand (byte) of a fused float uop: its fields from shadow
+ * slot base on. */
+static void
+vo_set_vbase(_PyUOpInstruction *inst, int byte, int base)
+{
+    if (inst->opcode == _GRAIL_FLOAT_PROGRAM) {
+        inst->opcode = _VO_FLOAT_PROGRAM;
+        inst->operand1 = 0;
+    }
+    else if (inst->opcode == _GRAIL_ELEMENTWISE_FLOAT) {
+        inst->opcode = _VO_ELEMENTWISE_FLOAT;
+        inst->operand1 = 0;
+    }
+    assert(inst->opcode == _VO_FLOAT_PROGRAM || inst->opcode == _VO_ELEMENTWISE_FLOAT);
+    inst->operand1 |= (uint64_t)(base + 1) << (8 * byte);
+}
+
 /* Rewrite the optimized trace for the candidates that did not escape:
  * constructions, uses, releases and exit markers. Returns the new length
  * (length if nothing changes). */
@@ -2712,6 +2911,7 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
     }
     _PyUOpInstruction *copy = PyMem_Malloc(length * sizeof(_PyUOpInstruction));
     int16_t *use_of = PyMem_Malloc(length * sizeof(int16_t));
+    int16_t next_use[VO_MAX_USES];
     const _PyVORecovery **info_of = PyMem_Calloc(length, sizeof(_PyVORecovery *));
     if (copy == NULL || use_of == NULL || info_of == NULL) {
         PyMem_Free(arena);
@@ -2724,10 +2924,11 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
     for (int i = 0; i < length; i++) {
         use_of[i] = -1;
     }
-    for (int u = 0; u < vo->nuses; u++) {
+    // Uses of each output uop, chained in the order they were found.
+    for (int u = vo->nuses - 1; u >= 0; u--) {
         _PyVOUse *use = &vo->uses[u];
         if (!vo->cands[use->cand].escaped) {
-            assert(use_of[use->out] < 0);
+            next_use[u] = use_of[use->out];
             use_of[use->out] = (int16_t)u;
         }
     }
@@ -2840,13 +3041,16 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
             inst.opcode = _VO_POP_TOP_DEFER;
             pending_flush = true;
         }
-        int u = use_of[i];
-        if (u >= 0) {
+        for (int u = use_of[i]; u >= 0; u = next_use[u]) {
             _PyVOUse *use = &vo->uses[u];
             _PyVOCandidate *c = &vo->cands[use->cand];
             switch (use->kind) {
                 case VO_USE_NEW:
-                    if (c->type != NULL) {
+                    if (inst.opcode == _GRAIL_ELEMENTWISE_FLOAT ||
+                        inst.opcode == _VO_ELEMENTWISE_FLOAT) {
+                        vo_set_vbase(&inst, 2, c->base);
+                    }
+                    else if (c->type != NULL) {
                         uint64_t check = inst.opcode == _CALL_RECORD ?
                             UINT64_MAX : inst.operand0;
                         check &= ((uint64_t)1 << c->n) - 1;
@@ -2884,6 +3088,9 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                 case VO_USE_UNPACK:
                     inst.opcode = _VO_UNPACK;
                     inst.operand0 = c->base;
+                    break;
+                case VO_USE_FUSED:
+                    vo_set_vbase(&inst, use->field, c->base);
                     break;
             }
         }
@@ -2998,6 +3205,7 @@ optimize_uops(
         }
 
         int fused = 0;
+        ctx->vo.dropped_uop = false;
         if (opcode == _GRAIL_BINARY_CHECK_FUNC) {
             fused = grail_fuse_elementwise(ctx, this_instr, trace + trace_len,
                                            &stack_pointer, dependencies);
@@ -3008,6 +3216,10 @@ optimize_uops(
         }
         if (fused) {
             i += fused - 1;
+            if (ctx->vo.dropped_uop) {
+                // The fused uop replaced the previous one.
+                out_ptr--;
+            }
         }
         else switch (opcode) {
 

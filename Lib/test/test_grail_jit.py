@@ -368,7 +368,8 @@ class FoldedDispatchTests(unittest.TestCase):
         uops = executor_uops(m["loop_known"])
         self.assertIn("_GRAIL_CALL_GENERIC_FOLDED", uops)
         # The element-wise implementation is fused (see ElementwiseFusionTests).
-        self.assertTrue({"_GRAIL_BINARY_LOAD_IMPL", "_GRAIL_ELEMENTWISE_FLOAT"} & uops)
+        self.assertTrue({"_GRAIL_BINARY_LOAD_IMPL", "_GRAIL_ELEMENTWISE_FLOAT",
+                         "_VO_ELEMENTWISE_FLOAT"} & uops)
         self.assertNotIn("_GRAIL_CALL_GENERIC_SELECT_TIER_TWO", uops)
         self.assertNotIn("_GRAIL_BINARY_CHECK_FUNC", uops)
 
@@ -449,7 +450,8 @@ class TypedFieldTests(unittest.TestCase):
         self.assertEqual(m["loop"]([R(V(1.0, 2.0), V(3.0, 4.0))]), ITERATIONS * 8.0)
         uops = executor_uops(m["loop"])
         self.assertTrue({"_LOAD_ATTR_RECORD_TYPED", "_LOAD_ATTR_RECORD_TYPED_BORROW"} & uops)
-        self.assertTrue({"_GRAIL_BINARY_LOAD_IMPL", "_GRAIL_ELEMENTWISE_FLOAT"} & uops)
+        self.assertTrue({"_GRAIL_BINARY_LOAD_IMPL", "_GRAIL_ELEMENTWISE_FLOAT",
+                         "_VO_ELEMENTWISE_FLOAT"} & uops)
         self.assertNotIn("_GRAIL_BINARY_CHECK_FUNC", uops)
 
     @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
@@ -801,7 +803,10 @@ class ElementwiseFusionTests(unittest.TestCase):
         V, W = m["V"], m["W"]
         m["ops_loop"](ITERATIONS, V(1.5, 2.25), V(0.5, -3.0), 1.25)
         counts = executor_uop_counts(m["ops_loop"])
-        self.assertEqual(counts["_GRAIL_ELEMENTWISE_FLOAT"], 5, counts)
+        # With virtual temporaries (VirtualObjectTests) in their form for
+        # virtual operands and results.
+        self.assertEqual(counts["_GRAIL_ELEMENTWISE_FLOAT"] +
+                         counts["_VO_ELEMENTWISE_FLOAT"], 5, counts)
         self.assertEqual(counts["_PUSH_FRAME"], 0, counts)
         m["w_loop"](ITERATIONS, W(1.5, 2.25), W(0.5, -3.0), 1.25)
         counts = executor_uop_counts(m["w_loop"])
@@ -813,7 +818,8 @@ class ElementwiseFusionTests(unittest.TestCase):
         V = m["V"]
         m["from_list"](ITERATIONS, [V(1.0, 0.0)], V(1.0, 2.0))
         counts = executor_uop_counts(m["from_list"])
-        self.assertEqual(counts["_GRAIL_ELEMENTWISE_FLOAT"], 1, counts)
+        self.assertEqual(counts["_GRAIL_ELEMENTWISE_FLOAT"] +
+                         counts["_VO_ELEMENTWISE_FLOAT"], 1, counts)
 
     @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
     def test_fuse_ablation(self):
@@ -1462,6 +1468,69 @@ def steps(n):
     for i in range(n):
         t += use_step(i)
     return t
+
+@grail.record
+class V3:
+    x: float
+    y: float
+    z: float
+
+@grail.ops.add.impl
+def _(a: V3, b: V3) -> V3:
+    return V3(a.x + b.x, a.y + b.y, a.z + b.z)
+
+@grail.ops.sub.impl
+def _(a: V3, b: V3) -> V3:
+    return V3(a.x - b.x, a.y - b.y, a.z - b.z)
+
+@grail.ops.mul.impl
+def _(a: V3, k: float) -> V3:
+    return V3(k * a.x, k * a.y, k * a.z)
+
+def dot(a, b):
+    return a.x * b.x + a.y * b.y + a.z * b.z
+
+def v3(i):
+    return V3(i * 1.0, 2.0, -0.5)
+
+def fused_step(i, c, limit):
+    d = (v3(i) + c) - c
+    if i >= limit:
+        return d.x + float(d is d)
+    return dot(d, c)
+
+def fused(n, c, limit):
+    t = 0.0
+    for i in range(n):
+        t += fused_step(i, c, limit)
+    return t
+
+@grail.record
+class Sq:
+    side: float
+
+@grail.record
+class Rect:
+    w: float
+    h: float
+
+@grail.generic
+def area(shape, k):
+    raise TypeError
+
+@area.impl
+def _(shape: Sq, k: V3) -> float:
+    return shape.side * shape.side * k.x
+
+@area.impl
+def _(shape: Rect, k: V3) -> float:
+    return shape.w * shape.h * k.x
+
+def areas(n, shapes):
+    t = 0.0
+    for i in range(n):
+        t += area(Sq(i * 1.0), v3(2.0)) + area(shapes[i % len(shapes)], v3(1.0))
+    return t
 """
 
 
@@ -1557,6 +1626,49 @@ class VirtualObjectTests(unittest.TestCase):
             self.assertNotIn("_CALL_RECORD_CHECKED", counts)
         for limit in (0, n // 2):
             self.assertEqual(m["segs"](n, limit), 2 * n + 100 * (n - limit))
+
+    def test_fused_float_uops(self):
+        # Element-wise operator results and operands, and float programs
+        # (ElementwiseFusionTests) on virtual records.
+        m = load_virtual()
+        V3, dot = m["V3"], m["dot"]
+        c = V3(0.25, -1.5, 3.0)
+        n = 100
+
+        def expected(limit):
+            t = 0.0
+            for i in range(n):
+                d = V3((i * 1.0 + c.x) - c.x, (2.0 + c.y) - c.y,
+                       (-0.5 + c.z) - c.z)
+                t += d.x + 1.0 if i >= limit else dot(d, c)
+            return t
+
+        for _ in range(REPEAT):
+            self.assertEqual(m["fused"](n, c, n), expected(n))
+        if tier2_enabled():
+            counts = executor_uop_counts(m["fused"])
+            self.assertEqual(counts["_VO_ELEMENTWISE_FLOAT"], 2, counts)
+            self.assertEqual(counts["_VO_FLOAT_PROGRAM"], 1, counts)
+            self.assertNotIn("_GRAIL_ELEMENTWISE_FLOAT", counts)
+            self.assertNotIn("_CALL_RECORD_CHECKED", counts)
+        # Leave the trace with d virtual.
+        for limit in (n // 2, 0):
+            self.assertEqual(m["fused"](n, c, limit), expected(limit))
+
+    def test_generic_dispatch(self):
+        m = load_virtual()
+        Sq, Rect = m["Sq"], m["Rect"]
+        n = 100
+        shapes = [Sq(3.0), Rect(2.0, 5.0)]
+        expected = sum(i * i * 2.0 + (9.0 if i % 2 == 0 else 10.0) for i in range(n))
+        for _ in range(REPEAT):
+            self.assertEqual(m["areas"](n, shapes), expected)
+        if tier2_enabled():
+            counts = executor_uop_counts(m["areas"])
+            self.assertGreaterEqual(counts["_VO_NEW_RECORD"], 2, counts)
+        # Another shape type takes a side exit with virtual arguments.
+        self.assertEqual(m["areas"](4, [Rect(1.0, 1.0)]),
+                         sum(i * i * 2.0 + 1.0 for i in range(4)))
 
     def test_tuple_of_record(self):
         m = load_virtual()
