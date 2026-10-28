@@ -3102,7 +3102,9 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                 *r = inst;
                 r->opcode = _VO_RELEASE;
                 r->oparg = c->n;
-                r->operand0 = c->base | ((uint64_t)(c->type != NULL) << 32);
+                r->operand0 = c->base | ((uint64_t)(c->type != NULL) << 32) |
+                              ((uint64_t)(c->type != NULL &&
+                                          _PyGrail_FloatRecordFieldCount(c->type) == c->n) << 33);
                 r->operand1 = c->type != NULL ?
                     (uintptr_t)_PyGrail_PlanNodes(c->type) : 0;
             }

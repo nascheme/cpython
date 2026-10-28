@@ -1670,6 +1670,37 @@ class VirtualObjectTests(unittest.TestCase):
         self.assertEqual(m["areas"](4, [Rect(1.0, 1.0)]),
                          sum(i * i * 2.0 + 1.0 for i in range(4)))
 
+    @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
+    def test_recovery_allocation_failure(self):
+        # Rebuilding virtual objects at an exit can fail: MemoryError at the
+        # exit's target, and the interpreter state stays consistent. Without
+        # the record freelist, so that record allocations can fail.
+        from test.support import import_helper
+        from test.support.script_helper import assert_python_ok
+        import_helper.import_module("_testcapi")
+        code = """if 1:
+            import _testcapi
+            from test.test_grail_jit import load_virtual
+            m = load_virtual()
+            n = 100
+            for _ in range(100):
+                m["exits"](n, n); m["segs"](n, n)
+            raised = 0
+            for start in range(200):
+                for name, limit in (("exits", 0), ("segs", n // 2)):
+                    _testcapi.set_nomemory(start, start + 1)
+                    try:
+                        m[name](n, limit)
+                    except MemoryError:
+                        raised += 1
+                    finally:
+                        _testcapi.remove_mem_hooks()
+            assert raised > 0
+            assert m["exits"](n, n) == sum(range(1, n + 1))
+            assert m["segs"](n, n) == 2 * n
+        """
+        assert_python_ok("-c", code, PYTHON_GRAIL_RECORD_FREELIST="0")
+
     def test_tuple_of_record(self):
         m = load_virtual()
         for _ in range(REPEAT):

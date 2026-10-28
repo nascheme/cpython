@@ -6014,26 +6014,36 @@ dummy_func(
         /* A virtual object died: release its oparg fields (the first one
          * is in the low 32 bits of base). For a record (bit 32 of base),
          * nodes are its plans (it conforms), so exact float and int fields
-         * are released directly. Operands are never NULL in JIT code, hence
+         * are released directly; bit 33: all of them are exact floats. Operands are never NULL in JIT code, hence
          * the bit. */
         tier2 op(_VO_RELEASE, (base/4, nodes/4 --)) {
             uint64_t bits = (uint64_t)(uintptr_t)base;
             _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uint32_t)bits;
-            const _PyGrailPlanNode *plans = (bits >> 32) ?
+            const _PyGrailPlanNode *plans = (bits >> 32) & 1 ?
                 (const _PyGrailPlanNode *)nodes : NULL;
-            for (int i = 0; i < oparg; i++) {
-                _PyStackRef field = shadow[i];
-                shadow[i] = PyStackRef_NULL;
-                if (plans != NULL && plans[i].kind == _PyGrail_PLAN_EXACT &&
-                    plans[i].type == &PyFloat_Type) {
+            if ((bits >> 33) & 1) {
+                // All fields are exact floats.
+                for (int i = 0; i < oparg; i++) {
+                    _PyStackRef field = shadow[i];
+                    shadow[i] = PyStackRef_NULL;
                     PyStackRef_CLOSE_SPECIALIZED(field, _PyFloat_ExactDealloc);
                 }
-                else if (plans != NULL && plans[i].kind == _PyGrail_PLAN_EXACT &&
-                         plans[i].type == &PyLong_Type) {
-                    PyStackRef_CLOSE_SPECIALIZED(field, _PyLong_ExactDealloc);
-                }
-                else {
-                    PyStackRef_XCLOSE(field);
+            }
+            else {
+                for (int i = 0; i < oparg; i++) {
+                    _PyStackRef field = shadow[i];
+                    shadow[i] = PyStackRef_NULL;
+                    if (plans != NULL && plans[i].kind == _PyGrail_PLAN_EXACT &&
+                        plans[i].type == &PyFloat_Type) {
+                        PyStackRef_CLOSE_SPECIALIZED(field, _PyFloat_ExactDealloc);
+                    }
+                    else if (plans != NULL && plans[i].kind == _PyGrail_PLAN_EXACT &&
+                             plans[i].type == &PyLong_Type) {
+                        PyStackRef_CLOSE_SPECIALIZED(field, _PyLong_ExactDealloc);
+                    }
+                    else {
+                        PyStackRef_XCLOSE(field);
+                    }
                 }
             }
         }

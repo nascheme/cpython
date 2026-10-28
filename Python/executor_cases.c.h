@@ -21810,23 +21810,32 @@
             PyObject *nodes = (PyObject *)CURRENT_OPERAND1_64();
             uint64_t bits = (uint64_t)(uintptr_t)base;
             _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow + (uint32_t)bits;
-            const _PyGrailPlanNode *plans = (bits >> 32) ?
+            const _PyGrailPlanNode *plans = (bits >> 32) & 1 ?
             (const _PyGrailPlanNode *)nodes : NULL;
-            for (int i = 0; i < oparg; i++) {
-                _PyStackRef field = shadow[i];
-                shadow[i] = PyStackRef_NULL;
-                if (plans != NULL && plans[i].kind == _PyGrail_PLAN_EXACT &&
-                    plans[i].type == &PyFloat_Type) {
+            if ((bits >> 33) & 1) {
+                for (int i = 0; i < oparg; i++) {
+                    _PyStackRef field = shadow[i];
+                    shadow[i] = PyStackRef_NULL;
                     PyStackRef_CLOSE_SPECIALIZED(field, _PyFloat_ExactDealloc);
                 }
-                else if (plans != NULL && plans[i].kind == _PyGrail_PLAN_EXACT &&
-                         plans[i].type == &PyLong_Type) {
-                    PyStackRef_CLOSE_SPECIALIZED(field, _PyLong_ExactDealloc);
-                }
-                else {
-                    _PyFrame_SetStackPointer(frame, stack_pointer);
-                    PyStackRef_XCLOSE(field);
-                    stack_pointer = _PyFrame_GetStackPointer(frame);
+            }
+            else {
+                for (int i = 0; i < oparg; i++) {
+                    _PyStackRef field = shadow[i];
+                    shadow[i] = PyStackRef_NULL;
+                    if (plans != NULL && plans[i].kind == _PyGrail_PLAN_EXACT &&
+                        plans[i].type == &PyFloat_Type) {
+                        PyStackRef_CLOSE_SPECIALIZED(field, _PyFloat_ExactDealloc);
+                    }
+                    else if (plans != NULL && plans[i].kind == _PyGrail_PLAN_EXACT &&
+                             plans[i].type == &PyLong_Type) {
+                        PyStackRef_CLOSE_SPECIALIZED(field, _PyLong_ExactDealloc);
+                    }
+                    else {
+                        _PyFrame_SetStackPointer(frame, stack_pointer);
+                        PyStackRef_XCLOSE(field);
+                        stack_pointer = _PyFrame_GetStackPointer(frame);
+                    }
                 }
             }
             _tos_cache0 = PyStackRef_ZERO_BITS;
