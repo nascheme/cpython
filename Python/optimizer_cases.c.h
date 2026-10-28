@@ -5585,6 +5585,10 @@
             break;
         }
 
+        case _VO_GUARD_LOCALS: {
+            break;
+        }
+
         case _VO_EXIT_INFO: {
             break;
         }

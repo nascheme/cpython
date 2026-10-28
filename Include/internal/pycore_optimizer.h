@@ -112,13 +112,15 @@ typedef struct {
 typedef struct {
     uint8_t cand;
     uint8_t depth;          // abstract frame depth (1: the trace's root)
-    uint8_t is_stack;
+    uint8_t is_stack;       // _PyVO_LOC_*
     uint16_t index;
 } _PyVOLoc;
 
 typedef struct {
     bool failed;            // give up on virtual objects for this trace
     bool pending_frame;     // a frame is initialized but not yet pushed
+    bool unknown_depth;     // returned to a frame whose stack depth is not
+                            // yet known (until _GUARD_IP_RETURN_VALUE)
     int ncands;
     int nuses;
     int nsnaps;
@@ -128,6 +130,11 @@ typedef struct {
     _PyVOUse uses[VO_MAX_USES];
     _PyVOSnapshot snaps[VO_MAX_SNAPSHOTS];
     _PyVOLoc locs[VO_MAX_LOCS];
+    int nguards;
+    struct {
+        int out;            // output index of the _RETURN_VALUE
+        uint64_t locals;    // locals that must not be freed by it
+    } guards[64];
 } _PyVOState;
 
 typedef struct _JitOptContext {
@@ -300,11 +307,17 @@ typedef struct {
     uint8_t n;              // field count
 } _PyVORecoveryObject;
 
+/* Where a virtual object is: a local, a stack slot counted from the base of
+ * the frame's stack, or (in the frame the exit is taken in) from the top,
+ * for a frame whose depth the trace does not know. */
+enum { _PyVO_LOC_LOCAL, _PyVO_LOC_STACK, _PyVO_LOC_TOP };
+
 typedef struct {
     uint8_t obj;            // index into objs
     uint8_t frame_up;       // 0: the frame the exit is taken in
-    uint8_t is_stack;
-    uint16_t index;         // local index, or stack index from the base
+    uint8_t is_stack;       // _PyVO_LOC_*
+    uint16_t index;         // local index, stack index from the base, or
+                            // distance from the top (1: the top item)
 } _PyVORecoveryLoc;
 
 /* Field field of object obj holds object inner (built earlier). */

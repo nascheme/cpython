@@ -1411,6 +1411,30 @@ def segs(n, limit):
 def step(i):
     return make(i), i * 3
 
+def shared(n):
+    t = 0
+    for i in range(n):
+        t += i
+    return t, n
+
+def caller_a(n):
+    a, b = shared(n)
+    return a + b
+
+def caller_b(n):
+    s = 0
+    for k in (1, 2):
+        with Ctx():
+            a, b = shared(n)
+            s += a + b * k
+    return s
+
+class Ctx:
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return None
+
 def use_step(i):
     p, k = step(i)
     return p.y + k
@@ -1524,6 +1548,16 @@ class VirtualObjectTests(unittest.TestCase):
             uops = executor_uops(m["steps"])
             self.assertIn("_VO_NEW_TUPLE", uops)
             self.assertIn("_VO_NEW_RECORD", uops)
+
+    def test_return_out_of_trace_root(self):
+        # Traces that start in shared() return its tuple to whichever
+        # caller is running; the stack depths of the callers differ.
+        m = load_virtual()
+        for i in range(400):
+            n = 20 + i % 3
+            t = n * (n - 1) // 2
+            self.assertEqual(m["caller_a"](n), t + n)
+            self.assertEqual(m["caller_b"](n), 2 * t + 3 * n)
 
     @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
     def test_ablation(self):

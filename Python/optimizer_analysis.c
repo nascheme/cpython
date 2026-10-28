@@ -1716,11 +1716,16 @@ typedef struct {
     int input_cand[VO_MAX_INPUTS];     // candidate index, or -1
     bool inputs_overflow;
     JitOptRef *caller_locals;   // _RETURN_VALUE: the caller's locals
-    bool returning_safe;        // _RETURN_VALUE: the frame's locals are safe
+    bool returning_safe;        // _RETURN_VALUE: the frame's locals are safe,
+                                // or held elsewhere (unsafe_locals)
+    int nunsafe;
+    JitOptSymbol *unsafe_locals[8];
+    int unsafe_index[8];
     int nlocs;
     _PyVOLoc locs[VO_MAX_PRE_LOCS];
     bool locs_overflow;
     bool pending_locs;          // a candidate is in a frame not yet pushed
+    int sp_level;               // stack depth of the current frame
 } VOPre;
 
 static inline bool
@@ -2011,6 +2016,29 @@ vo_scan(JitOptContext *ctx, JitOptRef *stack_pointer, VOPre *pre, int cand)
     return found;
 }
 
+/* sym is in an abstract location of the trace's frames: a reference that
+ * keeps it alive, so dropping another one runs no code. */
+static bool
+vo_sym_present(JitOptContext *ctx, JitOptRef *stack_pointer, JitOptSymbol *sym)
+{
+    int depth = ctx->curr_frame_depth;
+    for (int d = 0; d < depth && d < MAX_ABSTRACT_FRAME_DEPTH; d++) {
+        _Py_UOpsAbstractFrame *f = &ctx->frames[d];
+        JitOptRef *sp = d == depth - 1 ? stack_pointer : f->stack_pointer;
+        for (int k = 0; k < f->locals_len; k++) {
+            if (PyJitRef_Unwrap(f->locals[k]) == sym) {
+                return true;
+            }
+        }
+        for (JitOptRef *p = f->stack; p < sp; p++) {
+            if (PyJitRef_Unwrap(*p) == sym) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /* Before the abstract interpreter runs this_instr. */
 static void
 vo_before(JitOptContext *ctx, _PyUOpInstruction *this_instr,
@@ -2019,6 +2047,7 @@ vo_before(JitOptContext *ctx, _PyUOpInstruction *this_instr,
     pre->opcode = this_instr->opcode;
     pre->oparg = this_instr->oparg;
     pre->depth = ctx->curr_frame_depth;
+    pre->sp_level = (int)(stack_pointer - ctx->frame->stack);
     pre->any_live = vo_any_live(ctx);
     pre->npop = 0;
     pre->inputs_overflow = false;
@@ -2058,10 +2087,19 @@ vo_before(JitOptContext *ctx, _PyUOpInstruction *this_instr,
     if (opcode == _RETURN_VALUE) {
         _Py_UOpsAbstractFrame *f = ctx->frame;
         pre->returning_safe = true;
+        pre->nunsafe = 0;
         for (int k = 0; k < f->locals_len; k++) {
             if (!vo_decref_safe(ctx, f->locals[k])) {
-                pre->returning_safe = false;
-                break;
+                if (pre->nunsafe == 8) {
+                    pre->returning_safe = false;
+                    break;
+                }
+                if (k >= 64) {
+                    pre->returning_safe = false;
+                    break;
+                }
+                pre->unsafe_index[pre->nunsafe] = k;
+                pre->unsafe_locals[pre->nunsafe++] = PyJitRef_Unwrap(f->locals[k]);
             }
         }
         if (ctx->curr_frame_depth >= 2) {
@@ -2361,15 +2399,16 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                 }
             }
             else if (opcode == _RETURN_VALUE) {
-                DPRINTF(2, "vo: return at depth %d -> %d, caller %s\n", pre->depth,
-                        ctx->curr_frame_depth,
-                        pre->caller_locals == NULL ? "none" :
-                        ctx->frame->locals == pre->caller_locals ? "same" : "other");
                 if (pre->caller_locals != NULL &&
                     ctx->curr_frame_depth == pre->depth - 1 &&
                     ctx->frame->locals == pre->caller_locals) {
                     continue;
                 }
+                // Returned to a frame the trace did not push (out of the
+                // root frame): its stack depth is set by the
+                // _GUARD_IP_RETURN_VALUE that follows.
+                vo->unknown_depth = true;
+                continue;
             }
             else if (opcode == _INIT_CALL_PY_EXACT_ARGS || vo_is_call_guard(opcode)) {
                 if (i >= 2) {
@@ -2400,10 +2439,30 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             bool exempt = false;
             if (vo_is_pop(op)) {
                 exempt = vo_is_pop(opcode) && nout == 1 && pre->npop == 1 &&
-                         vo_decref_safe(ctx, pre->inputs[0]);
+                         (vo_decref_safe(ctx, pre->inputs[0]) ||
+                          vo_sym_present(ctx, stack_pointer,
+                                         PyJitRef_Unwrap(pre->inputs[0])));
             }
             else if (op == _RETURN_VALUE) {
+                // Locals that may be freed by the return get a guard
+                // (_VO_GUARD_LOCALS) that leaves the trace if they would be.
+                uint64_t mask = 0;
                 exempt = pre->returning_safe;
+                for (int k = 0; k < pre->nunsafe && exempt; k++) {
+                    if (!vo_sym_present(ctx, stack_pointer, pre->unsafe_locals[k])) {
+                        mask |= (uint64_t)1 << pre->unsafe_index[k];
+                    }
+                }
+                if (exempt && mask != 0) {
+                    if (vo->nguards < 64) {
+                        vo->guards[vo->nguards].out = (int)(p - ctx->out_buffer.start);
+                        vo->guards[vo->nguards].locals = mask;
+                        vo->nguards++;
+                    }
+                    else {
+                        exempt = false;
+                    }
+                }
             }
             else if (op == _CALL_BUILTIN_O || op == _CALL_BUILTIN_FAST) {
                 exempt = vo_pure_builtin_call(ctx, pre);
@@ -2444,10 +2503,35 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                     exits = true;
                 }
             }
-            if (pre->locs_overflow || (pre->pending_locs && exits)) {
+            if (opcode == _GUARD_IP_RETURN_VALUE && vo->unknown_depth) {
+                // The guard checks that the trace returned to the frame it
+                // expects, and sets its depth. When it fails, the frame is
+                // another one: the virtual objects in its stack are found
+                // from the top.
+                VOPre top = *pre;
+                for (int k = 0; k < top.nlocs; k++) {
+                    _PyVOLoc *loc = &top.locs[k];
+                    if (loc->depth == pre->depth && loc->is_stack) {
+                        loc->is_stack = _PyVO_LOC_TOP;
+                        loc->index = (uint16_t)(pre->sp_level - loc->index);
+                    }
+                    else {
+                        top.locs_overflow = true;
+                    }
+                }
+                vo->unknown_depth = false;
+                if (top.locs_overflow || top.pending_locs) {
+                    vo_escape_all(ctx, "locations");
+                }
+                else {
+                    vo_snapshot(ctx, &top, out, out + nout);
+                }
+            }
+            else if (pre->locs_overflow || (pre->pending_locs && exits) ||
+                     (vo->unknown_depth && exits)) {
                 vo_escape_all(ctx, "locations");
             }
-            else if (!pre->pending_locs) {
+            else if (!pre->pending_locs && !vo->unknown_depth) {
                 vo_snapshot(ctx, pre, out, out + nout);
             }
         }
@@ -2586,7 +2670,7 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
             }
         }
     }
-    if (length + nvirtual + nmarkers > UOP_MAX_TRACE_LENGTH - 8) {
+    if (length + nvirtual + nmarkers + 2 * vo->nguards > UOP_MAX_TRACE_LENGTH - 8) {
         DPRINTF(1, "vo: trace too long\n");
         return length;
     }
@@ -2653,6 +2737,7 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
             l->obj = (uint8_t)obj_of[loc->cand];
             l->frame_up = (uint8_t)(snap->depth - loc->depth);
             l->is_stack = loc->is_stack;
+            assert(l->is_stack != _PyVO_LOC_TOP || l->frame_up == 0);
             l->index = loc->index;
         }
         _PyVORecoveryInner *inner = (_PyVORecoveryInner *)(locs + rec->nlocs);
@@ -2741,6 +2826,23 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                     break;
             }
         }
+        for (int g = 0; g < vo->nguards; g++) {
+            // Only needed while virtual objects are live (info_of[i]).
+            if (vo->guards[g].out == i && info_of[i] != NULL) {
+                _PyUOpInstruction *m = &buffer[out++];
+                *m = inst;
+                m->opcode = _VO_EXIT_INFO;
+                m->oparg = 0;
+                m->operand0 = (uintptr_t)info_of[i];
+                m->operand1 = 0;
+                _PyUOpInstruction *gi = &buffer[out++];
+                *gi = inst;
+                gi->opcode = _VO_GUARD_LOCALS;
+                gi->oparg = 0;
+                gi->operand0 = vo->guards[g].locals;
+                gi->operand1 = 0;
+            }
+        }
         if (info_of[i] != NULL && (_PyUop_Flags[inst.opcode] & VO_EXIT_FLAGS)) {
             _PyUOpInstruction *m = &buffer[out++];
             *m = inst;
@@ -2786,6 +2888,7 @@ optimize_uops(
 
     _Py_uop_abstractcontext_init(ctx, dependencies);
     memset(&ctx->vo, 0, offsetof(_PyVOState, cands));
+    ctx->vo.nguards = 0;
     ctx->vo.failed = !vo_enabled();
     _Py_UOpsAbstractFrame *frame = _Py_uop_frame_new(ctx, (PyCodeObject *)func->func_code, NULL, 0);
     if (frame == NULL) {

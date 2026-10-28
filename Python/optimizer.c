@@ -268,6 +268,7 @@ _PyExecutor_Free(_PyExecutorObject *self)
 /* Virtual objects at run time (the optimizer side is in
  * optimizer_analysis.c). */
 
+
 PyObject _PyVO_Placeholder = _PyObject_HEAD_INIT(&PyBaseObject_Type);
 
 /* The first uop of an exit stub for an exit taken while virtual objects
@@ -338,14 +339,21 @@ _PyVO_Recover(PyThreadState *tstate, _PyInterpreterFrame *frame,
         for (int k = 0; k < loc->frame_up; k++) {
             f = f->previous;
         }
-        int index = loc->index;
-        if (loc->is_stack) {
-            index += _PyFrame_GetCode(f)->co_nlocalsplus;
+        _PyStackRef *slot;
+        if (loc->is_stack == _PyVO_LOC_TOP) {
+            // The uop saved the stack pointer before calling here.
+            assert(loc->frame_up == 0 && frame->stackpointer != NULL);
+            slot = frame->stackpointer - loc->index;
         }
-        assert(PyStackRef_AsPyObjectBorrow(f->localsplus[index]) == &_PyVO_Placeholder);
+        else if (loc->is_stack == _PyVO_LOC_STACK) {
+            slot = _PyFrame_Stackbase(f) + loc->index;
+        }
+        else {
+            slot = &f->localsplus[loc->index];
+        }
+        assert(PyStackRef_AsPyObjectBorrow(*slot) == &_PyVO_Placeholder);
         PyObject *o = built[loc->obj];
-        f->localsplus[index] = o != NULL ? PyStackRef_FromPyObjectNew(o)
-                                         : PyStackRef_None;
+        *slot = o != NULL ? PyStackRef_FromPyObjectNew(o) : PyStackRef_None;
     }
     for (int i = 0; i < rec->nobjs; i++) {
         Py_XDECREF(built[i]);

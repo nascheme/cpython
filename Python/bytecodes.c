@@ -5980,6 +5980,24 @@ dummy_func(
             }
         }
 
+        /* Before a _RETURN_VALUE while virtual objects are live: deopt
+         * (rebuilding them) if releasing a local in mask would free it,
+         * which could run code that inspects frames. */
+        tier2 op(_VO_GUARD_LOCALS, (mask/4 --)) {
+            uint64_t bits = (uint64_t)(uintptr_t)mask;
+            int freed = 0;
+            for (int i = 0; bits != 0; i++, bits >>= 1) {
+                if (bits & 1) {
+                    _PyStackRef v = frame->localsplus[i];
+                    if (!PyStackRef_IsNull(v) && PyStackRef_RefcountOnObject(v)) {
+                        PyObject *o = PyStackRef_AsPyObjectBorrow(v);
+                        freed |= !_Py_IsImmortal(o) && Py_REFCNT(o) == 1;
+                    }
+                }
+            }
+            DEOPT_IF(freed);
+        }
+
         /* Marks the next uop that can leave the trace: prepare_for_execution()
          * gives it exit stubs that rebuild the virtual objects of info (a
          * _PyVORecovery), and removes the marker. */
