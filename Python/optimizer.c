@@ -271,6 +271,20 @@ _PyExecutor_Free(_PyExecutorObject *self)
 
 PyObject _PyVO_Placeholder = _PyObject_HEAD_INIT(&PyBaseObject_Type);
 
+void
+_PyVO_FlushDeferred(PyThreadState *tstate)
+{
+    _PyThreadStateImpl *ts = (_PyThreadStateImpl *)tstate;
+    // Finalizers may run traces; take the list first.
+    int n = ts->vo_ndeferred;
+    PyObject *objs[_Py_VO_DEFERRED_SIZE];
+    memcpy(objs, ts->vo_deferred, n * sizeof(PyObject *));
+    ts->vo_ndeferred = 0;
+    for (int i = 0; i < n; i++) {
+        Py_DECREF(objs[i]);
+    }
+}
+
 /* The first uop of an exit stub for an exit taken while virtual objects
  * are live: build each object once from its shadow fields, which move into
  * it, then store a reference in every slot that holds it (aliases share
@@ -357,6 +371,14 @@ _PyVO_Recover(PyThreadState *tstate, _PyInterpreterFrame *frame,
     }
     for (int i = 0; i < rec->nobjs; i++) {
         Py_XDECREF(built[i]);
+    }
+    // Now nothing virtual is left to observe.
+    if (((_PyThreadStateImpl *)tstate)->vo_ndeferred) {
+        PyObject *exc2 = in_error ? NULL : PyErr_GetRaisedException();
+        _PyVO_FlushDeferred(tstate);
+        if (!in_error) {
+            PyErr_SetRaisedException(exc2);
+        }
     }
     if (in_error) {
         if (failed) {

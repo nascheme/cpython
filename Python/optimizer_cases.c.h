@@ -5589,6 +5589,17 @@
             break;
         }
 
+        case _VO_POP_TOP_DEFER: {
+            CHECK_STACK_BOUNDS(-1);
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _VO_FLUSH: {
+            break;
+        }
+
         case _VO_EXIT_INFO: {
             break;
         }

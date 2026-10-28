@@ -595,6 +595,7 @@ NON_ESCAPING_FUNCTIONS = (
     "_PyGrail_IsRecordTypeFast",
     "_PyGrail_IsRecordDraft",
     "_PyGrail_PlanLeafConforms",
+    "_PyVO_DeferDecref",
     "_PyGrail_IsDraft",
     "_PyGrail_IsDraftWithMethod",
     "_PyFrame_SetStackPointer",

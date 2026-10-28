@@ -130,6 +130,9 @@ typedef struct {
     _PyVOUse uses[VO_MAX_USES];
     _PyVOSnapshot snaps[VO_MAX_SNAPSHOTS];
     _PyVOLoc locs[VO_MAX_LOCS];
+    int region_deferred;    // deferred pops since no candidate was live
+    int ndefers;
+    int defers[256];        // output indices of pops to defer
     int nguards;
     struct {
         int out;            // output index of the _RETURN_VALUE
@@ -346,6 +349,9 @@ _PyVORecovery_Inner(const _PyVORecovery *rec)
 {
     return (const _PyVORecoveryInner *)(_PyVORecovery_Locs(rec) + rec->nlocs);
 }
+
+/* Free the objects _PyVO_DeferDecref() kept, in order. */
+PyAPI_FUNC(void) _PyVO_FlushDeferred(PyThreadState *tstate);
 
 /* Rebuild the virtual objects of rec and store them in their slots. Returns
  * 0, or -1 with MemoryError set (slots then hold None). With in_error, an

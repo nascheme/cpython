@@ -1435,6 +1435,24 @@ class Ctx:
     def __exit__(self, *args):
         return None
 
+LOG = []
+
+class Logged:
+    def __del__(self):
+        LOG.append("del")
+
+def drop(d, i):
+    p = make(i)
+    d = None
+    return p.x + p.y
+
+def drops(n):
+    t = 0
+    for i in range(n):
+        t += drop(Logged(), i)
+        LOG.append("it")
+    return t
+
 def use_step(i):
     p, k = step(i)
     return p.y + k
@@ -1548,6 +1566,19 @@ class VirtualObjectTests(unittest.TestCase):
             uops = executor_uops(m["steps"])
             self.assertIn("_VO_NEW_TUPLE", uops)
             self.assertIn("_VO_NEW_RECORD", uops)
+
+    def test_deferred_release_order(self):
+        # drop() releases the last reference to a Logged while p is
+        # virtual: the finalizer still runs before the caller continues.
+        m = load_virtual()
+        for _ in range(REPEAT):
+            del m["LOG"][:]
+            self.assertEqual(m["drops"](100), 100 * 100)
+            self.assertEqual(m["LOG"], ["del", "it"] * 100)
+        if tier2_enabled():
+            uops = executor_uops(m["drops"])
+            self.assertIn("_VO_NEW_RECORD", uops)
+            self.assertIn("_VO_POP_TOP_DEFER", uops)
 
     def test_return_out_of_trace_root(self):
         # Traces that start in shared() return its tuple to whichever

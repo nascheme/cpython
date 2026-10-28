@@ -1626,6 +1626,7 @@ init_threadstate(_PyThreadStateImpl *_tstate,
     for (int i = 0; i < _Py_VO_SHADOW_SIZE; i++) {
         _tstate->vo_shadow[i] = PyStackRef_NULL;
     }
+    _tstate->vo_ndeferred = 0;
     tstate->delete_later = NULL;
 
     llist_init(&_tstate->mem_free_queue);

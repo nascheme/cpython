@@ -1887,8 +1887,18 @@ vo_pure_builtin_call(JitOptContext *ctx, const VOPre *pre)
         return false;
     }
     PyObject *callable = sym_get_const(ctx, pre->inputs[0]);
-    if (callable == NULL || !PyCFunction_CheckExact(callable) ||
-        !sym_is_null(pre->inputs[1])) {
+    if (callable == NULL || !sym_is_null(pre->inputs[1])) {
+        return false;
+    }
+    if (callable == (PyObject *)&PyFloat_Type || callable == (PyObject *)&PyLong_Type) {
+        // float(x), int(x) of an exact float or int.
+        if (pre->npop != 3) {
+            return false;
+        }
+        PyTypeObject *type = sym_get_type(pre->inputs[2]);
+        return type == &PyFloat_Type || type == &PyLong_Type;
+    }
+    if (!PyCFunction_CheckExact(callable)) {
         return false;
     }
     PyObject *module = ((PyCFunctionObject *)callable)->m_module;
@@ -2442,6 +2452,14 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                          (vo_decref_safe(ctx, pre->inputs[0]) ||
                           vo_sym_present(ctx, stack_pointer,
                                          PyJitRef_Unwrap(pre->inputs[0])));
+                // Otherwise a release that would free the value waits
+                // until no virtual object is live (_VO_POP_TOP_DEFER).
+                if (!exempt && op == _POP_TOP && vo_is_pop(opcode) && nout == 1 &&
+                    vo->region_deferred < _Py_VO_DEFERRED_SIZE && vo->ndefers < 256) {
+                    vo->defers[vo->ndefers++] = (int)(p - ctx->out_buffer.start);
+                    vo->region_deferred++;
+                    exempt = true;
+                }
             }
             else if (op == _RETURN_VALUE) {
                 // Locals that may be freed by the return get a guard
@@ -2467,7 +2485,11 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             else if (op == _CALL_BUILTIN_O || op == _CALL_BUILTIN_FAST) {
                 exempt = vo_pure_builtin_call(ctx, pre);
             }
-            else if (op == _BINARY_OP_TRUEDIV_FLOAT || op == _BINARY_OP_EXTEND) {
+            else if (op == _CALL_BUILTIN_CLASS) {
+                exempt = vo_pure_builtin_call(ctx, pre);
+            }
+            else if (op == _BINARY_OP_TRUEDIV_FLOAT || op == _BINARY_OP_EXTEND ||
+                     op == _COMPARE_OP_FLOAT_INT || op == _COMPARE_OP_FLOAT_INT_CONST) {
                 exempt = true;
             }
             else if (op == _CALL_RECORD || op == _CALL_RECORD_CHECKED) {
@@ -2480,7 +2502,10 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             }
             if (!exempt) {
                 if (vo_any_live(ctx)) {
-                    DPRINTF(2, "vo: barrier %s\n", _PyOpcode_uop_name[op]);
+                    PyTypeObject *t = pre->npop > 0 && !pre->inputs_overflow ?
+                        sym_get_type(pre->inputs[pre->npop - 1]) : NULL;
+                    DPRINTF(2, "vo: barrier %s (top input %s)\n", _PyOpcode_uop_name[op],
+                            t ? t->tp_name : "?");
                 }
                 vo_escape_all(ctx, "barrier");
                 break;
@@ -2590,6 +2615,9 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             vo_escape_all(ctx, "unsafe release");
         }
     }
+    if (!vo_any_live(ctx)) {
+        vo->region_deferred = 0;
+    }
 }
 
 /* The virtual objects a recovery at snap rebuilds: those in its locations
@@ -2670,7 +2698,8 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
             }
         }
     }
-    if (length + nvirtual + nmarkers + 2 * vo->nguards > UOP_MAX_TRACE_LENGTH - 8) {
+    if (length + nvirtual + nmarkers + 2 * vo->nguards + 2 * vo->ndefers >
+        UOP_MAX_TRACE_LENGTH - 8) {
         DPRINTF(1, "vo: trace too long\n");
         return length;
     }
@@ -2765,11 +2794,27 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
     }
     assert(next == arena + arena_size);
     int out = 0;
+    bool pending_flush = false;
+    int next_defer = 0;
     for (int i = 0; i < length; i++) {
         _PyUOpInstruction inst = copy[i];
+        bool live = false;
+        for (int k = 0; k < vo->ncands && !live; k++) {
+            _PyVOCandidate *c = &vo->cands[k];
+            live = !c->escaped && c->create < i && i < c->death;
+        }
         for (int k = 0; k < vo->ncands; k++) {
             _PyVOCandidate *c = &vo->cands[k];
             if (!c->escaped && c->death == i) {
+                if (pending_flush && !c->safe_release) {
+                    // Keep the order of the releases.
+                    _PyUOpInstruction *f = &buffer[out++];
+                    *f = inst;
+                    f->opcode = _VO_FLUSH;
+                    f->oparg = 0;
+                    f->operand0 = f->operand1 = 0;
+                    pending_flush = false;
+                }
                 _PyUOpInstruction *r = &buffer[out++];
                 *r = inst;
                 r->opcode = _VO_RELEASE;
@@ -2778,6 +2823,22 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                 r->operand1 = c->type != NULL ?
                     (uintptr_t)_PyGrail_PlanNodes(c->type) : 0;
             }
+        }
+        if (pending_flush && !live) {
+            _PyUOpInstruction *f = &buffer[out++];
+            *f = inst;
+            f->opcode = _VO_FLUSH;
+            f->oparg = 0;
+            f->operand0 = f->operand1 = 0;
+            pending_flush = false;
+        }
+        while (next_defer < vo->ndefers && vo->defers[next_defer] < i) {
+            next_defer++;
+        }
+        if (next_defer < vo->ndefers && vo->defers[next_defer] == i &&
+            live && inst.opcode == _POP_TOP) {
+            inst.opcode = _VO_POP_TOP_DEFER;
+            pending_flush = true;
         }
         int u = use_of[i];
         if (u >= 0) {
@@ -2889,6 +2950,8 @@ optimize_uops(
     _Py_uop_abstractcontext_init(ctx, dependencies);
     memset(&ctx->vo, 0, offsetof(_PyVOState, cands));
     ctx->vo.nguards = 0;
+    ctx->vo.ndefers = 0;
+    ctx->vo.region_deferred = 0;
     ctx->vo.failed = !vo_enabled();
     _Py_UOpsAbstractFrame *frame = _Py_uop_frame_new(ctx, (PyCodeObject *)func->func_code, NULL, 0);
     if (frame == NULL) {

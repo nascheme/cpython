@@ -5998,6 +5998,24 @@ dummy_func(
             DEOPT_IF(freed);
         }
 
+        /* A pop of a value of unknown type while virtual objects are live:
+         * a release that would free it waits for _VO_FLUSH (when no
+         * virtual object is live any more) or an exit's recovery. No code
+         * runs in between, so finalizers run in the same order relative to
+         * Python code. */
+        tier2 op(_VO_POP_TOP_DEFER, (value --)) {
+            PyObject *o = PyStackRef_AsPyObjectBorrow(value);
+            int owned = PyStackRef_RefcountOnObject(value);
+            DEAD(value);
+            if (owned) {
+                _PyVO_DeferDecref(tstate, o);
+            }
+        }
+
+        tier2 op(_VO_FLUSH, (--)) {
+            _PyVO_FlushDeferred(tstate);
+        }
+
         /* Marks the next uop that can leave the trace: prepare_for_execution()
          * gives it exit stubs that rebuild the virtual objects of info (a
          * _PyVORecovery), and removes the marker. */
