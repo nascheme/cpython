@@ -3774,6 +3774,25 @@ dummy_func(
             Py_XDECREF(old_value);
         }
 
+        /* _STORE_ATTR_RECORD_DRAFT while virtual objects are live: a release
+         * of the old value that would free it waits for _VO_FLUSH, as for
+         * _VO_POP_TOP_DEFER. */
+        tier2 op(_VO_STORE_ATTR_RECORD_DRAFT_DEFER, (index/1, value, owner -- o)) {
+            _PyGrailRecordDraft *draft =
+                (_PyGrailRecordDraft *)PyStackRef_AsPyObjectBorrow(owner);
+            PyObject *value_o = PyStackRef_AsPyObjectBorrow(value);
+            DEOPT_IF(_PyGrail_IsDraft(value_o) &&
+                     ((_PyGrailDraft *)value_o)->root != draft->head.root);
+            STAT_INC(STORE_ATTR, hit);
+            PyObject *old_value = draft->values[index];
+            draft->values[index] = PyStackRef_AsPyObjectSteal(value);
+            INPUTS_DEAD();
+            o = owner;
+            if (old_value != NULL) {
+                _PyVO_DeferDecref(tstate, old_value);
+            }
+        }
+
         macro(STORE_ATTR_RECORD_DRAFT) =
             unused/1 +
             _RECORD_TOS_TYPE +
@@ -4470,6 +4489,17 @@ dummy_func(
             }
             EXIT_IF(cleared);
             attrs = PyStackRef_DUP(subject);
+            s = subject;
+            tp = type;
+            n = names;
+            INPUTS_DEAD();
+        }
+
+        /* _MATCH_CLASS_RECORD_SELF of a virtual record (whose fields are
+         * never cleared): the subject itself. */
+        tier2 op(_VO_MATCH_CLASS_RECORD_SELF, (subject, type, names -- attrs, s, tp, n)) {
+            assert(PyStackRef_AsPyObjectBorrow(subject) == &_PyVO_Placeholder);
+            attrs = PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder);
             s = subject;
             tp = type;
             n = names;

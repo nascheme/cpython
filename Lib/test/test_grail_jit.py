@@ -1521,6 +1521,18 @@ def concats(n, acc):
         acc = concat_step(acc, i)
     return acc
 
+def matcher(n, limit):
+    t = 0
+    for i in range(n):
+        match make(i):
+            case F(x, y):
+                t -= 1
+            case P(a, b) if i >= limit:
+                t += 1000
+            case P(a, b):
+                t += a * b
+    return t
+
 def fused_step(i, c, limit):
     d = (v3(i) + c) - c
     if i >= limit:
@@ -1796,6 +1808,24 @@ class VirtualObjectTests(unittest.TestCase):
         # An empty real operand: the result is the virtual operand itself.
         self.assertEqual(concats(3, ()), expected(3, ()))
         self.assertEqual(concats(5, ()), expected(5, ()))
+
+    def test_match(self):
+        # Class patterns on a virtual record fold by its type
+        # (_MATCH_CLASS_RECORD_NONE, _VO_MATCH_CLASS_RECORD_SELF) and its
+        # fields unpack from the shadow slots.
+        m = load_virtual()
+        n = 100
+        for _ in range(REPEAT):
+            self.assertEqual(m["matcher"](n, n), sum(i * (i + 1) for i in range(n)))
+        if tier2_enabled():
+            counts = executor_uop_counts(m["matcher"])
+            self.assertGreaterEqual(counts["_VO_MATCH_CLASS_RECORD_SELF"], 1, counts)
+            self.assertNotIn("_CALL_RECORD_CHECKED", counts)
+            self.assertNotIn("_CALL_RECORD", counts)
+        # The guard of the second case fails: an exit with p virtual.
+        for limit in (0, n // 2):
+            self.assertEqual(m["matcher"](n, limit),
+                             sum(i * (i + 1) for i in range(limit)) + 1000 * (n - limit))
 
     def test_tuple_of_record(self):
         m = load_virtual()

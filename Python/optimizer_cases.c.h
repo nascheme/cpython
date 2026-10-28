@@ -3489,6 +3489,16 @@
             break;
         }
 
+        case _VO_STORE_ATTR_RECORD_DRAFT_DEFER: {
+            JitOptRef o;
+            o = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(-1);
+            stack_pointer[-2] = o;
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
         case _COMPARE_OP: {
             JitOptRef right;
             JitOptRef left;
@@ -4334,6 +4344,25 @@
         }
 
         case _MATCH_CLASS_RECORD_SELF: {
+            JitOptRef attrs;
+            JitOptRef s;
+            JitOptRef tp;
+            JitOptRef n;
+            attrs = sym_new_not_null(ctx);
+            s = sym_new_not_null(ctx);
+            tp = sym_new_not_null(ctx);
+            n = sym_new_not_null(ctx);
+            CHECK_STACK_BOUNDS(1);
+            stack_pointer[-3] = attrs;
+            stack_pointer[-2] = s;
+            stack_pointer[-1] = tp;
+            stack_pointer[0] = n;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            break;
+        }
+
+        case _VO_MATCH_CLASS_RECORD_SELF: {
             JitOptRef attrs;
             JitOptRef s;
             JitOptRef tp;

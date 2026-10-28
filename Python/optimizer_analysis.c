@@ -1697,6 +1697,7 @@ enum {
     VO_USE_STEAL,       // the element-wise uop takes over the fields of
                         // this operand (field: its index), which dies
     VO_USE_CONCAT,      // operand (field: its index) of tuple + tuple
+    VO_USE_MATCH_SELF,  // subject of a matching record class pattern
 };
 
 #define VO_MAX_FIELDS 16
@@ -2694,6 +2695,36 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                     continue;
                 }
             }
+            else if (opcode == _UNPACK_SEQUENCE_RECORD) {
+                // The matched record's first oparg fields.
+                if (cand->type != NULL && pre->oparg <= cand->n &&
+                    op == _UNPACK_SEQUENCE_RECORD) {
+                    vo_add_use(ctx, out, c, VO_USE_UNPACK, 0);
+                    for (int j = 0; j < pre->oparg; j++) {
+                        int inner = cand->inner[j];
+                        if (inner >= 0 && vo_live(&vo->cands[inner])) {
+                            stack_pointer[-1 - j] = PyJitRef_Wrap(vo->cands[inner].sym);
+                        }
+                    }
+                    continue;
+                }
+            }
+            else if (opcode == _GUARD_MATCH_CLASS_RECORD || opcode == _GUARD_TOS_MATCHED_RECORD) {
+                // Folded for the known record type.
+                if (i == 0 && (nout == 0 || op == _NOP)) {
+                    continue;
+                }
+            }
+            else if (opcode == _MATCH_CLASS_RECORD) {
+                if (i == 0 && cand->type != NULL && op == _MATCH_CLASS_RECORD_NONE) {
+                    // Another type: no match, the subject is not read.
+                    continue;
+                }
+                if (i == 0 && cand->type != NULL && op == _MATCH_CLASS_RECORD_SELF) {
+                    vo_add_use(ctx, out, c, VO_USE_MATCH_SELF, 0);
+                    continue;
+                }
+            }
             else if (opcode == _GUARD_TYPE_VERSION) {
                 if (nout == 0 || op == _NOP) {
                     continue;
@@ -2861,7 +2892,8 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             else if (op == _CALL_BUILTIN_CLASS) {
                 exempt = vo_pure_builtin_call(ctx, pre);
             }
-            else if ((vo_is_tuple_unpack(op) || op == _UNPACK_SEQUENCE) &&
+            else if ((vo_is_tuple_unpack(op) || op == _UNPACK_SEQUENCE ||
+                      op == _UNPACK_SEQUENCE_RECORD) &&
                      pre->npop == 1 && pre->input_cand[0] >= 0 &&
                      !vo->cands[pre->input_cand[0]].escaped) {
                 // Unpacking a virtual tuple (_VO_UNPACK) releases nothing.
@@ -2887,6 +2919,14 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                          t == &PyUnicode_Type || t == &PyBytes_Type ||
                          t == &PyDict_Type || t == &PySet_Type ||
                          t == &PyFrozenSet_Type;
+            }
+            else if (op == _STORE_ATTR_RECORD_DRAFT && nout == 1 &&
+                     vo->region_deferred < _Py_VO_DEFERRED_SIZE && vo->ndefers < 256) {
+                // The old field value's release can wait
+                // (_VO_STORE_ATTR_RECORD_DRAFT_DEFER).
+                vo->defers[vo->ndefers++] = (int)(p - ctx->out_buffer.start);
+                vo->region_deferred++;
+                exempt = true;
             }
             else if (op == _CHECK_PERIODIC) {
                 // Becomes _VO_CHECK_PERIODIC, which leaves the trace to
@@ -3009,7 +3049,8 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
     }
     /* Deaths. */
     bool may_die = vo_is_pop(opcode) || vo_is_tuple_unpack(opcode) ||
-                   opcode == _UNPACK_SEQUENCE || opcode == _RETURN_VALUE ||
+                   opcode == _UNPACK_SEQUENCE || opcode == _UNPACK_SEQUENCE_RECORD ||
+                   opcode == _RETURN_VALUE ||
                    opcode == _DELETE_FAST || fused;
     // Outer objects first: an inner one lives while a live outer holds it.
     for (int i = vo->ncands - 1; i >= 0; i--) {
@@ -3037,7 +3078,8 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
         c->death = out + nout;
         vo_free_slots(ctx, c);
         DPRINTF(2, "vo: candidate %d dies before %d\n", i, c->death);
-        if ((vo_is_tuple_unpack(opcode) || opcode == _UNPACK_SEQUENCE) &&
+        if ((vo_is_tuple_unpack(opcode) || opcode == _UNPACK_SEQUENCE ||
+             (opcode == _UNPACK_SEQUENCE_RECORD && pre->oparg == c->n)) &&
             pre->npop == 1 && pre->input_cand[0] == i && vo->nuses > 0 &&
             vo->uses[vo->nuses - 1].cand == i &&
             vo->uses[vo->nuses - 1].kind == VO_USE_UNPACK) {
@@ -3389,6 +3431,11 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
             inst.opcode = _VO_POP_TOP_DEFER;
             pending_flush = true;
         }
+        else if (next_defer < vo->ndefers && vo->defers[next_defer] == i &&
+                 live && inst.opcode == _STORE_ATTR_RECORD_DRAFT) {
+            inst.opcode = _VO_STORE_ATTR_RECORD_DRAFT_DEFER;
+            pending_flush = true;
+        }
         for (int u = use_of[i]; u >= 0; u = next_use[u]) {
             _PyVOUse *use = &vo->uses[u];
             _PyVOCandidate *c = &vo->cands[use->cand];
@@ -3442,6 +3489,9 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                     break;
                 case VO_USE_STEAL:
                     vo_set_vbase(&inst, 3, use->field);
+                    break;
+                case VO_USE_MATCH_SELF:
+                    inst.opcode = _VO_MATCH_CLASS_RECORD_SELF;
                     break;
                 case VO_USE_CONCAT:
                     if (inst.opcode == _BINARY_OP_EXTEND) {

@@ -266,6 +266,7 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_STORE_ATTR_WITH_HINT] = HAS_ARG_FLAG | HAS_NAME_FLAG | HAS_DEOPT_FLAG | HAS_ESCAPES_FLAG,
     [_STORE_ATTR_SLOT] = HAS_DEOPT_FLAG | HAS_ESCAPES_FLAG,
     [_STORE_ATTR_RECORD_DRAFT] = HAS_DEOPT_FLAG | HAS_ESCAPES_FLAG,
+    [_VO_STORE_ATTR_RECORD_DRAFT_DEFER] = HAS_DEOPT_FLAG,
     [_COMPARE_OP] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ESCAPES_FLAG,
     [_COMPARE_OP_FLOAT] = HAS_ARG_FLAG,
     [_COMPARE_OP_FLOAT_INT_CONST] = HAS_ARG_FLAG | HAS_ESCAPES_FLAG,
@@ -294,6 +295,7 @@ const uint32_t _PyUop_Flags[MAX_UOP_ID+1] = {
     [_MATCH_CLASS_RECORD] = HAS_ARG_FLAG | HAS_ERROR_FLAG | HAS_ERROR_NO_POP_FLAG | HAS_ESCAPES_FLAG,
     [_GUARD_3OS_TYPE_VERSION] = HAS_EXIT_FLAG,
     [_MATCH_CLASS_RECORD_SELF] = HAS_ARG_FLAG | HAS_EXIT_FLAG,
+    [_VO_MATCH_CLASS_RECORD_SELF] = 0,
     [_MATCH_CLASS_RECORD_NONE] = 0,
     [_MATCH_MAPPING] = 0,
     [_MATCH_SEQUENCE] = 0,
@@ -2590,6 +2592,15 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { -1, -1, -1 },
         },
     },
+    [_VO_STORE_ATTR_RECORD_DRAFT_DEFER] = {
+        .best = { 0, 1, 2, 3 },
+        .entries = {
+            { 1, 0, _VO_STORE_ATTR_RECORD_DRAFT_DEFER_r01 },
+            { 1, 1, _VO_STORE_ATTR_RECORD_DRAFT_DEFER_r11 },
+            { 1, 2, _VO_STORE_ATTR_RECORD_DRAFT_DEFER_r21 },
+            { 2, 3, _VO_STORE_ATTR_RECORD_DRAFT_DEFER_r32 },
+        },
+    },
     [_COMPARE_OP] = {
         .best = { 2, 2, 2, 2 },
         .entries = {
@@ -2840,6 +2851,15 @@ const _PyUopCachingInfo _PyUop_Caching[MAX_UOP_ID+1] = {
             { 3, 1, _MATCH_CLASS_RECORD_SELF_r13 },
             { 3, 2, _MATCH_CLASS_RECORD_SELF_r23 },
             { 3, 3, _MATCH_CLASS_RECORD_SELF_r33 },
+        },
+    },
+    [_VO_MATCH_CLASS_RECORD_SELF] = {
+        .best = { 0, 1, 2, 3 },
+        .entries = {
+            { 3, 0, _VO_MATCH_CLASS_RECORD_SELF_r03 },
+            { 3, 1, _VO_MATCH_CLASS_RECORD_SELF_r13 },
+            { 3, 2, _VO_MATCH_CLASS_RECORD_SELF_r23 },
+            { 3, 3, _VO_MATCH_CLASS_RECORD_SELF_r33 },
         },
     },
     [_MATCH_CLASS_RECORD_NONE] = {
@@ -5172,6 +5192,10 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_STORE_ATTR_WITH_HINT_r21] = _STORE_ATTR_WITH_HINT,
     [_STORE_ATTR_SLOT_r21] = _STORE_ATTR_SLOT,
     [_STORE_ATTR_RECORD_DRAFT_r21] = _STORE_ATTR_RECORD_DRAFT,
+    [_VO_STORE_ATTR_RECORD_DRAFT_DEFER_r01] = _VO_STORE_ATTR_RECORD_DRAFT_DEFER,
+    [_VO_STORE_ATTR_RECORD_DRAFT_DEFER_r11] = _VO_STORE_ATTR_RECORD_DRAFT_DEFER,
+    [_VO_STORE_ATTR_RECORD_DRAFT_DEFER_r21] = _VO_STORE_ATTR_RECORD_DRAFT_DEFER,
+    [_VO_STORE_ATTR_RECORD_DRAFT_DEFER_r32] = _VO_STORE_ATTR_RECORD_DRAFT_DEFER,
     [_COMPARE_OP_r21] = _COMPARE_OP,
     [_COMPARE_OP_FLOAT_r03] = _COMPARE_OP_FLOAT,
     [_COMPARE_OP_FLOAT_r13] = _COMPARE_OP_FLOAT,
@@ -5222,6 +5246,10 @@ const uint16_t _PyUop_Uncached[MAX_UOP_REGS_ID+1] = {
     [_MATCH_CLASS_RECORD_SELF_r13] = _MATCH_CLASS_RECORD_SELF,
     [_MATCH_CLASS_RECORD_SELF_r23] = _MATCH_CLASS_RECORD_SELF,
     [_MATCH_CLASS_RECORD_SELF_r33] = _MATCH_CLASS_RECORD_SELF,
+    [_VO_MATCH_CLASS_RECORD_SELF_r03] = _VO_MATCH_CLASS_RECORD_SELF,
+    [_VO_MATCH_CLASS_RECORD_SELF_r13] = _VO_MATCH_CLASS_RECORD_SELF,
+    [_VO_MATCH_CLASS_RECORD_SELF_r23] = _VO_MATCH_CLASS_RECORD_SELF,
+    [_VO_MATCH_CLASS_RECORD_SELF_r33] = _VO_MATCH_CLASS_RECORD_SELF,
     [_MATCH_CLASS_RECORD_NONE_r03] = _MATCH_CLASS_RECORD_NONE,
     [_MATCH_CLASS_RECORD_NONE_r13] = _MATCH_CLASS_RECORD_NONE,
     [_MATCH_CLASS_RECORD_NONE_r23] = _MATCH_CLASS_RECORD_NONE,
@@ -7226,6 +7254,11 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_VO_LOAD_FIELD_BORROW_r02] = "_VO_LOAD_FIELD_BORROW_r02",
     [_VO_LOAD_FIELD_BORROW_r12] = "_VO_LOAD_FIELD_BORROW_r12",
     [_VO_LOAD_FIELD_BORROW_r23] = "_VO_LOAD_FIELD_BORROW_r23",
+    [_VO_MATCH_CLASS_RECORD_SELF] = "_VO_MATCH_CLASS_RECORD_SELF",
+    [_VO_MATCH_CLASS_RECORD_SELF_r03] = "_VO_MATCH_CLASS_RECORD_SELF_r03",
+    [_VO_MATCH_CLASS_RECORD_SELF_r13] = "_VO_MATCH_CLASS_RECORD_SELF_r13",
+    [_VO_MATCH_CLASS_RECORD_SELF_r23] = "_VO_MATCH_CLASS_RECORD_SELF_r23",
+    [_VO_MATCH_CLASS_RECORD_SELF_r33] = "_VO_MATCH_CLASS_RECORD_SELF_r33",
     [_VO_MOVE] = "_VO_MOVE",
     [_VO_MOVE_r00] = "_VO_MOVE_r00",
     [_VO_NEW_RECORD] = "_VO_NEW_RECORD",
@@ -7243,6 +7276,11 @@ const char *const _PyOpcode_uop_name[MAX_UOP_REGS_ID+1] = {
     [_VO_RECOVER_ERROR_r00] = "_VO_RECOVER_ERROR_r00",
     [_VO_RELEASE] = "_VO_RELEASE",
     [_VO_RELEASE_r00] = "_VO_RELEASE_r00",
+    [_VO_STORE_ATTR_RECORD_DRAFT_DEFER] = "_VO_STORE_ATTR_RECORD_DRAFT_DEFER",
+    [_VO_STORE_ATTR_RECORD_DRAFT_DEFER_r01] = "_VO_STORE_ATTR_RECORD_DRAFT_DEFER_r01",
+    [_VO_STORE_ATTR_RECORD_DRAFT_DEFER_r11] = "_VO_STORE_ATTR_RECORD_DRAFT_DEFER_r11",
+    [_VO_STORE_ATTR_RECORD_DRAFT_DEFER_r21] = "_VO_STORE_ATTR_RECORD_DRAFT_DEFER_r21",
+    [_VO_STORE_ATTR_RECORD_DRAFT_DEFER_r32] = "_VO_STORE_ATTR_RECORD_DRAFT_DEFER_r32",
     [_VO_TUPLE_CONCAT] = "_VO_TUPLE_CONCAT",
     [_VO_TUPLE_CONCAT_r23] = "_VO_TUPLE_CONCAT_r23",
     [_VO_UNPACK] = "_VO_UNPACK",
@@ -7715,6 +7753,8 @@ int _PyUop_num_popped(int opcode, int oparg)
             return 2;
         case _STORE_ATTR_RECORD_DRAFT:
             return 2;
+        case _VO_STORE_ATTR_RECORD_DRAFT_DEFER:
+            return 2;
         case _COMPARE_OP:
             return 2;
         case _COMPARE_OP_FLOAT:
@@ -7770,6 +7810,8 @@ int _PyUop_num_popped(int opcode, int oparg)
         case _GUARD_3OS_TYPE_VERSION:
             return 0;
         case _MATCH_CLASS_RECORD_SELF:
+            return 3;
+        case _VO_MATCH_CLASS_RECORD_SELF:
             return 3;
         case _MATCH_CLASS_RECORD_NONE:
             return 3;
@@ -8661,6 +8703,8 @@ int _PyUop_num_inputs(int opcode, int oparg)
             return 2;
         case _STORE_ATTR_RECORD_DRAFT:
             return 2;
+        case _VO_STORE_ATTR_RECORD_DRAFT_DEFER:
+            return 2;
         case _COMPARE_OP:
             return 2;
         case _COMPARE_OP_FLOAT:
@@ -8716,6 +8760,8 @@ int _PyUop_num_inputs(int opcode, int oparg)
         case _GUARD_3OS_TYPE_VERSION:
             return 3;
         case _MATCH_CLASS_RECORD_SELF:
+            return 3;
+        case _VO_MATCH_CLASS_RECORD_SELF:
             return 3;
         case _MATCH_CLASS_RECORD_NONE:
             return 3;

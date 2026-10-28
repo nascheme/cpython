@@ -15020,6 +15020,147 @@
             break;
         }
 
+        case _VO_STORE_ATTR_RECORD_DRAFT_DEFER_r01: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef value;
+            _PyStackRef o;
+            owner = stack_pointer[-1];
+            value = stack_pointer[-2];
+            uint16_t index = (uint16_t)CURRENT_OPERAND0_16();
+            _PyGrailRecordDraft *draft =
+            (_PyGrailRecordDraft *)PyStackRef_AsPyObjectBorrow(owner);
+            PyObject *value_o = PyStackRef_AsPyObjectBorrow(value);
+            if (_PyGrail_IsDraft(value_o) &&
+                     ((_PyGrailDraft *)value_o)->root != draft->head.root) {
+                UOP_STAT_INC(uopcode, miss);
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_JUMP_TARGET();
+            }
+            STAT_INC(STORE_ATTR, hit);
+            PyObject *old_value = draft->values[index];
+            draft->values[index] = PyStackRef_AsPyObjectSteal(value);
+            o = owner;
+            if (old_value != NULL) {
+                _PyVO_DeferDecref(tstate, old_value);
+            }
+            _tos_cache0 = o;
+            SET_CURRENT_CACHED_VALUES(1);
+            stack_pointer += -2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_STORE_ATTR_RECORD_DRAFT_DEFER_r11: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef value;
+            _PyStackRef o;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            owner = _stack_item_0;
+            value = stack_pointer[-1];
+            uint16_t index = (uint16_t)CURRENT_OPERAND0_16();
+            _PyGrailRecordDraft *draft =
+            (_PyGrailRecordDraft *)PyStackRef_AsPyObjectBorrow(owner);
+            PyObject *value_o = PyStackRef_AsPyObjectBorrow(value);
+            if (_PyGrail_IsDraft(value_o) &&
+                     ((_PyGrailDraft *)value_o)->root != draft->head.root) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache0 = owner;
+                SET_CURRENT_CACHED_VALUES(1);
+                JUMP_TO_JUMP_TARGET();
+            }
+            STAT_INC(STORE_ATTR, hit);
+            PyObject *old_value = draft->values[index];
+            draft->values[index] = PyStackRef_AsPyObjectSteal(value);
+            o = owner;
+            if (old_value != NULL) {
+                _PyVO_DeferDecref(tstate, old_value);
+            }
+            _tos_cache0 = o;
+            SET_CURRENT_CACHED_VALUES(1);
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_STORE_ATTR_RECORD_DRAFT_DEFER_r21: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef value;
+            _PyStackRef o;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            owner = _stack_item_1;
+            value = _stack_item_0;
+            uint16_t index = (uint16_t)CURRENT_OPERAND0_16();
+            _PyGrailRecordDraft *draft =
+            (_PyGrailRecordDraft *)PyStackRef_AsPyObjectBorrow(owner);
+            PyObject *value_o = PyStackRef_AsPyObjectBorrow(value);
+            if (_PyGrail_IsDraft(value_o) &&
+                     ((_PyGrailDraft *)value_o)->root != draft->head.root) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = owner;
+                _tos_cache0 = value;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            STAT_INC(STORE_ATTR, hit);
+            PyObject *old_value = draft->values[index];
+            draft->values[index] = PyStackRef_AsPyObjectSteal(value);
+            o = owner;
+            if (old_value != NULL) {
+                _PyVO_DeferDecref(tstate, old_value);
+            }
+            _tos_cache0 = o;
+            SET_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_STORE_ATTR_RECORD_DRAFT_DEFER_r32: {
+            CHECK_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef owner;
+            _PyStackRef value;
+            _PyStackRef o;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            _PyStackRef _stack_item_2 = _tos_cache2;
+            owner = _stack_item_2;
+            value = _stack_item_1;
+            uint16_t index = (uint16_t)CURRENT_OPERAND0_16();
+            _PyGrailRecordDraft *draft =
+            (_PyGrailRecordDraft *)PyStackRef_AsPyObjectBorrow(owner);
+            PyObject *value_o = PyStackRef_AsPyObjectBorrow(value);
+            if (_PyGrail_IsDraft(value_o) &&
+                     ((_PyGrailDraft *)value_o)->root != draft->head.root) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache2 = owner;
+                _tos_cache1 = value;
+                _tos_cache0 = _stack_item_0;
+                SET_CURRENT_CACHED_VALUES(3);
+                JUMP_TO_JUMP_TARGET();
+            }
+            STAT_INC(STORE_ATTR, hit);
+            PyObject *old_value = draft->values[index];
+            draft->values[index] = PyStackRef_AsPyObjectSteal(value);
+            o = owner;
+            if (old_value != NULL) {
+                _PyVO_DeferDecref(tstate, old_value);
+            }
+            _tos_cache1 = o;
+            _tos_cache0 = _stack_item_0;
+            SET_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _COMPARE_OP_r21: {
             CHECK_CURRENT_CACHED_VALUES(2);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
@@ -16819,6 +16960,126 @@
                 JUMP_TO_JUMP_TARGET();
             }
             attrs = PyStackRef_DUP(subject);
+            s = subject;
+            tp = type;
+            n = names;
+            _tos_cache2 = n;
+            _tos_cache1 = tp;
+            _tos_cache0 = s;
+            SET_CURRENT_CACHED_VALUES(3);
+            stack_pointer[0] = attrs;
+            stack_pointer += 1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_MATCH_CLASS_RECORD_SELF_r03: {
+            CHECK_CURRENT_CACHED_VALUES(0);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef names;
+            _PyStackRef type;
+            _PyStackRef subject;
+            _PyStackRef attrs;
+            _PyStackRef s;
+            _PyStackRef tp;
+            _PyStackRef n;
+            names = stack_pointer[-1];
+            type = stack_pointer[-2];
+            subject = stack_pointer[-3];
+            assert(PyStackRef_AsPyObjectBorrow(subject) == &_PyVO_Placeholder);
+            attrs = PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder);
+            s = subject;
+            tp = type;
+            n = names;
+            _tos_cache2 = n;
+            _tos_cache1 = tp;
+            _tos_cache0 = s;
+            SET_CURRENT_CACHED_VALUES(3);
+            stack_pointer[-3] = attrs;
+            stack_pointer += -2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_MATCH_CLASS_RECORD_SELF_r13: {
+            CHECK_CURRENT_CACHED_VALUES(1);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef names;
+            _PyStackRef type;
+            _PyStackRef subject;
+            _PyStackRef attrs;
+            _PyStackRef s;
+            _PyStackRef tp;
+            _PyStackRef n;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            names = _stack_item_0;
+            type = stack_pointer[-1];
+            subject = stack_pointer[-2];
+            assert(PyStackRef_AsPyObjectBorrow(subject) == &_PyVO_Placeholder);
+            attrs = PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder);
+            s = subject;
+            tp = type;
+            n = names;
+            _tos_cache2 = n;
+            _tos_cache1 = tp;
+            _tos_cache0 = s;
+            SET_CURRENT_CACHED_VALUES(3);
+            stack_pointer[-2] = attrs;
+            stack_pointer += -1;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_MATCH_CLASS_RECORD_SELF_r23: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef names;
+            _PyStackRef type;
+            _PyStackRef subject;
+            _PyStackRef attrs;
+            _PyStackRef s;
+            _PyStackRef tp;
+            _PyStackRef n;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            names = _stack_item_1;
+            type = _stack_item_0;
+            subject = stack_pointer[-1];
+            assert(PyStackRef_AsPyObjectBorrow(subject) == &_PyVO_Placeholder);
+            attrs = PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder);
+            s = subject;
+            tp = type;
+            n = names;
+            _tos_cache2 = n;
+            _tos_cache1 = tp;
+            _tos_cache0 = s;
+            SET_CURRENT_CACHED_VALUES(3);
+            stack_pointer[-1] = attrs;
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
+        case _VO_MATCH_CLASS_RECORD_SELF_r33: {
+            CHECK_CURRENT_CACHED_VALUES(3);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef names;
+            _PyStackRef type;
+            _PyStackRef subject;
+            _PyStackRef attrs;
+            _PyStackRef s;
+            _PyStackRef tp;
+            _PyStackRef n;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            _PyStackRef _stack_item_2 = _tos_cache2;
+            names = _stack_item_2;
+            type = _stack_item_1;
+            subject = _stack_item_0;
+            assert(PyStackRef_AsPyObjectBorrow(subject) == &_PyVO_Placeholder);
+            attrs = PyStackRef_FromPyObjectBorrow(&_PyVO_Placeholder);
             s = subject;
             tp = type;
             n = names;
