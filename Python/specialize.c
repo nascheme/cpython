@@ -2398,6 +2398,27 @@ FLOAT_LONG_ACTION(float_compactlong_multiply, *)
 FLOAT_LONG_ACTION(float_compactlong_true_div, /)
 #undef FLOAT_LONG_ACTION
 
+/* float / float: the generic path only adds the slot dispatch. A zero
+   divisor raises there instead. */
+static inline int
+nonzero_floats_guard(PyObject *lhs, PyObject *rhs)
+{
+    return PyFloat_CheckExact(lhs) && PyFloat_CheckExact(rhs) &&
+           PyFloat_AS_DOUBLE(rhs) != 0.0;
+}
+
+static PyObject *
+floats_true_div(PyObject *lhs, PyObject *rhs)
+{
+    return PyFloat_FromDouble(PyFloat_AS_DOUBLE(lhs) / PyFloat_AS_DOUBLE(rhs));
+}
+
+int
+_PyBinaryOp_IsFloatTrueDiv(const _PyBinaryOpSpecializationDescr *d)
+{
+    return d->action == floats_true_div;
+}
+
 /*  long-float */
 
 static inline int
@@ -2504,6 +2525,9 @@ static _PyBinaryOpSpecializationDescr binaryop_extend_descrs[] = {
     {NB_INPLACE_POWER, compactlongs_nonneg_exponent_guard, compactlongs_power, &PyLong_Type, 1, NULL, NULL},
     {NB_POWER, float_power_guard, float_power, &PyFloat_Type, 1, NULL, NULL},
     {NB_INPLACE_POWER, float_power_guard, float_power, &PyFloat_Type, 1, NULL, NULL},
+
+    {NB_TRUE_DIVIDE, nonzero_floats_guard, floats_true_div, &PyFloat_Type, 1, NULL, NULL},
+    {NB_INPLACE_TRUE_DIVIDE, nonzero_floats_guard, floats_true_div, &PyFloat_Type, 1, NULL, NULL},
 
     /* float-long arithmetic: guards also check NaN and compactness. */
     {NB_ADD, float_compactlong_guard, float_compactlong_add, &PyFloat_Type, 1, NULL, NULL},

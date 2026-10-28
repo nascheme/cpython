@@ -1484,6 +1484,19 @@ class TestSpecializer(TestBase):
 
         binary_op_zero_division()
 
+        def binary_op_float_true_divide():
+            def f(a, b):
+                return a / b
+            for _ in range(100):
+                self.assertEqual(f(3.0, 2.0), 1.5)
+            self.assert_specialized(f, "BINARY_OP_EXTEND")
+            with self.assertRaises(ZeroDivisionError):
+                f(1.0, 0.0)
+            self.assertEqual(str(f(-1.0, float('inf'))), '-0.0')
+            self.assertEqual(f(7, 2.0), 3.5)
+
+        binary_op_float_true_divide()
+
         def binary_op_nan():
             def compactlong_lhs(arg):
                 return (

@@ -524,6 +524,9 @@ typedef struct {
     PyTypeObject *rhs_type;
 } _PyBinaryOpSpecializationDescr;
 
+/* 1 if d is the float / float descriptor (lowered by the tier-2
+   optimizer to _BINARY_OP_TRUEDIV_FLOAT and its in-place forms). */
+PyAPI_FUNC(int) _PyBinaryOp_IsFloatTrueDiv(const _PyBinaryOpSpecializationDescr *d);
 /* Comparison bit masks. */
 
 /* Note this evaluates its arguments twice each */
