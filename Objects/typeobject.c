@@ -13327,65 +13327,41 @@ has_type_instance_check(PyTypeObject *meta, int subclass)
            ((PyMethodDescrObject *)descr)->d_method->ml_meth == impl;
 }
 
-/* The three answers for a heap type are cached in its _spec_cache under
- * its version tag (unique, and replaced by PyType_Modified, which covers
- * changes to its bases too). */
-enum {
-    ISINSTANCE_DEFAULT_CLASS = 1,
-    ISINSTANCE_TYPE_INSTANCECHECK = 2,
-    ISINSTANCE_TYPE_SUBCLASSCHECK = 4,
-};
-
-static inline int
-isinstance_flags(PyTypeObject *tp, uint32_t *flags)
+/* The slow path of _PyType_IsInstanceFlagCached. The three answers for a
+ * heap type are cached in its _spec_cache under its version tag (unique,
+ * and replaced by PyType_Modified, which covers changes to its bases too).
+ */
+int
+_PyType_IsInstanceFlag(PyTypeObject *tp, uint32_t flag)
 {
-#ifdef Py_GIL_DISABLED
-    return 0;
-#else
-    if (!(tp->tp_flags & Py_TPFLAGS_HEAPTYPE) || tp->tp_version_tag == 0) {
-        return 0;
-    }
-    struct _specialization_cache *c = &((PyHeapTypeObject *)tp)->_spec_cache;
-    if (c->isinstance_version != tp->tp_version_tag) {
+#ifndef Py_GIL_DISABLED
+    if (tp->tp_flags & Py_TPFLAGS_HEAPTYPE) {
         uint32_t f = 0;
         if (has_default_class_attr(tp)) {
-            f |= ISINSTANCE_DEFAULT_CLASS;
+            f |= _Py_ISINSTANCE_DEFAULT_CLASS;
         }
         if (has_type_instance_check(tp, 0)) {
-            f |= ISINSTANCE_TYPE_INSTANCECHECK;
+            f |= _Py_ISINSTANCE_TYPE_INSTANCECHECK;
         }
         if (has_type_instance_check(tp, 1)) {
-            f |= ISINSTANCE_TYPE_SUBCLASSCHECK;
+            f |= _Py_ISINSTANCE_TYPE_SUBCLASSCHECK;
         }
         /* The lookups assign a version tag if they can. */
-        if (tp->tp_version_tag == 0) {
-            return 0;
+        if (tp->tp_version_tag != 0) {
+            struct _specialization_cache *c = &((PyHeapTypeObject *)tp)->_spec_cache;
+            c->isinstance_flags = f;
+            c->isinstance_version = tp->tp_version_tag;
         }
-        c->isinstance_flags = f;
-        c->isinstance_version = tp->tp_version_tag;
+        return (f & flag) != 0;
     }
-    *flags = c->isinstance_flags;
-    return 1;
 #endif
-}
-
-int
-_PyType_HasDefaultClassAttr(PyTypeObject *tp)
-{
-    uint32_t flags;
-    if (isinstance_flags(tp, &flags)) {
-        return (flags & ISINSTANCE_DEFAULT_CLASS) != 0;
+    switch (flag) {
+        case _Py_ISINSTANCE_DEFAULT_CLASS:
+            return has_default_class_attr(tp);
+        case _Py_ISINSTANCE_TYPE_INSTANCECHECK:
+            return has_type_instance_check(tp, 0);
+        default:
+            assert(flag == _Py_ISINSTANCE_TYPE_SUBCLASSCHECK);
+            return has_type_instance_check(tp, 1);
     }
-    return has_default_class_attr(tp);
-}
-
-int
-_PyType_HasTypeInstanceCheck(PyTypeObject *meta, int subclass)
-{
-    uint32_t flags;
-    if (isinstance_flags(meta, &flags)) {
-        return (flags & (subclass ? ISINSTANCE_TYPE_SUBCLASSCHECK
-                                  : ISINSTANCE_TYPE_INSTANCECHECK)) != 0;
-    }
-    return has_type_instance_check(meta, subclass);
 }

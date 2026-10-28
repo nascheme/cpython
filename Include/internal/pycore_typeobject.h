@@ -178,9 +178,44 @@ PyAPI_FUNC(PyObject *) _PyType_BinaryOpReflectedDunder(PyTypeObject *tp, int nb_
 PyAPI_FUNC(PyObject *) _PyType_BinaryOpCallReflected(PyObject *v, PyObject *w,
                                                      int nb_op);
 
-/* For isinstance() and issubclass(); see typeobject.c. */
-extern int _PyType_HasDefaultClassAttr(PyTypeObject *tp);
-extern int _PyType_HasTypeInstanceCheck(PyTypeObject *meta, int subclass);
+/* For isinstance() and issubclass(); see typeobject.c. The answers for a
+   heap type are cached under its version tag (GIL-enabled build). */
+#define _Py_ISINSTANCE_DEFAULT_CLASS 1
+#define _Py_ISINSTANCE_TYPE_INSTANCECHECK 2
+#define _Py_ISINSTANCE_TYPE_SUBCLASSCHECK 4
+extern int _PyType_IsInstanceFlag(PyTypeObject *tp, uint32_t flag);
+
+static inline int
+_PyType_IsInstanceFlagCached(PyTypeObject *tp, uint32_t flag)
+{
+#ifndef Py_GIL_DISABLED
+    if (tp->tp_flags & Py_TPFLAGS_HEAPTYPE) {
+        struct _specialization_cache *c = &((PyHeapTypeObject *)tp)->_spec_cache;
+        if (c->isinstance_version == tp->tp_version_tag &&
+            tp->tp_version_tag != 0) {
+            return (c->isinstance_flags & flag) != 0;
+        }
+    }
+#endif
+    return _PyType_IsInstanceFlag(tp, flag);
+}
+
+/* Whether x.__class__ is certainly type(x) for an instance x of tp. */
+static inline int
+_PyType_HasDefaultClassAttr(PyTypeObject *tp)
+{
+    return _PyType_IsInstanceFlagCached(tp, _Py_ISINSTANCE_DEFAULT_CLASS);
+}
+
+/* Whether metaclass meta inherits type's __instancecheck__ (or, if
+   subclass, __subclasscheck__). */
+static inline int
+_PyType_HasTypeInstanceCheck(PyTypeObject *meta, int subclass)
+{
+    return _PyType_IsInstanceFlagCached(
+        meta, subclass ? _Py_ISINSTANCE_TYPE_SUBCLASSCHECK
+                       : _Py_ISINSTANCE_TYPE_INSTANCECHECK);
+}
 
 // Precalculates count of non-unique slots and fills wrapperbase.name_count.
 extern int _PyType_InitSlotDefs(PyInterpreterState *interp);
