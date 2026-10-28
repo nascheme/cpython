@@ -1870,6 +1870,38 @@ class VirtualObjectTests(unittest.TestCase):
             t.join()
         self.assertTrue(all(type(acc) is F for acc in seen), seen[:5])
 
+    @unittest.skipUnless(tier2_enabled(), "needs the JIT or the uop interpreter")
+    def test_loop_carried_profiler(self):
+        # A profiler installed for all threads during the loop invalidates
+        # the executor; the exit rebuilds the accumulator, and profiled
+        # calls see real records.
+        import threading, time
+        m = load_virtual()
+        F, carried, bigger = m["F"], m["carried"], m["bigger"]
+        start = F(-1.0, -1.0)
+        for _ in range(REPEAT):
+            carried(100, start, -1, -1)
+        seen = []
+
+        def profiler(frame, event, arg):
+            if frame.f_code is bigger.__code__ and event == "call":
+                seen.append(frame.f_locals["a"])
+
+        def installer():
+            time.sleep(0.005)
+            threading.setprofile_all_threads(profiler)
+
+        t = threading.Thread(target=installer)
+        t.start()
+        try:
+            n = 200_000
+            self.assertEqual(carried(n, start, -1, -1), F((n - 1) * 1.0, n * 1.0))
+        finally:
+            t.join()
+            threading.setprofile_all_threads(None)
+        # The loop may also end before the profiler is installed.
+        self.assertTrue(all(type(a) is F for a in seen))
+
     def test_tuple_of_record(self):
         m = load_virtual()
         for _ in range(REPEAT):
