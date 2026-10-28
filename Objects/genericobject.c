@@ -60,7 +60,7 @@ type_hash(PyTypeObject *const *types, Py_ssize_t arity)
     return (size_t)(h >> 32);
 }
 
-static PyObject **
+static inline PyObject **
 table_find(PyObject *table, Py_ssize_t arity, Py_ssize_t stride,
            PyTypeObject *const *types)
 {
@@ -377,8 +377,13 @@ exact_lookup(GenericObject *self, PyTypeObject *const *types)
     if (table == NULL) {
         return NULL;
     }
-    PyObject **slot = table_find(table, self->arity, self->arity + 1, types);
-    return slot[0] == Py_None ? NULL : slot[self->arity];
+    /* Constant strides: the capacity is computed without a division. */
+    if (self->arity == 2) {
+        PyObject **slot = table_find(table, 2, 3, types);
+        return slot[0] == Py_None ? NULL : slot[2];
+    }
+    PyObject **slot = table_find(table, 1, 2, types);
+    return slot[0] == Py_None ? NULL : slot[1];
 }
 
 static inline PyObject *
