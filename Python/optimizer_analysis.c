@@ -1696,6 +1696,7 @@ enum {
     VO_USE_FUSED,       // operand (field: its index) of a fused float uop
     VO_USE_STEAL,       // the element-wise uop takes over the fields of
                         // this operand (field: its index), which dies
+    VO_USE_CONCAT,      // operand (field: its index) of tuple + tuple
 };
 
 #define VO_MAX_FIELDS 16
@@ -2737,6 +2738,23 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                     continue;
                 }
             }
+            else if (opcode == _GUARD_BINARY_OP_EXTEND &&
+                     (nout == 0 || op == _NOP ||
+                      (op == _GUARD_BINARY_OP_EXTEND_LHS && i == 1) ||
+                      (op == _GUARD_BINARY_OP_EXTEND_RHS && i == 0))) {
+                // Narrowed to the other operand's type, or removed.
+                continue;
+            }
+            else if ((opcode == _GUARD_BINARY_OP_EXTEND || opcode == _BINARY_OP_EXTEND) &&
+                     nout == 1 && op == opcode && i < 2 && cand->type == NULL &&
+                     _PyBinaryOp_IsTupleConcat(
+                         (const _PyBinaryOpSpecializationDescr *)out_start->operand0)) {
+                // tuple + tuple: _VO_TUPLE_CONCAT checks the real operands
+                // itself, so the guard goes.
+                vo_add_use(ctx, out, c,
+                           opcode == _BINARY_OP_EXTEND ? VO_USE_CONCAT : VO_USE_NOP, i);
+                continue;
+            }
             else if (opcode == _GRAIL_BINARY_CHECK_FUNC) {
                 // Folded for the known operand types: the implementation
                 // is a constant, and only the other operand's type may be
@@ -2769,7 +2787,8 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             else if (_PyUop_Flags[opcode] & HAS_RECORDS_VALUE_FLAG) {
                 continue;
             }
-            DPRINTF(2, "vo: used by %s\n", _PyOpcode_uop_name[opcode]);
+            DPRINTF(2, "vo: used by %s (as %s, input %d)\n", _PyOpcode_uop_name[opcode],
+                    op >= 0 ? _PyOpcode_uop_name[op] : "several", i);
             vo_escape(ctx, c, "use");
         }
         /* Uops that read or write locals other than by moving them. */
@@ -2841,6 +2860,33 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
             }
             else if (op == _CALL_BUILTIN_CLASS) {
                 exempt = vo_pure_builtin_call(ctx, pre);
+            }
+            else if ((vo_is_tuple_unpack(op) || op == _UNPACK_SEQUENCE) &&
+                     pre->npop == 1 && pre->input_cand[0] >= 0 &&
+                     !vo->cands[pre->input_cand[0]].escaped) {
+                // Unpacking a virtual tuple (_VO_UNPACK) releases nothing.
+                exempt = true;
+            }
+            else if (op == _BINARY_SLICE) {
+                // Slicing a builtin sequence with int (or None) bounds runs
+                // no code.
+                exempt = pre->npop == 3 && !pre->inputs_overflow;
+                for (int k = 0; k < 3 && exempt; k++) {
+                    PyTypeObject *t = sym_get_type(pre->inputs[k]);
+                    exempt = k == 0 ?
+                        (t == &PyTuple_Type || t == &PyList_Type ||
+                         t == &PyUnicode_Type || t == &PyBytes_Type) :
+                        (t == &PyLong_Type || t == Py_TYPE(Py_None));
+                }
+            }
+            else if (op == _CALL_LEN) {
+                // len() of a builtin container runs no code.
+                PyTypeObject *t = pre->npop == 3 && !pre->inputs_overflow ?
+                    sym_get_type(pre->inputs[2]) : NULL;
+                exempt = t == &PyTuple_Type || t == &PyList_Type ||
+                         t == &PyUnicode_Type || t == &PyBytes_Type ||
+                         t == &PyDict_Type || t == &PySet_Type ||
+                         t == &PyFrozenSet_Type;
             }
             else if (op == _CHECK_PERIODIC) {
                 // Becomes _VO_CHECK_PERIODIC, which leaves the trace to
@@ -3093,6 +3139,31 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
         if (!virtual_result && !inner) {
             DPRINTF(2, "vo: candidate %d stays real (fields to a real result)\n",
                     (int)use->cand);
+            c->escaped = true;
+        }
+    }
+    /* Likewise a tuple whose items are only copied into the result of a
+     * concatenation: real, it is a cheap (freelist) allocation, cheaper
+     * than its shadow slots and release. */
+    for (int i = 0; i < vo->ncands; i++) {
+        _PyVOCandidate *c = &vo->cands[i];
+        if (c->escaped || c->type != NULL) {
+            continue;
+        }
+        bool concat = false, other = false;
+        for (int u = 0; u < vo->nuses; u++) {
+            _PyVOUse *use = &vo->uses[u];
+            if (use->cand == i) {
+                concat |= use->kind == VO_USE_CONCAT;
+                other |= use->kind == VO_USE_LOAD || use->kind == VO_USE_UNPACK ||
+                         use->kind == VO_USE_FUSED || use->kind == VO_USE_STEAL;
+            }
+        }
+        for (int k = 0; k < c->n; k++) {
+            other |= c->inner[k] >= 0 && !vo->cands[c->inner[k]].escaped;
+        }
+        if (concat && !other) {
+            DPRINTF(2, "vo: candidate %d stays real (only concatenated)\n", i);
             c->escaped = true;
         }
     }
@@ -3371,6 +3442,14 @@ vo_rewrite(_PyThreadStateImpl *tstate, JitOptContext *ctx,
                     break;
                 case VO_USE_STEAL:
                     vo_set_vbase(&inst, 3, use->field);
+                    break;
+                case VO_USE_CONCAT:
+                    if (inst.opcode == _BINARY_OP_EXTEND) {
+                        inst.opcode = _VO_TUPLE_CONCAT;
+                        inst.operand0 = 0;
+                    }
+                    inst.operand0 |= ((uint64_t)(c->base + 1) << (8 * use->field)) |
+                                     ((uint64_t)c->n << (16 + 8 * use->field));
                     break;
             }
         }

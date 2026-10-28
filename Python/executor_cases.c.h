@@ -21717,6 +21717,79 @@
             break;
         }
 
+        case _VO_TUPLE_CONCAT_r23: {
+            CHECK_CURRENT_CACHED_VALUES(2);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            _PyStackRef right;
+            _PyStackRef left;
+            _PyStackRef res;
+            _PyStackRef l;
+            _PyStackRef r;
+            _PyStackRef _stack_item_0 = _tos_cache0;
+            _PyStackRef _stack_item_1 = _tos_cache1;
+            right = _stack_item_1;
+            left = _stack_item_0;
+            PyObject *vbases = (PyObject *)CURRENT_OPERAND0_64();
+            uint32_t bases = (uint32_t)(uintptr_t)vbases;
+            PyObject *left_o = PyStackRef_AsPyObjectBorrow(left);
+            PyObject *right_o = PyStackRef_AsPyObjectBorrow(right);
+            int lb = bases & 0xff, rb = (bases >> 8) & 0xff;
+            if (!lb && (!PyTuple_CheckExact(left_o) || PyTuple_GET_SIZE(left_o) == 0)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = right;
+                _tos_cache0 = left;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            if (!rb && (!PyTuple_CheckExact(right_o) || PyTuple_GET_SIZE(right_o) == 0)) {
+                UOP_STAT_INC(uopcode, miss);
+                _tos_cache1 = right;
+                _tos_cache0 = left;
+                SET_CURRENT_CACHED_VALUES(2);
+                JUMP_TO_JUMP_TARGET();
+            }
+            Py_ssize_t n1 = lb ? (Py_ssize_t)((bases >> 16) & 0xff) : PyTuple_GET_SIZE(left_o);
+            Py_ssize_t n2 = rb ? (Py_ssize_t)(bases >> 24) : PyTuple_GET_SIZE(right_o);
+            stack_pointer[0] = left;
+            stack_pointer[1] = right;
+            stack_pointer += 2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            PyObject *res_o = PyTuple_New(n1 + n2);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            if (res_o == NULL) {
+                SET_CURRENT_CACHED_VALUES(0);
+                JUMP_TO_ERROR();
+            }
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow;
+            for (Py_ssize_t i = 0; i < n1; i++) {
+                PyObject *item = lb ? PyStackRef_AsPyObjectBorrow(shadow[lb - 1 + i]) :
+                PyTuple_GET_ITEM(left_o, i);
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                PyTuple_SET_ITEM(res_o, i, Py_NewRef(item));
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+            }
+            for (Py_ssize_t i = 0; i < n2; i++) {
+                PyObject *item = rb ? PyStackRef_AsPyObjectBorrow(shadow[rb - 1 + i]) :
+                PyTuple_GET_ITEM(right_o, i);
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                PyTuple_SET_ITEM(res_o, n1 + i, Py_NewRef(item));
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+            }
+            STAT_INC(BINARY_OP, hit);
+            res = PyStackRef_FromPyObjectSteal(res_o);
+            l = left;
+            r = right;
+            _tos_cache2 = r;
+            _tos_cache1 = l;
+            _tos_cache0 = res;
+            SET_CURRENT_CACHED_VALUES(3);
+            stack_pointer += -2;
+            ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+            assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());
+            break;
+        }
+
         case _VO_ELEMENTWISE_FLOAT_r23: {
             CHECK_CURRENT_CACHED_VALUES(2);
             assert(WITHIN_STACK_BOUNDS_IGNORING_CACHE());

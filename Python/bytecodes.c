@@ -5982,6 +5982,43 @@ dummy_func(
             res = PyStackRef_FromPyObjectSteal(res_o);
         }
 
+        /* tuple + tuple (_BINARY_OP_EXTEND) with virtual operands: byte k
+         * of vbases (k = 0 left, 1 right) is 1 + the first shadow slot of
+         * a virtual operand's items, or 0 for a real one, and byte k + 2
+         * its size. Checks the real operands (the guard is removed); an
+         * empty one exits, since the concatenation would then be the other
+         * operand itself. The result is a new tuple. */
+        tier2 op(_VO_TUPLE_CONCAT, (vbases/4, left, right -- res, l, r)) {
+            uint32_t bases = (uint32_t)(uintptr_t)vbases;
+            PyObject *left_o = PyStackRef_AsPyObjectBorrow(left);
+            PyObject *right_o = PyStackRef_AsPyObjectBorrow(right);
+            int lb = bases & 0xff, rb = (bases >> 8) & 0xff;
+            EXIT_IF(!lb && (!PyTuple_CheckExact(left_o) || PyTuple_GET_SIZE(left_o) == 0));
+            EXIT_IF(!rb && (!PyTuple_CheckExact(right_o) || PyTuple_GET_SIZE(right_o) == 0));
+            Py_ssize_t n1 = lb ? (Py_ssize_t)((bases >> 16) & 0xff) : PyTuple_GET_SIZE(left_o);
+            Py_ssize_t n2 = rb ? (Py_ssize_t)(bases >> 24) : PyTuple_GET_SIZE(right_o);
+            PyObject *res_o = PyTuple_New(n1 + n2);
+            if (res_o == NULL) {
+                ERROR_NO_POP();
+            }
+            _PyStackRef *shadow = ((_PyThreadStateImpl *)tstate)->vo_shadow;
+            for (Py_ssize_t i = 0; i < n1; i++) {
+                PyObject *item = lb ? PyStackRef_AsPyObjectBorrow(shadow[lb - 1 + i]) :
+                                      PyTuple_GET_ITEM(left_o, i);
+                PyTuple_SET_ITEM(res_o, i, Py_NewRef(item));
+            }
+            for (Py_ssize_t i = 0; i < n2; i++) {
+                PyObject *item = rb ? PyStackRef_AsPyObjectBorrow(shadow[rb - 1 + i]) :
+                                      PyTuple_GET_ITEM(right_o, i);
+                PyTuple_SET_ITEM(res_o, n1 + i, Py_NewRef(item));
+            }
+            STAT_INC(BINARY_OP, hit);
+            res = PyStackRef_FromPyObjectSteal(res_o);
+            l = left;
+            r = right;
+            INPUTS_DEAD();
+        }
+
         /* _GRAIL_ELEMENTWISE_FLOAT with virtual operands or result: bytes
          * 0, 1 and 2 of vbases are 1 + the first shadow slot of the left
          * operand's, right operand's and result's fields, or 0 for a real

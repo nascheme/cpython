@@ -540,6 +540,8 @@ PyAPI_FUNC(int) _PyBinaryOp_IsFloatTrueDiv(const _PyBinaryOpSpecializationDescr 
 /* 1 if d's action runs no Python code (it only escapes to raise): all but
    str % x, which formats arbitrary objects. For tier-2 virtual objects. */
 PyAPI_FUNC(int) _PyBinaryOp_RunsNoCode(const _PyBinaryOpSpecializationDescr *d);
+/* 1 if d is tuple + tuple. */
+PyAPI_FUNC(int) _PyBinaryOp_IsTupleConcat(const _PyBinaryOpSpecializationDescr *d);
 
 /* Exact compact-int subscripts of native sequences (array.array), registered
    at module initialization: BINARY_OP_EXTEND recognizes the container by its

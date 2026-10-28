@@ -1506,6 +1506,21 @@ def carried(n, start, stop_at, raise_at):
         acc = bigger(acc, F(i * 1.0, (n - i) * 1.0))
     return acc
 
+def one(i):
+    return (i,)
+
+def concat_step(acc, i):
+    t = pair(i)
+    a, b = t
+    acc = acc + t
+    acc = one(a - b) + acc
+    return acc[1:-1] if len(acc) > 6 else acc
+
+def concats(n, acc):
+    for i in range(n):
+        acc = concat_step(acc, i)
+    return acc
+
 def fused_step(i, c, limit):
     d = (v3(i) + c) - c
     if i >= limit:
@@ -1758,6 +1773,29 @@ class VirtualObjectTests(unittest.TestCase):
             self.assertEqual(m["long_body"](n, ), (-200 * n, m["P"](n - 1, n)))
         if tier2_enabled():
             self.assertIn("_VO_NEW_RECORD", executor_uops(m["long_body"]))
+
+    def test_tuple_concat(self):
+        # tuple + tuple with a virtual operand builds the result from its
+        # items (_VO_TUPLE_CONCAT). A tuple that is only concatenated stays
+        # real (one(...)); t, unpacked too, stays virtual.
+        m = load_virtual()
+        concats = m["concats"]
+
+        def expected(n, acc):
+            for i in range(n):
+                acc = (-i,) + acc + (i, i * 2)
+                if len(acc) > 6:
+                    acc = acc[1:-1]
+            return acc
+
+        for _ in range(REPEAT):
+            self.assertEqual(concats(100, (1, 2)), expected(100, (1, 2)))
+        if tier2_enabled():
+            self.assertIn("_VO_TUPLE_CONCAT", executor_uops(m["concat_step"]) |
+                          executor_uops(concats))
+        # An empty real operand: the result is the virtual operand itself.
+        self.assertEqual(concats(3, ()), expected(3, ()))
+        self.assertEqual(concats(5, ()), expected(5, ()))
 
     def test_tuple_of_record(self):
         m = load_virtual()

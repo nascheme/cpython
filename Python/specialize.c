@@ -2549,6 +2549,12 @@ _PyBinaryOp_RunsNoCode(const _PyBinaryOpSpecializationDescr *d)
     return d->action != str_format;
 }
 
+int
+_PyBinaryOp_IsTupleConcat(const _PyBinaryOpSpecializationDescr *d)
+{
+    return d->action == _PyTuple_Concat;
+}
+
 /*  long-float */
 
 static inline int
