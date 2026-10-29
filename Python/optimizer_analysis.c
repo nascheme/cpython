@@ -1912,6 +1912,17 @@ vo_math_float_function(PyObject *callable)
     return false;
 }
 
+/* Arguments of _INIT_CALL_PY_EXACT_ARGS reach the new frame's locals only
+ * when self_or_null is known to be NULL or not (after a virtual entry it may
+ * not be): otherwise the callee's copies would not be found. */
+static bool
+vo_call_args_tracked(const VOPre *pre)
+{
+    return pre->opcode != _INIT_CALL_PY_EXACT_ARGS ||
+           (!pre->inputs_overflow && pre->npop >= 2 &&
+            (sym_is_null(pre->inputs[1]) || sym_is_not_null(pre->inputs[1])));
+}
+
 /* A call of a math function, or of abs/min/max, with exact float and int
  * arguments: it runs no Python code and only escapes to raise. */
 static bool
@@ -2830,7 +2841,7 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                 continue;
             }
             else if (opcode == _INIT_CALL_PY_EXACT_ARGS || vo_is_call_guard(opcode)) {
-                if (i >= 2) {
+                if (i >= 2 && vo_call_args_tracked(pre)) {
                     continue;
                 }
             }
