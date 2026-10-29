@@ -1913,8 +1913,8 @@ vo_math_float_function(PyObject *callable)
 }
 
 /* Arguments of _INIT_CALL_PY_EXACT_ARGS reach the new frame's locals only
- * when self_or_null is known to be NULL or not (after a virtual entry it may
- * not be): otherwise the callee's copies would not be found. */
+ * when self_or_null is known to be NULL or not (in a frame the trace returns
+ * into it may not be): otherwise the callee's copies would not be found. */
 static bool
 vo_call_args_tracked(const VOPre *pre)
 {
@@ -2390,58 +2390,6 @@ vo_input_release_safe(JitOptContext *ctx, const VOPre *pre, int i,
     return (c >= 0 && vo_live(&ctx->vo.cands[c])) ||
            vo_decref_safe(ctx, pre->inputs[i]) ||
            vo_sym_present(ctx, stack_pointer, PyJitRef_Unwrap(pre->inputs[i]));
-}
-
-/* _CALL_KW_RECORD_REPLACE (record_replace_impl()) runs no code: a source
- * of known record type, constant keyword names, leaf plans for the
- * replaced fields (all fields unless the source is known to conform) and
- * inputs whose release runs no code. */
-static bool
-vo_replace_pure(JitOptContext *ctx, const VOPre *pre, JitOptRef *stack_pointer)
-{
-    if (pre->inputs_overflow || pre->npop < 4) {
-        return false;
-    }
-    JitOptRef source = pre->inputs[2];
-    PyTypeObject *type = sym_get_type(source);
-    PyObject *names = sym_get_const(ctx, pre->inputs[pre->npop - 1]);
-    if (type == NULL || !_PyGrail_IsRecordTypeFast(type) ||
-        names == NULL || !PyTuple_CheckExact(names)) {
-        return false;
-    }
-    // A record type's __match_args__ are its field names.
-    PyObject *fields = _PyType_Lookup(type, &_Py_ID(__match_args__));
-    if (fields == NULL || !PyTuple_CheckExact(fields)) {
-        return false;
-    }
-    Py_ssize_t n = PyTuple_GET_SIZE(fields);
-    if (n > 64) {
-        return false;
-    }
-    uint64_t check = UINT64_MAX;
-    if (grail_known_conforming(ctx, source)) {
-        check = 0;
-        for (Py_ssize_t k = 0; k < PyTuple_GET_SIZE(names); k++) {
-            PyObject *key = PyTuple_GET_ITEM(names, k);
-            Py_ssize_t i = 0;
-            while (i < n && PyTuple_GET_ITEM(fields, i) != key) {
-                i++;
-            }
-            if (i == n) {
-                return false;
-            }
-            check |= (uint64_t)1 << i;
-        }
-    }
-    if (!vo_record_checks_pure(type, (int)n, check)) {
-        return false;
-    }
-    for (int i = 0; i < pre->npop; i++) {
-        if (!vo_input_release_safe(ctx, pre, i, stack_pointer)) {
-            return false;
-        }
-    }
-    return true;
 }
 
 /* A fused float uop: _GRAIL_FLOAT_PROGRAM reads the fields of record
@@ -3012,9 +2960,6 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                          t == &PyUnicode_Type || t == &PyBytes_Type ||
                          t == &PyDict_Type || t == &PySet_Type ||
                          t == &PyFrozenSet_Type;
-            }
-            else if (op == _CALL_KW_RECORD_REPLACE) {
-                exempt = vo_replace_pure(ctx, pre, stack_pointer);
             }
             else if (op == _BINARY_OP_SUBSCR_LIST_INT || op == _BINARY_OP_SUBSCR_TUPLE_INT) {
                 // Releases the container and the index.
