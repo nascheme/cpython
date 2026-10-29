@@ -2980,6 +2980,13 @@ vo_after(JitOptContext *ctx, const VOPre *pre, _PyUOpInstruction *out_start,
                 // Unpacking a virtual tuple (_VO_UNPACK) releases nothing.
                 exempt = true;
             }
+            else if (op == _UNARY_NEGATIVE) {
+                // Of an exact float or int: a new number, and the
+                // operand's release runs no code.
+                exempt = pre->npop == 1 && !pre->inputs_overflow &&
+                         (sym_matches_type(pre->inputs[0], &PyFloat_Type) ||
+                          sym_matches_type(pre->inputs[0], &PyLong_Type));
+            }
             else if (op == _GET_ITER_TRAD && (opcode == _GET_ITER || opcode == _GET_ITER_TRAD)) {
                 // An iterator of a range (whose release runs no code).
                 exempt = pre->npop == 1 && !pre->inputs_overflow &&
