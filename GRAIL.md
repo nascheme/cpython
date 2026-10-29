@@ -72,11 +72,28 @@ The `grail` module provides:
   `MATCH_CLASS_RECORD` and `UNPACK_SEQUENCE_RECORD` (class patterns).
   Without the JIT, `LOAD_FAST_BORROW_ATTR_RECORD` runs a local load and a
   following record or draft field load as one instruction.  The tier-2
-  optimizer types field loads from value plans.
+  optimizer types field loads from value plans, fuses element-wise float
+  operators and float-expression calls, and keeps records and small tuples
+  built and consumed within a trace *virtual* (never allocated; rebuilt
+  only at an exit that needs them; `PYTHON_GRAIL_JIT_VIRTUAL_OBJECTS=0`
+  disables it).
 - Immutable values loaded from a shared cell by another thread switch to
   deferred reference counting, so readers do not contend on their
   reference counts.  Registrations retire replaced tables through delayed
   reclamation.
+
+## Branches
+
+- `grail`: Grail and the specializations whose benefit justifies their
+  cost.  This is the branch to build and review.
+- `grail-max`: every runtime and JIT specialization tried, including some
+  left out of `grail` because they measured no gain on a whole benchmark:
+  the keyword-only `replace` call specialization (`CALL_KW_RECORD_REPLACE`),
+  class-pattern folding with keyword sub-patterns, record calls through a
+  precomputed field permutation, and registered PVector transients.
+- `grail-max-vo`: `grail-max` plus all virtual-object work, including side
+  traces that take over the virtual objects of their exit and virtual
+  `grail.mutate` drafts.
 
 ## Source map
 
