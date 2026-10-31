@@ -353,7 +353,8 @@ class GenericEntryTests(unittest.TestCase):
         for _ in range(300):
             with self.assertRaises(TypeError):
                 one(A(1))
-        self.assertEqual(area(shape=A(2), scale=3), 6)
+        with self.assertRaisesRegex(TypeError, "must be positional"):
+            area(shape=A(2), scale=3)
         self.assertEqual(area(A(2), scale=3), 6)
 
     def test_resolution_and_invalidation(self):

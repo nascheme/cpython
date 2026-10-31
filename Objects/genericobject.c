@@ -16,6 +16,7 @@
 #include "internal/pycore_pyatomic_ft_wrappers.h"
 #include "internal/pycore_stackref.h"
 #include "internal/pycore_tuple.h"
+#include "internal/pycore_unionobject.h"
 #include <stddef.h>
 
 #define RESOLUTION_CACHE_SIZE 16
@@ -625,8 +626,10 @@ generic_vectorcall(PyObject *obj, PyObject *const *args, size_t nargsf,
                 return NULL;
             }
             if (eq) {
-                values[0] = args[nargs + i];
-                break;
+                PyErr_Format(PyExc_TypeError,
+                             "dispatch argument %R must be positional",
+                             self->first_name);
+                return NULL;
             }
         }
     }
@@ -716,6 +719,24 @@ generic_register(GenericObject *self, PyObject *args, PyObject *kwargs)
     if (!PyCallable_Check(func)) {
         PyErr_SetString(PyExc_TypeError, "implementation must be callable");
         return NULL;
+    }
+    if (self->arity == 1 && _PyUnion_Check(dispatch)) {
+        /* One registration per member, as functools.singledispatch does. */
+        PyObject *members = _Py_union_args(dispatch);
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(members); i++) {
+            PyObject *one = Py_BuildValue("(OOO)", PyTuple_GET_ITEM(members, i),
+                                          func, override ? Py_True : Py_False);
+            if (one == NULL) {
+                return NULL;
+            }
+            PyObject *result = generic_register(self, one, NULL);
+            Py_DECREF(one);
+            if (result == NULL) {
+                return NULL;
+            }
+            Py_DECREF(result);
+        }
+        return Py_NewRef(func);
     }
     if (self->central_operator &&
         _PyInterpreterState_GET()->grail_operators == NULL) {

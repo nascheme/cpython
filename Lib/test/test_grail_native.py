@@ -194,7 +194,7 @@ class GenericCacheTests(unittest.TestCase):
         self.assertEqual(f(Base()), "base")
         self.assertEqual(calls, [])  # exact hits never use the resolver/cache
         for _ in range(5):
-            self.assertEqual(f(obj=Child()), "base")
+            self.assertEqual(f(Child()), "base")
             self.assertIs(f.dispatch(Child), implementation)
             self.assertEqual(f(Missing()), "fallback")
         self.assertEqual(calls, [Child, Missing])

@@ -11,8 +11,10 @@ only on the native runtime.
 Runs under pytest and ``python -m unittest`` (no pytest import).
 """
 import abc
+import builtins
 import concurrent.futures
 import copy
+import enum
 import functools
 import gc
 import io
@@ -26,6 +28,7 @@ import sysconfig
 import threading
 import unittest
 import weakref
+from typing import Annotated, Literal
 
 import grail
 
@@ -1187,6 +1190,117 @@ class CopyPickleTests(unittest.TestCase):
         run_pool(worker, 4)
 
 
+class ValueAnnotationTests(unittest.TestCase):
+    def value_field(self, annotation):
+        ns = {"__annotations__": {"f": annotation}, "__module__": __name__}
+        r = grail.record(type("R", (), ns))
+        return grail.is_value_record(r), r
+
+    def test_literal(self):
+        for annotation in (Literal["a", "b"], Literal[1, "a", None], Literal[True, b"x"]):
+            self.assertTrue(self.value_field(annotation)[0], annotation)
+        _, r = self.value_field(Literal["a", "b"])
+        self.assertTrue(grail.conforms(r("a")))
+        self.assertTrue(grail.conforms(r("not a member")))  # by type only
+        self.assertFalse(grail.conforms(r(1)))
+        _, r = self.value_field(Literal[1, "a"])
+        self.assertTrue(grail.conforms(r(1)) and grail.conforms(r("a")))
+        self.assertFalse(grail.conforms(r(1.0)))
+
+    def test_literal_of_enum_is_ordinary(self):
+        class Color(enum.Enum):
+            RED = 1
+        self.assertFalse(self.value_field(Literal[Color.RED])[0])
+
+    def test_annotated(self):
+        self.assertTrue(self.value_field(Annotated[float, "metres"])[0])
+        self.assertTrue(self.value_field(tuple[Annotated[int, 1], ...])[0])
+        self.assertFalse(self.value_field(Annotated[list, "x"])[0])
+        ok, r = self.value_field(Annotated[float, "metres"])
+        self.assertIs(grail.record_fields(r)[0].annotation.__origin__, float)
+        self.assertEqual(grail.record_fields(r)[0].annotation.__metadata__, ("metres",))
+
+    def test_annotated_keeps_deriving(self):
+        @grail.record(deriving="+")
+        class V:
+            x: Annotated[float, "metres"]
+        self.assertEqual(V(1.0) + V(2.0), V(3.0))
+
+    def test_annotation_in_containing_record(self):
+        @grail.record
+        class Inner:
+            mode: Literal["a", "b"]
+        @grail.record
+        class Outer:
+            inner: Inner | None
+        self.assertTrue(grail.is_value_record(Outer))
+        self.assertTrue(grail.conforms(Outer(Inner("a"))))
+
+    @unittest.skipIf(sys.version_info < (3, 12), "needs the type statement")
+    def test_type_alias(self):
+        ns = {}
+        exec("""
+type Mode = Literal["a", "b"]
+type Pair[T] = tuple[T, T]
+type Tree = int | tuple[Tree, ...]
+type Later = Undefined
+type Unused[T] = int
+""", {"Literal": Literal}, ns)
+        self.assertTrue(self.value_field(ns["Mode"])[0])
+        self.assertTrue(self.value_field(ns["Pair"][float])[0])
+        self.assertFalse(self.value_field(ns["Pair"])[0])
+        self.assertFalse(self.value_field(ns["Pair"][list])[0])
+        self.assertFalse(self.value_field(ns["Tree"])[0])
+        self.assertFalse(self.value_field(ns["Later"])[0])
+        self.assertTrue(self.value_field(ns["Unused"])[0])
+        _, r = self.value_field(ns["Pair"][float])
+        self.assertTrue(grail.conforms(r((1.0, 2.0))))
+        self.assertFalse(grail.conforms(r((1.0, 2))))
+
+
+class IntrospectionTests(unittest.TestCase):
+    def test_is_record(self):
+        @grail.record
+        class R:
+            x: int
+        self.assertTrue(grail.is_record(R))
+        self.assertFalse(grail.is_record(R(1)))
+        self.assertFalse(grail.is_record(int))
+        self.assertFalse(grail.is_record("R"))
+
+    def test_missing(self):
+        @grail.record
+        class R:
+            a: int
+            b: int = 1
+            c: tuple = grail.field(factory=tuple)
+            d = None
+        a, b, c, d = grail.record_fields(R)
+        self.assertIs(a.default, grail.MISSING)
+        self.assertIs(a.factory, grail.MISSING)
+        self.assertEqual(b.default, 1)
+        self.assertIs(b.factory, grail.MISSING)
+        self.assertIs(c.default, grail.MISSING)
+        self.assertIs(c.factory, tuple)
+        self.assertIs(d.annotation, grail.MISSING)
+        self.assertEqual(builtins.repr(grail.MISSING), "MISSING")
+
+    def test_conforms(self):
+        @grail.record
+        class R:
+            x: float
+        @grail.record
+        class Mixed:
+            x: float
+            y: list
+        self.assertTrue(grail.conforms(R(1.0)))
+        self.assertFalse(grail.conforms(R(1)))
+        self.assertFalse(grail.conforms(Mixed(1.0, [])))  # not a value record type
+        self.assertTrue(grail.conforms(grail.replace(R(1), x=2.0)))
+        with self.assertRaises(TypeError):
+            grail.conforms(1.0)
+
+
 class GenericTests(unittest.TestCase):
     def test_exact_dispatch_and_fallback(self):
         @grail.generic
@@ -1196,7 +1310,7 @@ class GenericTests(unittest.TestCase):
         def _(obj: int, suffix="!", *, upper=False):
             return str(obj) + suffix
         self.assertEqual(render(4), "4!")
-        self.assertEqual(render(obj=5, suffix="?"), "5?")
+        self.assertEqual(render(5, suffix="?"), "5?")
         self.assertEqual(render("x"), "fallback!")
         self.assertEqual(render.__name__, "render")
         self.assertIs(render.dispatch(int), _)
@@ -1206,6 +1320,75 @@ class GenericTests(unittest.TestCase):
             render()
         with self.assertRaises(TypeError):
             render(1, obj=2)
+        with self.assertRaisesRegex(TypeError, "must be positional"):
+            render(obj=5)
+
+    def test_dispatch_parameter_name_is_free(self):
+        @grail.generic
+        def scale(value, factor=2):
+            return "fallback"
+        def scale_int(n, factor=2):
+            return n * factor
+        scale.register(int, scale_int)
+        @scale.impl
+        def _(s: str, /, factor=2):
+            return s * factor
+        self.assertEqual(scale(4), 8)
+        self.assertEqual(scale("a", factor=3), "aaa")
+        with self.assertRaisesRegex(TypeError, "call shape"):
+            scale.register(float, lambda v, other=2: 0)
+        with self.assertRaisesRegex(TypeError, "call shape"):
+            scale.register(float, lambda *, factor=2: 0)
+
+    def test_union_dispatch(self):
+        @grail.generic
+        def kind(obj):
+            return "other"
+        @kind.impl
+        def number(obj: int | float):
+            return "number"
+        kind.register(str | None, lambda obj: "text")
+        self.assertEqual(kind(1), "number")
+        self.assertEqual(kind(1.0), "number")
+        self.assertEqual(kind("a"), "text")
+        self.assertEqual(kind(None), "text")
+        self.assertEqual(kind(b""), "other")
+        self.assertEqual(kind.version, 4)
+        with self.assertRaisesRegex(TypeError, "duplicate"):
+            kind.register(int | bytes, lambda obj: "x")
+        kind.override(int | bytes, lambda obj: "new")
+        self.assertEqual((kind(1), kind(b"")), ("new", "new"))
+        with self.assertRaises(TypeError):
+            kind.register(int | list[int], lambda obj: "x")
+        with self.assertRaises(TypeError):
+            grail.ops.add.register(int | str, lambda a, b: 0)
+
+    def test_record_dispatch_key(self):
+        @grail.generic
+        def encode(obj):
+            return "other"
+        @encode.impl
+        def _(obj: grail.Record):
+            return grail.record_values(obj)
+        @grail.record
+        class A:
+            x: int
+        self.assertEqual(encode(A(1)), {"x": 1})
+        self.assertEqual(encode(3), "other")
+        @grail.record
+        class B:
+            y: int
+        self.assertEqual(encode(B(2)), {"y": 2})  # a type defined after registration
+        encode.register(A, lambda obj: "exact")
+        self.assertEqual(encode(A(1)), "exact")
+        self.assertIsInstance(A(1), grail.Record)
+        self.assertNotIsInstance(3, grail.Record)
+        self.assertTrue(issubclass(A, grail.Record))
+        with self.assertRaises(TypeError):
+            grail.Record()
+        with self.assertRaises(TypeError):
+            class Sub(grail.Record):
+                pass
 
     def test_override_and_duplicate(self):
         @grail.generic
@@ -1248,7 +1431,6 @@ class GenericTests(unittest.TestCase):
         f.register(Base, base_impl)
         self.assertEqual(f(Base()), "base")
         self.assertEqual(f(Child()), "base")
-        self.assertEqual(f(obj=Child()), "base")
         self.assertIs(f.dispatch(Child), base_impl)
         f.register(Child, lambda obj: "child")
         self.assertEqual(f(Child()), "child")
@@ -1314,7 +1496,6 @@ class GenericTests(unittest.TestCase):
             f(T())
         f.register(T, lambda obj: "exact")
         self.assertEqual(f(T()), "exact")
-        self.assertEqual(f(obj=T()), "exact")
 
     def test_mro_changes(self):
         class A:
@@ -1438,7 +1619,6 @@ class GenericTests(unittest.TestCase):
                         gc.collect()
                 else:
                     self.assertIn(f(value), (0, 1))
-                    self.assertIn(f(obj=value), (0, 1))
         run_pool(worker, 4)
         self.assertIn(f(value), (0, 1))
 

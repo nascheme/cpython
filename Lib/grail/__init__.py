@@ -8,6 +8,7 @@ Inherited dispatch uses a bounded guarded native resolution cache.
 """
 
 import _thread
+import abc as _abc
 import annotationlib as _annotationlib
 import builtins as _builtins
 import inspect as _inspect
@@ -27,25 +28,36 @@ from ._parallel import pmap, parallel_reduce
 
 backend = _core.backend
 __all__ = ["record", "field", "replace", "generic", "ops", "repr", "eq", "hash",
-           "record_fields", "record_values", "is_value_record", "substitutable",
+           "record_fields", "record_values", "is_record", "is_value_record",
+           "conforms", "substitutable", "Record", "MISSING",
            "PMap", "PSet", "PVector", "FloatVector", "IntVector", "Atom",
            "Pool", "pool", "pmap", "parallel_reduce",
            "mutate", "finish", "original"]
 
-_MISSING = object()
+class _Missing:
+    __slots__ = ()
+
+    def __repr__(self):
+        return "MISSING"
+
+
+MISSING = _Missing()  # no default or factory; no annotation
 _Field = _namedtuple("_Field", "default factory")
 FieldInfo = _namedtuple("FieldInfo", "name annotation kind default factory")
 
 
-def field(*, default=_MISSING, factory=_MISSING):
-    if default is not _MISSING and factory is not _MISSING:
+def field(*, default=MISSING, factory=MISSING):
+    if default is not MISSING and factory is not MISSING:
         raise TypeError("specify a default or a factory, not both")
-    if factory is not _MISSING and not callable(factory):
+    if factory is not MISSING and not callable(factory):
         raise TypeError("field factory must be callable")
     return _Field(default, factory)
 
 
-def _value_plan(annotation):
+_TypeAliasType = _typing.TypeAliasType
+
+
+def _value_plan(annotation, aliases=()):
     if annotation is None:
         annotation = type(None)
     if any(annotation is t for t in (type(None), bool, int, float, str, bytes)):
@@ -54,16 +66,36 @@ def _value_plan(annotation):
         return annotation if is_value_record(annotation) else None
     origin = _typing.get_origin(annotation)
     args = _typing.get_args(annotation)
+    alias = origin if isinstance(origin, _TypeAliasType) else annotation
+    if isinstance(alias, _TypeAliasType):
+        if alias in aliases:
+            return None  # a recursive alias has no finite plan
+        try:
+            value = alias.__value__
+            if alias is origin:
+                value = value[args]
+        except (NameError, TypeError):
+            return None  # unresolved, or a parameter the value does not use
+        return _value_plan(value, aliases + (alias,))
+    if origin is _typing.Annotated:
+        return _value_plan(args[0], aliases)
+    if origin is _typing.Literal:
+        # Conformance is by type: membership in the literal is not checked.
+        members = tuple(dict.fromkeys(type(value) for value in args))
+        children = tuple(_value_plan(t, aliases) for t in members)
+        if not all(t is not None for t in children):
+            return None
+        return children[0] if len(children) == 1 else (1, children)
     if origin in (_types.UnionType, _typing.Union):
-        children = tuple(_value_plan(t) for t in args)
+        children = tuple(_value_plan(t, aliases) for t in args)
         return (1, children) if all(t is not None for t in children) else None
     if origin is tuple:
         if len(args) == 2 and args[1] is Ellipsis:
-            child = _value_plan(args[0])
+            child = _value_plan(args[0], aliases)
             return (3, (child,)) if child is not None else None
         if not args and annotation != tuple[()]:
             return None
-        children = tuple(_value_plan(t) for t in args)
+        children = tuple(_value_plan(t, aliases) for t in args)
         return (2, children) if all(t is not None for t in children) else None
     return None
 
@@ -127,18 +159,18 @@ def _make_record(cls):
     for name in names:
         if name.startswith("__"):
             raise TypeError("dunder record fields are reserved")
-        value = namespace.get(name, _MISSING)
-        factory = _MISSING
+        value = namespace.get(name, MISSING)
+        factory = MISSING
         if isinstance(value, _Field):
             value, factory = value
-        if factory is not _MISSING:
+        if factory is not MISSING:
             defaults.append((2, factory))
-        elif value is _MISSING:
+        elif value is MISSING:
             defaults.append((0, None))
         else:
             _check_default(value)
             defaults.append((1, value))
-    annotations = tuple(annotations.get(name, _MISSING) for name in names)
+    annotations = tuple(annotations.get(name, MISSING) for name in names)
     plans = tuple(_value_plan(t) for t in annotations)
     return _core._make_record(cls, tuple(names), plans, tuple(defaults), annotations)
 
@@ -203,8 +235,8 @@ replace = _core.replace_record
 def record_fields(record_type):
     (names, plans, defaults, annotations), _ = _core._record_info(record_type)
     return tuple(FieldInfo(name, annotation, "value" if plan is not None else "ordinary",
-                           value if kind == 1 else _MISSING,
-                           value if kind == 2 else _MISSING)
+                           value if kind == 1 else MISSING,
+                           value if kind == 2 else MISSING)
                  for name, plan, (kind, value), annotation in
                  zip(names, plans, defaults, annotations))
 
@@ -213,8 +245,34 @@ def record_values(obj):
     return _core._record_values(obj)
 
 
+def is_record(obj):
+    """Whether obj is a record type; never raises."""
+    return _core._is_record_type(obj)
+
+
 def is_value_record(record_type):
     return _core._record_info(record_type)[1]
+
+
+def conforms(obj):
+    """Whether a record instance is a value record: its type is a value
+    record type and every field holds a value of its declared type."""
+    return _core._is_conforming(obj)
+
+
+class Record(_abc.ABC):
+    """Virtual base of every record type, for dispatch on "any record"."""
+    __slots__ = ()
+
+    def __new__(cls, *args, **kwargs):
+        raise TypeError("Record cannot be instantiated")
+
+    def __init_subclass__(cls, **kwargs):
+        raise TypeError("Record cannot be subclassed")
+
+    @classmethod
+    def __subclasshook__(cls, candidate):
+        return _core._is_record_type(candidate) or NotImplemented
 
 
 def _deepcopy_record(obj, memo):
@@ -278,7 +336,11 @@ def _validate_registration(g, dispatch, func):
     def shape(signature):
         return tuple((p.name, p.kind, p.default is not p.empty)
                      for p in signature.parameters.values())
-    if shape(actual) != shape(expected):
+    # The dispatch argument is positional, so its name is not part of the shape.
+    first = next(iter(actual.parameters.values()), None)
+    if (first is None
+            or first.kind not in (first.POSITIONAL_ONLY, first.POSITIONAL_OR_KEYWORD)
+            or shape(actual)[1:] != shape(expected)[1:]):
         raise TypeError("implementation must preserve the generic call shape")
 
 
