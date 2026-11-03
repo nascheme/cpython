@@ -450,7 +450,7 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(Empty(), Empty())
         self.assertEqual(grail.record_values(Empty()), {})
 
-    @unittest.skipIf(SHIM and grail._core._freeze is None,
+    @unittest.skipIf(SHIM and getattr(grail._core, "_freeze", True) is None,
                      "shim cannot harden types without ctypes")
     def test_mutation_bypasses(self):
         Point = self.point_type()
