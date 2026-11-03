@@ -62,10 +62,10 @@ class V:
 
     def test_operators_and_inplace(self):
         self.run_isolated('''
-ops.add.register((V, V), lambda a, b: V(a.x + b.x, a.y + b.y))
-ops.sub.register((V, V), lambda a, b: V(a.x - b.x, a.y - b.y))
-ops.mul.register((V, float), lambda a, k: V(a.x * k, a.y * k))
-ops.truediv.register((V, float), lambda a, k: V(a.x / k, a.y / k))
+grail.generic_register(ops.add, (V, V), lambda a, b: V(a.x + b.x, a.y + b.y))
+grail.generic_register(ops.sub, (V, V), lambda a, b: V(a.x - b.x, a.y - b.y))
+grail.generic_register(ops.mul, (V, float), lambda a, k: V(a.x * k, a.y * k))
+grail.generic_register(ops.truediv, (V, float), lambda a, k: V(a.x / k, a.y / k))
 def add(a, b): return a + b
 def sub(a, b): return a - b
 def mul(a, b): return a * b
@@ -100,8 +100,8 @@ class P:
 def decline(a, b):
     calls.append(None)
     return NotImplemented
-ops.add.register((P, P), decline)
-ops.sub.register((P, P), decline)
+grail.generic_register(ops.add, (P, P), decline)
+grail.generic_register(ops.sub, (P, P), decline)
 def add(a, b): return a + b
 def iadd(a, b):
     a += b
@@ -122,7 +122,7 @@ for f in (add, iadd, sub):
         self.run_isolated('''
 def bad(a, b):
     raise ValueError("boom")
-ops.truediv.register((V, V), bad)
+grail.generic_register(ops.truediv, (V, V), bad)
 def div(a, b): return a / b
 v = V(1.0, 1.0)
 for _ in range(1000):
@@ -140,20 +140,20 @@ except ValueError as e:
 
     def test_override_and_shape_change(self):
         self.run_isolated('''
-ops.add.register((V, V), lambda a, b: "first")
+grail.generic_register(ops.add, (V, V), lambda a, b: "first")
 def add(a, b): return a + b
 v = V(0.0, 0.0)
 warm(add, v, v)
 check_inline(add)
-ops.add.override((V, V), lambda a, b: "second")
+grail.generic_override(ops.add, (V, V), lambda a, b: "second")
 assert add(v, v) == "second"
 def star(*args): return ("star", len(args))
-ops.add.override((V, V), star)
+grail.generic_override(ops.add, (V, V), star)
 assert add(v, v) == ("star", 2)
 warm(add, v, v)
 assert "BINARY_OP_GRAIL" not in opnames(add)
 def two(a, b): return "two"
-ops.add.override((V, V), two)
+grail.generic_override(ops.add, (V, V), two)
 assert add(v, v) == "two"
 def add2(a, b): return a + b   # add may still be backing off
 warm(add2, v, v)
@@ -163,7 +163,7 @@ two.__defaults__ = (3,)
 assert add2(v, v) == "three"
 class Callable:
     def __call__(self, a, b): return "object"
-ops.add.override((V, V), Callable())
+grail.generic_override(ops.add, (V, V), Callable())
 assert add2(v, v) == "object"
 ''')
 
@@ -175,7 +175,7 @@ def first(a, b):
     kept.append(b)
     frames.append(sys._getframe())
     return a
-ops.add.register((V, V), first)
+grail.generic_register(ops.add, (V, V), first)
 def add(a, b): return a + b
 warm(add, V(1.0, 1.0), V(2.0, 2.0))
 check_inline(add)
@@ -193,7 +193,7 @@ assert [f.f_locals["a"].x for f in frames] == [float(i) for i in range(100)]
         self.run_isolated('''
 def recurse(a, b):
     return a + b
-ops.add.register((V, V), recurse)
+grail.generic_register(ops.add, (V, V), recurse)
 def add(a, b): return a + b
 v = V(0.0, 0.0)
 for _ in range(3):
@@ -209,7 +209,7 @@ for _ in range(3):
         self.run_isolated('''
 def impl(a, b):
     return "impl"
-ops.add.register((V, V), impl)
+grail.generic_register(ops.add, (V, V), impl)
 def add(a, b): return a + b
 v = V(0.0, 0.0)
 warm(add, v, v)
@@ -232,7 +232,7 @@ assert ("call", "impl") in events and ("return", "impl") in events, events
         self.run_isolated('''
 def one(a, b): return 1
 def two(a, b): return 2
-ops.add.register((V, V), one)
+grail.generic_register(ops.add, (V, V), one)
 def add(a, b): return a + b
 v = V(0.0, 0.0)
 warm(add, v, v)
@@ -247,7 +247,7 @@ threads = [threading.Thread(target=worker) for _ in range(4)]
 for t in threads:
     t.start()
 for i in range(500):
-    ops.add.override((V, V), two if i % 2 else one)
+    grail.generic_override(ops.add, (V, V), two if i % 2 else one)
 stop = True
 for t in threads:
     t.join()
@@ -263,7 +263,7 @@ assert not bad, bad[:5]
                 @grail.record
                 class V:
                     x: float
-                grail.ops.add.register((V, V), lambda a, b: V(a.x + b.x))
+                grail.generic_register(grail.ops.add, (V, V), lambda a, b: V(a.x + b.x))
                 def add(a, b): return a + b
                 for _ in range(1000):
                     add(V(1.0), V(2.0))
@@ -291,11 +291,11 @@ class GenericEntryTests(unittest.TestCase):
         def area(shape, scale):
             return ("fallback", scale)
 
-        @area.impl
+        @grail.generic_impl(area)
         def _(shape: A, scale):
             return shape.x * scale
 
-        @area.impl
+        @grail.generic_impl(area)
         def _(shape: B, scale):
             if shape.y < 0:
                 raise ValueError("negative")
@@ -322,10 +322,10 @@ class GenericEntryTests(unittest.TestCase):
         A, B, area, site = self.make()
         warm(site, A(1), 1)
         self.expect_inline(site)
-        area.override(A, lambda shape, scale: "new")
+        grail.generic_override(area, A, lambda shape, scale: "new")
         self.assertEqual(site(A(1), 1), "new")
         impl = lambda shape, scale: "lambda"
-        area.override(A, impl)
+        grail.generic_override(area, A, impl)
         warm(site, A(1), 1)
         impl.__code__ = (lambda shape, scale, extra: "three").__code__
         with self.assertRaises(TypeError):
@@ -333,7 +333,7 @@ class GenericEntryTests(unittest.TestCase):
         class Callable:
             def __call__(self, shape, scale):
                 return "object"
-        area.override(A, Callable())
+        grail.generic_override(area, A, Callable())
         self.assertEqual(site(A(1), 1), "object")
 
     def test_exceptions_and_traceback(self):
@@ -371,11 +371,11 @@ class GenericEntryTests(unittest.TestCase):
         def g(o):
             return "fallback"
 
-        @g.impl
+        @grail.generic_impl(g)
         def _(o: Base):
             return "base"
 
-        @g.impl
+        @grail.generic_impl(g)
         def _(o: Other):
             return "other"
 
@@ -392,7 +392,7 @@ class GenericEntryTests(unittest.TestCase):
         def depth(n):
             return 0
 
-        @depth.impl
+        @grail.generic_impl(depth)
         def _(n: int):
             return 1 + depth(n - 1) if n else 0
         self.assertEqual(depth(300), 300)
@@ -406,7 +406,7 @@ class GenericEntryTests(unittest.TestCase):
             return "fallback"
 
         types = [type(f"T{i}", (), {}) for i in range(50)]
-        @g.impl
+        @grail.generic_impl(g)
         def _(o: int):
             return "int"
 
@@ -425,8 +425,8 @@ class GenericEntryTests(unittest.TestCase):
             t.start()
         try:
             for t in types:
-                g.register(t, lambda o: "t")
-            g.override(int, lambda o: "int")
+                grail.generic_register(g, t, lambda o: "t")
+            grail.generic_override(g, int, lambda o: "int")
         finally:
             stop = True
             for t in threads:
@@ -439,7 +439,7 @@ class GenericEntryTests(unittest.TestCase):
             @grail.generic
             def g(o):
                 return 0
-            @g.impl
+            @grail.generic_impl(g)
             def _(o: int):
                 return o
             def site(o): return g(o)

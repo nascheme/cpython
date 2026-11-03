@@ -63,13 +63,13 @@ class GrailTraceTests(unittest.TestCase):
     def test_generic_override_while_hot(self):
         V, _ = self.make_types()
         f = grail.generic(lambda v: -1.0)
-        f.register(V, lambda v: v.x)
+        grail.generic_register(f, V, lambda v: v.x)
 
         def loop(v):
             total = 0.0
             for i in range(ITERATIONS):
                 if i == HALF:
-                    f.override(V, lambda v: v.y)
+                    grail.generic_override(f, V, lambda v: v.y)
                 total += f(v)
             return total
 
@@ -78,8 +78,8 @@ class GrailTraceTests(unittest.TestCase):
     def test_generic_polymorphic_site(self):
         V, W = self.make_types()
         f = grail.generic(lambda v: -1.0)
-        f.register(V, lambda v: v.x)
-        f.register(W, lambda v: v.y)
+        grail.generic_register(f, V, lambda v: v.x)
+        grail.generic_register(f, W, lambda v: v.y)
 
         def loop(values):
             total = 0.0
@@ -92,13 +92,13 @@ class GrailTraceTests(unittest.TestCase):
     def test_generic_late_registration(self):
         V, W = self.make_types()
         f = grail.generic(lambda v: -1.0)
-        f.register(V, lambda v: v.x)
+        grail.generic_register(f, V, lambda v: v.x)
 
         def loop(v, w):
             total = 0.0
             for i in range(ITERATIONS):
                 if i == HALF:
-                    f.register(W, lambda v: v.y)
+                    grail.generic_register(f, W, lambda v: v.y)
                 total += f(v) + (f(w) if i >= HALF else 0.0)
             return total
 
@@ -114,7 +114,7 @@ class GrailTraceTests(unittest.TestCase):
         def other(v):
             return v.y
 
-        f.register(V, impl)
+        grail.generic_register(f, V, impl)
 
         def loop(v):
             total = 0.0
@@ -128,13 +128,13 @@ class GrailTraceTests(unittest.TestCase):
 
     def test_operator_override_while_hot(self):
         V, _ = self.make_types()
-        grail.ops.add.register((V, V), lambda a, b: V(a.x + b.x, a.y + b.y))
+        grail.generic_register(grail.ops.add, (V, V), lambda a, b: V(a.x + b.x, a.y + b.y))
 
         def loop(a, b):
             total = 0.0
             for i in range(ITERATIONS):
                 if i == HALF:
-                    grail.ops.add.override((V, V), lambda a, b: V(a.x - b.x, a.y - b.y))
+                    grail.generic_override(grail.ops.add, (V, V), lambda a, b: V(a.x - b.x, a.y - b.y))
                 total += (a + b).x
             return total
 
@@ -142,8 +142,8 @@ class GrailTraceTests(unittest.TestCase):
 
     def test_operator_polymorphic_site(self):
         V, W = self.make_types()
-        grail.ops.add.register((V, V), lambda a, b: V(a.x + b.x, 0.0))
-        grail.ops.add.register((W, W), lambda a, b: W(a.x * b.x, 0.0))
+        grail.generic_register(grail.ops.add, (V, V), lambda a, b: V(a.x + b.x, 0.0))
+        grail.generic_register(grail.ops.add, (W, W), lambda a, b: W(a.x * b.x, 0.0))
 
         def loop(pairs):
             total = 0.0
@@ -159,9 +159,9 @@ class GrailTraceTests(unittest.TestCase):
     def test_trace_contains_grail_uops(self):
         # A closure generic is not a trace constant: dynamic selection.
         V, _ = self.make_types()
-        grail.ops.add.register((V, V), lambda a, b: V(a.x + b.x, a.y + b.y))
+        grail.generic_register(grail.ops.add, (V, V), lambda a, b: V(a.x + b.x, a.y + b.y))
         norm = grail.generic(lambda v: 0.0)
-        norm.register(V, lambda v: v.x * v.y)
+        grail.generic_register(norm, V, lambda v: v.x * v.y)
 
         def loop(a, b):
             total = 0.0
@@ -194,9 +194,9 @@ class W:
     x: float
     y: float
 
-grail.ops.add.register((V, V), lambda a, b: V(a.x + b.x, a.y + b.y))
+grail.generic_register(grail.ops.add, (V, V), lambda a, b: V(a.x + b.x, a.y + b.y))
 norm = grail.generic(lambda v: -1.0)
-norm.register(V, lambda v: v.x * v.y)
+grail.generic_register(norm, V, lambda v: v.x * v.y)
 
 def loop(n, a, b, switch=None, action=None):
     total = 0.0
@@ -240,15 +240,15 @@ class C:
 def g(v):
     raise TypeError
 
-@g.impl
+@grail.generic_impl(g)
 def _(v: A):
     return 1
 
 def shared(v):
     return 100 if type(v) is B else 2000
 
-g.register(B, shared)
-g.register(C, shared)
+grail.generic_register(g, B, shared)
+grail.generic_register(g, C, shared)
 
 def loop(items):
     t = 0
@@ -263,14 +263,14 @@ class FoldedDispatchTests(unittest.TestCase):
         m = load_module()
         V, norm = m["V"], m["norm"]
         result = m["loop"](ITERATIONS, V(1.0, 2.0), V(3.0, 4.0), HALF,
-                           lambda: norm.override(V, lambda v: v.x + v.y))
+                           lambda: grail.generic_override(norm, V, lambda v: v.x + v.y))
         self.assertEqual(result, HALF * 24.0 + HALF * 10.0)
 
     def test_operator_override_while_hot(self):
         m = load_module()
         V = m["V"]
         result = m["loop"](ITERATIONS, V(1.0, 2.0), V(3.0, 4.0), HALF,
-                           lambda: grail.ops.add.override(
+                           lambda: grail.generic_override(grail.ops.add, 
                                (V, V), lambda a, b: V(a.x - b.x, a.y - b.y)))
         self.assertEqual(result, HALF * 24.0 + HALF * 4.0)
 
@@ -288,8 +288,8 @@ class FoldedDispatchTests(unittest.TestCase):
     def test_other_record_type(self):
         m = load_module()
         V, W, norm = m["V"], m["W"], m["norm"]
-        grail.ops.add.register((W, W), lambda a, b: W(a.x * b.x, a.y * b.y))
-        norm.register(W, lambda v: v.x - v.y)
+        grail.generic_register(grail.ops.add, (W, W), lambda a, b: W(a.x * b.x, a.y * b.y))
+        grail.generic_register(norm, W, lambda v: v.x - v.y)
         loop = m["loop"]
         self.assertEqual(loop(ITERATIONS, V(1.0, 2.0), V(3.0, 4.0)), ITERATIONS * 24.0)
         self.assertEqual(loop(ITERATIONS, W(1.0, 2.0), W(3.0, 4.0)), ITERATIONS * -5.0)
@@ -308,15 +308,15 @@ class FoldedDispatchTests(unittest.TestCase):
             class N:
                 amount: int
 
-            @grail.ops.add.impl
+            @grail.generic_impl(grail.ops.add)
             def _(a: M, b: M):
                 return M(a.amount + b.amount, a.currency)
 
             def shared(a, b):
                 return N(a.amount + b.amount + 1000)
 
-            grail.ops.add.register((N, N), shared)
-            grail.ops.add.register((N, M), shared)
+            grail.generic_register(grail.ops.add, (N, N), shared)
+            grail.generic_register(grail.ops.add, (N, M), shared)
 
             def total(start, items):
                 acc = start
@@ -409,8 +409,8 @@ class R:
     p: V
     q: V
 
-grail.ops.add.register((V, V), lambda a, b: V(a.x + b.x, a.y + b.y))
-grail.ops.add.register((W, W), lambda a, b: W(a.x * b.x, a.y * b.y))
+grail.generic_register(grail.ops.add, (V, V), lambda a, b: V(a.x + b.x, a.y + b.y))
+grail.generic_register(grail.ops.add, (W, W), lambda a, b: W(a.x * b.x, a.y * b.y))
 
 def loop(rs):
     total = 0.0
@@ -618,32 +618,32 @@ class P:  # not all float
     x: float
     n: int
 
-@ops.add.impl
+@grail.generic_impl(ops.add)
 def _(a: V, b: V) -> V:
     return V(a.x + b.x, a.y + b.y)
 
-@ops.sub.impl
+@grail.generic_impl(ops.sub)
 def _(a: V, b: V) -> V:
     return V(a.x - b.x, a.y - b.y)
 
-@ops.mul.impl
+@grail.generic_impl(ops.mul)
 def _(a: V, k: float) -> V:
     return V(a.x * k, a.y * k)
 
-@ops.mul.impl
+@grail.generic_impl(ops.mul)
 def _(k: float, a: V) -> V:
     return V(k * a.x, k * a.y)
 
 # Shapes that must not be fused.
-@ops.add.impl
+@grail.generic_impl(ops.add)
 def _(a: W, b: W) -> W:
     return W(a.x + b.x, a.y - b.y)      # different ops
 
-@ops.sub.impl
+@grail.generic_impl(ops.sub)
 def _(a: W, b: W) -> W:
     return W(a.x - b.y, a.y - b.x)      # crossed fields
 
-@ops.mul.impl
+@grail.generic_impl(ops.mul)
 def _(a: W, k: float) -> W:
     return W(a.x * k * k, a.y * k)      # nested arithmetic
 
@@ -790,7 +790,7 @@ class ElementwiseFusionTests(unittest.TestCase):
             t = 0.0
             for i in range(n):
                 if i == HALF:
-                    grail.ops.add.override((V, V), lambda a, b: V(a.x * b.x, a.y * b.y))
+                    grail.generic_override(grail.ops.add, (V, V), lambda a, b: V(a.x * b.x, a.y * b.y))
                 t += (a + b).x
             return t
 
@@ -1257,7 +1257,7 @@ class RecordEqualityJitTests(unittest.TestCase):
         pairs = [(K(1, 2.0), K(3, 4.0))]
 
         def register():
-            @grail.eq.impl
+            @grail.generic_impl(grail.eq)
             def _(a: K, b):
                 return True
 
@@ -1475,15 +1475,15 @@ class V3:
     y: float
     z: float
 
-@grail.ops.add.impl
+@grail.generic_impl(grail.ops.add)
 def _(a: V3, b: V3) -> V3:
     return V3(a.x + b.x, a.y + b.y, a.z + b.z)
 
-@grail.ops.sub.impl
+@grail.generic_impl(grail.ops.sub)
 def _(a: V3, b: V3) -> V3:
     return V3(a.x - b.x, a.y - b.y, a.z - b.z)
 
-@grail.ops.mul.impl
+@grail.generic_impl(grail.ops.mul)
 def _(a: V3, k: float) -> V3:
     return V3(k * a.x, k * a.y, k * a.z)
 
@@ -1581,11 +1581,11 @@ class Rect:
 def area(shape, k):
     raise TypeError
 
-@area.impl
+@grail.generic_impl(area)
 def _(shape: Sq, k: V3) -> float:
     return shape.side * shape.side * k.x
 
-@area.impl
+@grail.generic_impl(area)
 def _(shape: Rect, k: V3) -> float:
     return shape.w * shape.h * k.x
 

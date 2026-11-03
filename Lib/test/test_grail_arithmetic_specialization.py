@@ -37,9 +37,9 @@ pairs = [(int, int), (float, float), (int, float), (float, int), (str, str),
          (tuple, int), (dict, dict), (complex, complex), (object, object)]
 for registry in (grail.ops.add, grail.ops.sub, grail.ops.mul, grail.ops.truediv):
     for pair in pairs:
-        for method in (registry.register, registry.override):
+        for register in (grail.generic_register, grail.generic_override):
             try:
-                method(pair, lambda a, b: "registered")
+                register(registry, pair, lambda a, b: "registered")
             except TypeError as e:
                 assert "two built-in types" in str(e), e
             else:
@@ -53,9 +53,9 @@ assert 1 + 2 == 3 and 1.5 * 2 == 3.0 and "a" + "b" == "ab"
 class R:
     x: object
 for registry in (grail.ops.add, grail.ops.sub, grail.ops.mul, grail.ops.truediv):
-    registry.register((R, R), lambda a, b: NotImplemented)
-    registry.register((R, int), lambda a, b: NotImplemented)
-    registry.register((float, R), lambda a, b: NotImplemented)
+    grail.generic_register(registry, (R, R), lambda a, b: NotImplemented)
+    grail.generic_register(registry, (R, int), lambda a, b: NotImplemented)
+    grail.generic_register(registry, (float, R), lambda a, b: NotImplemented)
 cases = [("a + b", 12345, 23456), ("a - b", 12345, 23456),
          ("a * b", 12345, 3), ("a + b", 1.25, 2.5),
          ("a - b", 1.25, 2.5), ("a * b", 1.25, 2.5),
@@ -93,7 +93,7 @@ for op, registry, a, b in cases:
     builtin_b = list(b) if isinstance(b, list) else type(b).__mro__[-2](b)
     warm(binary, builtin_a, builtin_b)
     assert specialized(binary), (op, a, b)
-    registry.register((type(a), type(b)), lambda x, y: marker)
+    grail.generic_register(registry, (type(a), type(b)), lambda x, y: marker)
     for f in (binary, inplace):
         assert f(a, b) is marker, (op, a, b, f)
     # The builtin pair keeps its result at the same site.
@@ -101,7 +101,7 @@ for op, registry, a, b in cases:
         builtin_a + builtin_b if op == "+" else
         builtin_a - builtin_b if op == "-" else
         builtin_a * builtin_b if op == "*" else builtin_a / builtin_b)
-    registry.override((type(a), type(b)), lambda x, y: NotImplemented)
+    grail.generic_override(registry, (type(a), type(b)), lambda x, y: NotImplemented)
     assert binary(a, b) is NotImplemented
 ''')
 
@@ -127,7 +127,7 @@ with concurrent.futures.ThreadPoolExecutor(2) as pool:
     futures = [pool.submit(reader) for _ in range(2)]
     ready.wait()
     try:
-        grail.ops.mul.register((R, int), lambda a, b: marker)
+        grail.generic_register(grail.ops.mul, (R, int), lambda a, b: marker)
     finally:
         published.set()
     for future in futures:
@@ -139,7 +139,7 @@ with concurrent.futures.ThreadPoolExecutor(2) as pool:
 class R:
     pass
 if REGISTER:
-    grail.ops.add.register((R, float), lambda a, b: "registered")
+    grail.generic_register(grail.ops.add, (R, float), lambda a, b: "registered")
     assert R() + 2.5 == "registered"
 else:
     try:

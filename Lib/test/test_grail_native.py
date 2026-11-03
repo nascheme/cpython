@@ -106,7 +106,7 @@ class RecordHashCacheTests(unittest.TestCase):
         class Outer:
             inner: Inner
             n: int
-        grail.hash.register(Inner, lambda r: calls.append(r) or r.x)
+        grail.generic_register(grail.hash, Inner, lambda r: calls.append(r) or r.x)
         return Inner, Outer
 
     @isolated_registrations
@@ -122,7 +122,7 @@ class RecordHashCacheTests(unittest.TestCase):
         @grail.record
         class Other:
             x: int
-        grail.hash.register(Other, lambda r: 0)
+        grail.generic_register(grail.hash, Other, lambda r: 0)
         self.assertEqual(hash(o), h)
         self.assertEqual(len(calls), 2)
         self.assertEqual(hash(o), h)
@@ -143,7 +143,7 @@ class RecordHashCacheTests(unittest.TestCase):
             @grail.record
             class Outer:
                 inner: Inner
-            grail.hash.register(Inner, lambda r: calls.append(r) or r.x)
+            grail.generic_register(grail.hash, Inner, lambda r: calls.append(r) or r.x)
             o = Outer(Inner(5))
             assert hash(o) == hash(o) == hash((5,))
             assert len(calls) == 2, calls
@@ -169,7 +169,7 @@ class RecordHashCacheTests(unittest.TestCase):
                     @grail.record
                     class Other:
                         x: int
-                    grail.hash.register(Other, lambda r: 0)
+                    grail.generic_register(grail.hash, Other, lambda r: 0)
         run_pool(worker, 4)
 
 
@@ -190,12 +190,12 @@ class GenericCacheTests(unittest.TestCase):
         fallback = lambda obj: "fallback"
         f = _grail.Generic(fallback, "obj", resolver=resolver)
         implementation = lambda obj: "base"
-        f.register(Base, implementation)
+        grail.generic_register(f, Base, implementation)
         self.assertEqual(f(Base()), "base")
         self.assertEqual(calls, [])  # exact hits never use the resolver/cache
         for _ in range(5):
             self.assertEqual(f(Child()), "base")
-            self.assertIs(f.dispatch(Child), implementation)
+            self.assertIs(grail.generic_dispatch(f, Child), implementation)
             self.assertEqual(f(Missing()), "fallback")
         self.assertEqual(calls, [Child, Missing])
         info = f._cache_info()
@@ -225,19 +225,19 @@ class GenericCacheTests(unittest.TestCase):
         self.assertEqual(f._cache_info()["size"], 2)
         impl = lambda obj: 1
         ref = weakref.ref(impl)
-        f.register(A, impl)
+        grail.generic_register(f, A, impl)
         self.assertEqual(f._cache_info()["size"], 0)
         self.assertEqual(f(B()), 1)
         self.assertEqual(f(B()), 1)
         self.assertGreater(f._cache_info()["hits"], 0)
         del impl
-        f.override(A, lambda obj: 2)
+        grail.generic_override(f, A, lambda obj: 2)
         gc.collect()
         self.assertIsNone(ref())
         self.assertEqual(f(B()), 2)
-        f.register(Missing, lambda obj: 3)
+        grail.generic_register(f, Missing, lambda obj: 3)
         self.assertEqual(f(Missing()), 3)
-        f.register(B, lambda obj: 4)
+        grail.generic_register(f, B, lambda obj: 4)
         self.assertEqual(f(B()), 4)
 
     def test_cache_type_and_metaclass_guards(self):
@@ -249,7 +249,7 @@ class GenericCacheTests(unittest.TestCase):
         class T:
             pass
         f = grail.generic(lambda obj: "fallback")
-        f.register(Registered, lambda obj: "registered")
+        grail.generic_register(f, Registered, lambda obj: "registered")
         self.assertEqual(f(T()), "registered")
         self.assertEqual(f(T()), "registered")
         self.assertEqual(f._cache_info()["hits"], 1)
@@ -265,8 +265,8 @@ class GenericCacheTests(unittest.TestCase):
         class Child(A):
             pass
         g = grail.generic(lambda obj: 0)
-        g.register(A, lambda obj: 1)
-        g.register(B, lambda obj: 2)
+        grail.generic_register(g, A, lambda obj: 1)
+        grail.generic_register(g, B, lambda obj: 2)
         for _ in range(2):
             self.assertEqual(g(Child()), 1)
         Child.__bases__ = (B,)
@@ -285,8 +285,8 @@ class GenericCacheTests(unittest.TestCase):
         class T:
             pass
         f = grail.generic(lambda obj: "fallback")
-        f.register(A, lambda obj: "A")
-        f.register(B, lambda obj: "B")
+        grail.generic_register(f, A, lambda obj: "A")
+        grail.generic_register(f, B, lambda obj: "B")
         for _ in range(3):
             self.assertEqual(f(T()), "fallback")
         self.assertEqual(f._cache_info()["hits"], 2)
@@ -326,8 +326,8 @@ class GenericCacheTests(unittest.TestCase):
             def make(label):
                 return lambda obj: label
             implementation = make(label)
-            cached.register(cls, implementation)
-            oracle.register(cls, implementation)
+            grail.generic_register(cached, cls, implementation)
+            grail.generic_register(oracle, cls, implementation)
         for step in range(20):
             T.__bases__ = (A if step % 2 else B,)
             if step == 5:
@@ -336,18 +336,18 @@ class GenericCacheTests(unittest.TestCase):
                 W.register(Missing)
             if step % 3 == 0:
                 implementation = lambda obj: step
-                cached.override(A, implementation)
-                oracle.override(A, implementation)
+                grail.generic_override(cached, A, implementation)
+                grail.generic_override(oracle, A, implementation)
             for _ in range(2):
                 for cls in (A, B, T, Child, Missing, object):
                     try:
-                        expected = oracle.dispatch(cls)
+                        expected = grail.generic_dispatch(oracle, cls)
                     except RuntimeError as error:
                         with self.assertRaisesRegex(RuntimeError, "Ambiguous dispatch"):
-                            cached.dispatch(cls)
+                            grail.generic_dispatch(cached, cls)
                         self.assertIn("Ambiguous dispatch", str(error))
                     else:
-                        self.assertIs(cached.dispatch(cls), expected)
+                        self.assertIs(grail.generic_dispatch(cached, cls), expected)
                         self.assertEqual(cached(cls()), oracle(cls()))
         self.assertGreater(cached._cache_info()["hits"], 0)
         self.assertEqual(oracle._cache_info()["size"], 0)
@@ -358,7 +358,7 @@ class GenericCacheTests(unittest.TestCase):
         for i in range(100):
             cls = type(f"Candidate{i}", (), {})
             refs.append(weakref.ref(cls))
-            self.assertIs(f.dispatch(cls), f.fallback)
+            self.assertIs(grail.generic_dispatch(f, cls), grail.generic_fallback(f))
             self.assertLessEqual(f._cache_info()["size"],
                                  f._cache_info()["capacity"])
         del cls
@@ -369,7 +369,7 @@ class GenericCacheTests(unittest.TestCase):
         self.assertTrue(all(ref() is None for ref in refs))
         # Large registries deliberately use the uncached correctness path.
         for _ in range(f._cache_info()["max_registrations"] + 1):
-            f.register(type("Registered", (), {}), lambda obj: 0)
+            grail.generic_register(f, type("Registered", (), {}), lambda obj: 0)
         f._set_cache_enabled(True)
         self.assertEqual(f(object()), "fallback")
         self.assertEqual(f(object()), "fallback")
@@ -398,13 +398,13 @@ class GenericCacheTests(unittest.TestCase):
             calls += 1
             result = grail._resolve_generic(cls, snapshot, fallback)
             if calls == 1:
-                f.override(A, lambda obj: 2)
+                grail.generic_override(f, A, lambda obj: 2)
             elif calls == 2:
                 f._set_cache_enabled(False)
                 f._set_cache_enabled(True)
             return result
         f = _grail.Generic(lambda obj: 0, "obj", resolver=resolver)
-        f.register(A, lambda obj: 1)
+        grail.generic_register(f, A, lambda obj: 1)
         self.assertEqual(f(B()), 1)  # owning old registry snapshot
         self.assertEqual(f._cache_info()["size"], 0)
         self.assertEqual(f(B()), 2)
@@ -429,8 +429,8 @@ class GenericCacheTests(unittest.TestCase):
                 T.__bases__ = (B,)
             return result
         f = _grail.Generic(lambda obj: 0, "obj", resolver=resolver)
-        f.register(A, lambda obj: 1)
-        f.register(B, lambda obj: 2)
+        grail.generic_register(f, A, lambda obj: 1)
+        grail.generic_register(f, B, lambda obj: 2)
         self.assertEqual(f(T()), 1)
         self.assertEqual(f._cache_info()["size"], 0)
         self.assertEqual(f(T()), 2)
@@ -451,7 +451,7 @@ class GenericCacheTests(unittest.TestCase):
                 A.register(T)
             return result
         f = _grail.Generic(lambda obj: 0, "obj", resolver=resolver)
-        f.register(A, lambda obj: 1)
+        grail.generic_register(f, A, lambda obj: 1)
         self.assertEqual(f(T()), 0)
         self.assertEqual(f._cache_info()["size"], 0)
         self.assertEqual(f(T()), 1)
@@ -468,7 +468,7 @@ class GenericCacheTests(unittest.TestCase):
             return result
         # General generics preserve call shape, including defaults.
         g = grail.generic(lambda obj, result=1: -1)
-        g.register(A, implementation)
+        grail.generic_register(g, A, implementation)
         self.assertEqual(g(B()), 1)
         implementation.__defaults__ = (2,)
         self.assertEqual(g(B()), 2)
@@ -481,10 +481,10 @@ class GenericCacheTests(unittest.TestCase):
         events = []
         old = lambda obj: 1
         ref = weakref.ref(old, lambda ref: events.append(f(B())))
-        f.register(A, old)
+        grail.generic_register(f, A, old)
         self.assertEqual(f(B()), 1)
         del old
-        f.override(A, lambda obj: 2)
+        grail.generic_override(f, A, lambda obj: 2)
         gc.collect()
         self.assertIsNone(ref())
         self.assertEqual(events, [2])
@@ -499,8 +499,8 @@ class GenericCacheTests(unittest.TestCase):
             pass
         value = T()
         f = grail.generic(lambda obj: -1)
-        f.register(A, lambda obj: 0)
-        f.register(B, lambda obj: 1)
+        grail.generic_register(f, A, lambda obj: 0)
+        grail.generic_register(f, B, lambda obj: 1)
         self.assertEqual(f(value), 0)
         self.assertEqual(f(value), 0)
         barrier = Barrier(4)
@@ -515,7 +515,7 @@ class GenericCacheTests(unittest.TestCase):
                     f._set_cache_enabled(i % 2 == 0)
                 else:
                     self.assertIn(f(value), (0, 1))
-                    self.assertIn(f.dispatch(T)(value), (0, 1))
+                    self.assertIn(grail.generic_dispatch(f, T)(value), (0, 1))
         run_pool(worker, 4)
         T.__bases__ = (A,)
         f._set_cache_enabled(True)
@@ -549,7 +549,7 @@ import abc, grail
 class A(abc.ABC): pass
 class T: pass
 f = grail.generic(lambda obj: 0)
-f.register(A, lambda obj: 1)
+grail.generic_register(f, A, lambda obj: 1)
 assert f(T()) == 0
 assert f(T()) == 0
 assert f._cache_info()['hits'] == 1
@@ -573,13 +573,13 @@ class OperatorNativeTests(unittest.TestCase):
         class R:
             x: int
         # A registered result is final: NotImplemented is not a decline.
-        grail.ops.add.register((R, R), lambda a, b: NotImplemented)
+        grail.generic_register(grail.ops.add, (R, R), lambda a, b: NotImplemented)
         r = R(1)
         for call in (operator.add, operator.iadd, grail.ops.add):
             self.assertIs(call(r, R(2)), NotImplemented)
         r += R(2)
         self.assertIs(r, NotImplemented)
-        grail.ops.add.register((R, object), lambda a, b: "ordinary partner")
+        grail.generic_register(grail.ops.add, (R, object), lambda a, b: "ordinary partner")
         self.assertEqual(R(1) + object(), "ordinary partner")
 
     @isolated_registrations
@@ -634,12 +634,12 @@ class OperatorNativeTests(unittest.TestCase):
         marker = object()
         for generic, builtin, heap, calls in cases:
             expected = calls[2](*builtin)
-            generic.register(tuple(map(type, heap)), lambda a, b: marker)
+            grail.generic_register(generic, tuple(map(type, heap)), lambda a, b: marker)
             for call in [generic, *calls]:
                 self.assertIs(call(*heap), marker)
                 self.assertEqual(call(*builtin), expected)
             with self.assertRaisesRegex(TypeError, "two built-in types"):
-                generic.register(tuple(map(type, builtin)), lambda a, b: marker)
+                grail.generic_register(generic, tuple(map(type, builtin)), lambda a, b: marker)
         if sysconfig.get_config_var("Py_GIL_DISABLED"):
             self.assertFalse(sys._is_gil_enabled())
 
@@ -655,18 +655,18 @@ class OperatorNativeTests(unittest.TestCase):
             inplace("grail-left", "grail-right")
         for pair in ((str, str), (list, list), (list, int), (tuple, tuple)):
             with self.assertRaisesRegex(TypeError, "two built-in types"):
-                grail.ops.add.register(pair, lambda a, b: None)
+                grail.generic_register(grail.ops.add, pair, lambda a, b: None)
         self.assertEqual(add("grail-left", "grail-right"),
                          "grail-leftgrail-right")
         class L(list):
             pass
         marker = object()
         left, right = L([1]), [2]
-        grail.ops.add.register((L, list), lambda a, b: marker)
+        grail.generic_register(grail.ops.add, (L, list), lambda a, b: marker)
         for call in (add, inplace, operator.add, operator.iadd, grail.ops.add):
             self.assertIs(call(left, right), marker)
         self.assertEqual(left, [1])  # exact registration precedes mutation
-        grail.ops.mul.register((L, int), lambda a, b: marker)
+        grail.generic_register(grail.ops.mul, (L, int), lambda a, b: marker)
         self.assertIs(left * 2, marker)
         self.assertIs(operator.imul(left, 2), marker)
         self.assertEqual(left, [1])
@@ -697,18 +697,18 @@ class OperatorNativeTests(unittest.TestCase):
         def decline(a, b):
             events.append("registered")
             return NotImplemented
-        grail.ops.add.register((Base, Child), decline)
+        grail.generic_register(grail.ops.add, (Base, Child), decline)
         for call in (operator.add, grail.ops.add, operator.iadd):
             events.clear()
             self.assertIs(call(a, b), NotImplemented)
             self.assertEqual(events, ["registered"])
-        grail.ops.add.override((Base, Child), lambda a, b: "exact")
+        grail.generic_override(grail.ops.add, (Base, Child), lambda a, b: "exact")
         events.clear()
         self.assertEqual(a + b, "exact")
         self.assertEqual(operator.iadd(a, b), "exact")
         self.assertEqual(events, [])
         # Pair lookup has neither MRO nor ABC matching.
-        grail.ops.add.register((Base, Base), lambda a, b: "not inherited")
+        grail.generic_register(grail.ops.add, (Base, Base), lambda a, b: "not inherited")
         self.assertEqual(Child() + Child(), "base")
 
     @isolated_registrations
@@ -717,23 +717,23 @@ class OperatorNativeTests(unittest.TestCase):
             def __add__(self, other):
                 return "fallback"
         def first(a, b):
-            grail.ops.add.override((T, T), lambda a, b: "next")
+            grail.generic_override(grail.ops.add, (T, T), lambda a, b: "next")
             gc.collect()
             return NotImplemented
-        grail.ops.add.register((T, T), first)
+        grail.generic_register(grail.ops.add, (T, T), first)
         a, b = T(), T()
         self.assertIs(a + b, NotImplemented)
         self.assertEqual(a + b, "next")
         def fail(a, b):
             raise ValueError("operator failed")
-        grail.ops.add.override((T, T), fail)
+        grail.generic_override(grail.ops.add, (T, T), fail)
         for call in (operator.add, operator.iadd, grail.ops.add):
             with self.assertRaisesRegex(ValueError, "operator failed"):
                 call(a, b)
         with self.assertRaises(TypeError):
-            grail.ops.add.register((T, T), fail)
+            grail.generic_register(grail.ops.add, (T, T), fail)
         with self.assertRaises(TypeError):
-            grail.ops.add.register((T, 1), fail)
+            grail.generic_register(grail.ops.add, (T, 1), fail)
         # Failed registration leaves the previous callable intact.
         with self.assertRaisesRegex(ValueError, "operator failed"):
             a + b
@@ -750,10 +750,10 @@ class OperatorNativeTests(unittest.TestCase):
             barrier.wait()
             for _ in range(300):
                 if index == 0:
-                    if grail.ops.add.version == 0:
-                        grail.ops.add.register((T, T), lambda a, b: 0)
+                    if grail.generic_version(grail.ops.add) == 0:
+                        grail.generic_register(grail.ops.add, (T, T), lambda a, b: 0)
                     else:
-                        grail.ops.add.override((T, T), lambda a, b: 0)
+                        grail.generic_override(grail.ops.add, (T, T), lambda a, b: 0)
                 elif index == 1:
                     self.assertIn(operator.iadd(a, b), (-1, 0))
                 else:
