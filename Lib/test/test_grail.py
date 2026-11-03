@@ -1406,6 +1406,64 @@ class GenericTests(unittest.TestCase):
         self.assertEqual(f(1), 4)
         self.assertEqual(f.version, 3)
 
+    def test_module_functions(self):
+        @grail.generic
+        def f(obj, n=1):
+            return "fallback"
+        self.assertTrue(grail.is_generic(f))
+        self.assertTrue(grail.is_generic(grail.repr))
+        self.assertTrue(grail.is_generic(grail.ops.add))
+        self.assertFalse(grail.is_generic(len))
+        self.assertIs(grail.generic_fallback(f), f.fallback)
+        self.assertEqual(grail.generic_version(f), 0)
+        @grail.generic_impl(f)
+        def f_int(obj: int, n=1):
+            return "int"
+        self.assertEqual(f(1), "int")
+        self.assertIs(grail.generic_dispatch(f, int), f_int)
+        self.assertIs(grail.generic_dispatch(f, str), f.fallback)
+        def f_str(obj, n=1):
+            return "str"
+        self.assertIs(grail.generic_register(f, str, f_str), f_str)
+        self.assertEqual(f("a"), "str")
+        with self.assertRaisesRegex(TypeError, "duplicate"):
+            grail.generic_register(f, str, f_str)
+        with self.assertRaisesRegex(TypeError, "duplicate"):
+            grail.generic_impl(f)(f_int)
+        with self.assertRaisesRegex(TypeError, "call shape"):
+            grail.generic_register(f, float, lambda obj: 0)
+        @grail.generic_override(f)
+        def _(obj: int, n=1):
+            return "int2"
+        self.assertEqual(f(1), "int2")
+        self.assertIs(grail.generic_override(f, str, f_int), f_int)
+        self.assertEqual(f("a"), "int")
+        self.assertEqual(grail.generic_version(f), 4)
+        with self.assertRaises(TypeError):
+            grail.generic_override(f, str)
+        with self.assertRaises(TypeError):
+            grail.generic_register(f, str, f_str, True)
+        for func in (grail.generic_impl, grail.generic_override,
+                     grail.generic_fallback, grail.generic_version):
+            with self.assertRaisesRegex(TypeError, "expected a generic function"):
+                func(len)
+        with self.assertRaisesRegex(TypeError, "expected a generic function"):
+            grail.generic_register(len, int, f_int)
+        with self.assertRaisesRegex(TypeError, "expected a generic function"):
+            grail.generic_dispatch(len, int)
+
+    def test_module_functions_pair(self):
+        @grail.record
+        class V:
+            x: int
+        @grail.generic_impl(grail.ops.add)
+        def _(a: V, b: int):
+            return V(a.x + b)
+        self.assertEqual(V(1) + 2, V(3))
+        grail.generic_override(grail.ops.add, (V, int), lambda a, b: V(0))
+        self.assertEqual(V(1) + 2, V(0))
+        self.assertIsNotNone(grail.generic_dispatch(grail.ops.add, (V, int)))
+
     def test_registration_validation(self):
         @grail.generic
         def f(obj, n=1):

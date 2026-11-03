@@ -23,8 +23,8 @@ The `grail` module provides:
   references with CPython's usual semantics.  Records support
   `grail.replace` and `copy.replace`, positional class patterns, copying
   and pickling.
-- **Generic functions** (`@grail.generic`, `.impl`, `.register`,
-  `.override`): single dispatch on the first argument with the same MRO and
+- **Generic functions** (`@grail.generic`, `grail.generic_impl`,
+  `generic_register`, `generic_override`): single dispatch on the first argument with the same MRO and
   ABC rules as `functools.singledispatch`.  Exact-type calls are resolved
   without locks; inherited selections are cached.
 - **Operators** (`grail.ops`): registrations for `+ - * /` on exact operand

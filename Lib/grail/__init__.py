@@ -27,7 +27,9 @@ from _grail_draft import mutate, finish, original
 from ._parallel import pmap, parallel_reduce
 
 backend = _core.backend
-__all__ = ["record", "field", "replace", "generic", "ops", "repr", "eq", "hash",
+__all__ = ["record", "field", "replace", "generic", "generic_impl", "generic_register",
+           "generic_override", "generic_dispatch", "generic_fallback",
+           "generic_version", "is_generic", "ops", "repr", "eq", "hash",
            "record_fields", "record_values", "is_record", "is_value_record",
            "conforms", "substitutable", "Record", "MISSING",
            "PMap", "PSet", "PVector", "FloatVector", "IntVector", "Atom",
@@ -362,6 +364,51 @@ def _register_decorator(g, args, override):
     else:
         raise TypeError("expected an implementation, or a type and implementation")
     return g.register(dispatch, func, override=override)
+
+
+def is_generic(value, /):
+    return isinstance(value, _core.Generic)
+
+
+def _operation(operation):
+    if not isinstance(operation, _core.Generic):
+        raise TypeError("expected a generic function, not "
+                        f"{type(operation).__name__}")
+    return operation
+
+
+# Module-level spellings of the Generic methods. The stub types generic()
+# as returning its fallback unchanged, so a type checker sees only these.
+def generic_impl(operation, /):
+    return _operation(operation).impl
+
+
+def generic_register(operation, dispatch, func, /):
+    return _operation(operation).register(dispatch, func)
+
+
+def generic_override(operation, /, *args):
+    g = _operation(operation)
+    if not args:
+        def decorator(func, /):
+            return g.override(func)
+        return decorator
+    if len(args) != 2:
+        raise TypeError("generic_override takes a generic function, optionally "
+                        "followed by a dispatch key and an implementation")
+    return g.override(*args)
+
+
+def generic_dispatch(operation, dispatch, /):
+    return _operation(operation).dispatch(dispatch)
+
+
+def generic_fallback(operation, /):
+    return _operation(operation).fallback
+
+
+def generic_version(operation, /):
+    return _operation(operation).version
 
 
 # Native fallbacks execute generated C record behavior. Their hooks can be
