@@ -4,6 +4,7 @@
 #include "pycore_abstract.h"      // _PyObject_HasLen()
 #include "pycore_call.h"          // _PyObject_CallNoArgs()
 #include "pycore_ceval.h"         // _PyEval_GetBuiltin()
+#include "pycore_critical_section.h" // Py_BEGIN_CRITICAL_SECTION()
 #include "pycore_genobject.h"     // _PyCoro_GetAwaitableIter()
 #include "pycore_iterobject.h"    // _PyCallIter_NewEx()
 #include "pycore_object.h"        // _PyObject_GC_TRACK()
@@ -238,11 +239,24 @@ PyCallIter_New(PyObject *callable, PyObject *sentinel)
     return _PyCallIter_NewEx(callable, sentinel, NULL);
 }
 
+/* In the free-threaded build the iterator can be shared between threads.
+   it_callable and it_sentinel are only written with the iterator's
+   critical section held, and readers take strong references under it, so
+   a concurrent exhaust or __setstate__() cannot free an object that is
+   still in use. */
+
 static void
 calliter_exhaust(calliterobject *it)
 {
-    Py_CLEAR(it->it_callable);
-    Py_CLEAR(it->it_sentinel);
+    PyObject *callable, *sentinel;
+    Py_BEGIN_CRITICAL_SECTION(it);
+    callable = it->it_callable;
+    sentinel = it->it_sentinel;
+    FT_ATOMIC_STORE_PTR_RELAXED(it->it_callable, NULL);
+    it->it_sentinel = NULL;
+    Py_END_CRITICAL_SECTION();
+    Py_XDECREF(callable);
+    Py_XDECREF(sentinel);
 }
 
 static void
@@ -270,38 +284,51 @@ static PyObject *
 calliter_iternext(PyObject *op)
 {
     calliterobject *it = (calliterobject*)op;
+    PyObject *callable, *sentinel, *stop_exc;
     PyObject *result;
 
-    if (it->it_callable == NULL) {
+    Py_BEGIN_CRITICAL_SECTION(it);
+    callable = Py_XNewRef(it->it_callable);
+    sentinel = Py_XNewRef(it->it_sentinel);
+    stop_exc = Py_NewRef(it->it_stop_exc);
+    Py_END_CRITICAL_SECTION();
+
+    if (callable == NULL) {
+        Py_DECREF(stop_exc);
         return NULL;
     }
 
-    result = _PyObject_CallNoArgs(it->it_callable);
+    result = _PyObject_CallNoArgs(callable);
     /* The call can exhaust the iterator re-entrantly. */
-    if (result != NULL && it->it_callable != NULL) {
-        if (it->it_sentinel == NULL) {
-            return result; /* Common case, fast path */
+    if (result != NULL &&
+        FT_ATOMIC_LOAD_PTR_RELAXED(it->it_callable) != NULL)
+    {
+        int ok = 0;
+        if (sentinel != NULL) {
+            ok = PyObject_RichCompareBool(sentinel, result, Py_EQ);
         }
-        int ok = PyObject_RichCompareBool(it->it_sentinel, result, Py_EQ);
         if (ok == 0) {
-            return result; /* Common case, fast path */
+            goto done; /* Common case, fast path */
         }
-
         if (ok > 0) {
             calliter_exhaust(it);
         }
     }
-    else if (PyErr_ExceptionMatches(it->it_stop_exc)) {
+    else if (result == NULL && PyErr_ExceptionMatches(stop_exc)) {
         PyErr_Clear();
         calliter_exhaust(it);
     }
-    else if (PyErr_ExceptionMatches(PyExc_StopIteration)) {
+    else if (result == NULL && PyErr_ExceptionMatches(PyExc_StopIteration)) {
         /* It would be mistaken for the end of the iteration (see PEP 479). */
         _PyErr_FormatFromCause(PyExc_RuntimeError,
                                "callable raised StopIteration");
     }
-    Py_XDECREF(result);
-    return NULL;
+    Py_CLEAR(result);
+done:
+    Py_DECREF(callable);
+    Py_XDECREF(sentinel);
+    Py_DECREF(stop_exc);
+    return result;
 }
 
 static PyObject *
@@ -314,22 +341,26 @@ calliter_reduce(PyObject *op, PyObject *Py_UNUSED(ignored))
      * call must be before access of iterator pointers.
      * see issue #101765 */
 
+    PyObject *res;
+    Py_BEGIN_CRITICAL_SECTION(it);
     if (it->it_callable == NULL) {
-        return Py_BuildValue("N(())", iter);
+        res = Py_BuildValue("N(())", iter);
     }
     /* Only the sentinel can be passed as an argument of iter(), so other
        attributes are restored from the state (see calliter_setstate()). */
-    if (it->it_sentinel == NULL) {
-        return Py_BuildValue("N(OO)(()O)", iter, it->it_callable, Py_None,
-                             it->it_stop_exc);
+    else if (it->it_sentinel == NULL) {
+        res = Py_BuildValue("N(OO)(()O)", iter, it->it_callable, Py_None,
+                            it->it_stop_exc);
     }
     else if (it->it_stop_exc == PyExc_StopIteration) {
-        return Py_BuildValue("N(OO)", iter, it->it_callable, it->it_sentinel);
+        res = Py_BuildValue("N(OO)", iter, it->it_callable, it->it_sentinel);
     }
     else {
-        return Py_BuildValue("N(OO)((O)O)", iter, it->it_callable, Py_None,
-                             it->it_sentinel, it->it_stop_exc);
+        res = Py_BuildValue("N(OO)((O)O)", iter, it->it_callable, Py_None,
+                            it->it_sentinel, it->it_stop_exc);
     }
+    Py_END_CRITICAL_SECTION();
+    return res;
 }
 
 static PyObject *
@@ -349,12 +380,18 @@ calliter_setstate(PyObject *op, PyObject *state)
     if (_PyEval_CheckExceptTypeValid(_PyThreadState_GET(), stop_exc) < 0) {
         return NULL;
     }
+    PyObject *old_sentinel = NULL, *old_stop_exc = NULL;
+    Py_BEGIN_CRITICAL_SECTION(it);
     if (it->it_callable != NULL) {
-        Py_XSETREF(it->it_sentinel,
-                   PyTuple_GET_SIZE(sentinel) ?
-                   Py_NewRef(PyTuple_GET_ITEM(sentinel, 0)) : NULL);
-        Py_SETREF(it->it_stop_exc, Py_NewRef(stop_exc));
+        old_sentinel = it->it_sentinel;
+        old_stop_exc = it->it_stop_exc;
+        it->it_sentinel = PyTuple_GET_SIZE(sentinel) ?
+                          Py_NewRef(PyTuple_GET_ITEM(sentinel, 0)) : NULL;
+        it->it_stop_exc = Py_NewRef(stop_exc);
     }
+    Py_END_CRITICAL_SECTION();
+    Py_XDECREF(old_sentinel);
+    Py_XDECREF(old_stop_exc);
     Py_RETURN_NONE;
 
 error:
