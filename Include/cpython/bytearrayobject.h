@@ -30,7 +30,7 @@ static inline char* PyByteArray_AS_STRING(PyObject *op)
 static inline Py_ssize_t PyByteArray_GET_SIZE(PyObject *op) {
     PyByteArrayObject *self = _PyByteArray_CAST(op);
 #ifdef Py_GIL_DISABLED
-    return _Py_atomic_load_ssize_relaxed(&(_PyVarObject_CAST(self)->ob_size));
+    return _Py_atomic_load_ssize_acquire(&(_PyVarObject_CAST(self)->ob_size));
 #else
     return Py_SIZE(self);
 #endif

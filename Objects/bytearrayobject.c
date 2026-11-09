@@ -43,6 +43,21 @@ _getbytevalue(PyObject* arg, int *value)
     return 1;
 }
 
+// Set the size of a bytearray that may be visible to other threads.  In the
+// free-threaded build this is a release store, paired with the acquire load
+// in PyByteArray_GET_SIZE(), so a thread that observes the new size via
+// len() also observes writes made before it.  The buffer contents are only
+// read with the object locked.
+static inline void
+bytearray_set_size(PyByteArrayObject *self, Py_ssize_t size)
+{
+#ifdef Py_GIL_DISABLED
+    _Py_atomic_store_ssize_release(&_PyVarObject_CAST(self)->ob_size, size);
+#else
+    Py_SET_SIZE(self, size);
+#endif
+}
+
 static inline void
 bytearray_write_trailing_null_byte(PyByteArrayObject *self)
 {
@@ -67,7 +82,7 @@ bytearray_reinit_from_bytes(PyByteArrayObject *self, Py_ssize_t size)
     }
 
     self->ob_bytes = self->ob_start = PyBytes_AS_STRING(self->ob_bytes_object);
-    Py_SET_SIZE(self, size);
+    bytearray_set_size(self, size);
     FT_ATOMIC_STORE_SSIZE_RELAXED(self->ob_alloc, alloc);
 }
 
@@ -314,7 +329,7 @@ bytearray_resize_lock_held(PyObject *self, Py_ssize_t requested_size)
         }
         else {
             /* Minor downsize; quick exit */
-            Py_SET_SIZE(self, size);
+            bytearray_set_size(_PyByteArray_CAST(self), size);
             /* Add mid-buffer null; end provided by bytes. */
             bytearray_write_trailing_null_byte(_PyByteArray_CAST(self));
             return 0;
@@ -648,7 +663,7 @@ bytearray_setslice_linear(PyByteArrayObject *self,
             }
             /* memmove() removed bytes, the bytearray object cannot be
                restored in its previous state. */
-            Py_SET_SIZE(self, Py_SIZE(self) + growth);
+            bytearray_set_size(self, Py_SIZE(self) + growth);
             res = -1;
         }
         buf = PyByteArray_AS_STRING(self);
@@ -1167,7 +1182,7 @@ slowpath:
         Py_ssize_t needed =
             self->ob_start - self->ob_bytes + Py_SIZE(self) + 1;
         if (needed < self->ob_alloc) {
-            Py_SET_SIZE(self, Py_SIZE(self) + 1);
+            bytearray_set_size(self, Py_SIZE(self) + 1);
             bytearray_write_trailing_null_byte(self);
         }
         else if (PyByteArray_Resize((PyObject *)self, Py_SIZE(self)+1) < 0) {
@@ -1674,7 +1689,7 @@ bytearray_take_bytes_impl(PyByteArrayObject *self, PyObject *n)
             return NULL;
         }
         self->ob_start += to_take;
-        Py_SET_SIZE(self, remaining_length);
+        bytearray_set_size(self, remaining_length);
         return ret;
     }
 
