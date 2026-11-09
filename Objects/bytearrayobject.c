@@ -83,6 +83,8 @@ bytearray_reinit_from_bytes(PyByteArrayObject *self, Py_ssize_t size)
 
     self->ob_bytes = self->ob_start = PyBytes_AS_STRING(self->ob_bytes_object);
     bytearray_set_size(self, size);
+    // Relaxed is enough: ob_alloc is only reported by __alloc__() and
+    // __sizeof__(), and nothing is published through it.
     FT_ATOMIC_STORE_SSIZE_RELAXED(self->ob_alloc, alloc);
 }
 
