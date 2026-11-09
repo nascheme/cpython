@@ -200,6 +200,23 @@ freeblock(dequeobject *deque, block *b)
     }
 }
 
+/* In the free-threaded build, ob_size is read without the lock by
+   deque_len().  Stores use release ordering so a reader that observes a
+   new size also observes the stores that preceded it. */
+static inline void
+deque_set_size(dequeobject *deque, Py_ssize_t size)
+{
+    FT_ATOMIC_STORE_SSIZE_RELEASE(_PyVarObject_CAST(deque)->ob_size, size);
+}
+
+/* maxlen is read without the lock by __reduce__, __repr__ and the maxlen
+   getter, but a repeated __init__ call can change it. */
+static inline Py_ssize_t
+deque_load_maxlen(dequeobject *deque)
+{
+    return FT_ATOMIC_LOAD_SSIZE_ACQUIRE(deque->maxlen);
+}
+
 static PyObject *
 deque_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
@@ -220,7 +237,7 @@ deque_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     MARK_END(b->rightlink);
 
     assert(BLOCKLEN >= 2);
-    Py_SET_SIZE(deque, 0);
+    deque_set_size(deque, 0);
     deque->leftblock = b;
     deque->rightblock = b;
     deque->leftindex = CENTER + 1;
@@ -255,7 +272,7 @@ deque_pop_impl(dequeobject *deque)
     }
     item = deque->rightblock->data[deque->rightindex];
     deque->rightindex--;
-    Py_SET_SIZE(deque, Py_SIZE(deque) - 1);
+    deque_set_size(deque, Py_SIZE(deque) - 1);
     deque->state++;
 
     if (deque->rightindex < 0) {
@@ -301,7 +318,7 @@ deque_popleft_impl(dequeobject *deque)
     assert(deque->leftblock != NULL);
     item = deque->leftblock->data[deque->leftindex];
     deque->leftindex++;
-    Py_SET_SIZE(deque, Py_SIZE(deque) - 1);
+    deque_set_size(deque, Py_SIZE(deque) - 1);
     deque->state++;
 
     if (deque->leftindex == BLOCKLEN) {
@@ -354,7 +371,7 @@ deque_append_lock_held(dequeobject *deque, PyObject *item, Py_ssize_t maxlen)
         MARK_END(b->rightlink);
         deque->rightindex = -1;
     }
-    Py_SET_SIZE(deque, Py_SIZE(deque) + 1);
+    deque_set_size(deque, Py_SIZE(deque) + 1);
     deque->rightindex++;
     deque->rightblock->data[deque->rightindex] = item;
     if (NEEDS_TRIM(deque, maxlen)) {
@@ -403,7 +420,7 @@ deque_appendleft_lock_held(dequeobject *deque, PyObject *item,
         MARK_END(b->leftlink);
         deque->leftindex = BLOCKLEN;
     }
-    Py_SET_SIZE(deque, Py_SIZE(deque) + 1);
+    deque_set_size(deque, Py_SIZE(deque) + 1);
     deque->leftindex--;
     deque->leftblock->data[deque->leftindex] = item;
     if (NEEDS_TRIM(deque, maxlen)) {
@@ -759,7 +776,7 @@ deque_clear(PyObject *self)
     /* Set the deque to be empty using the newly allocated block */
     MARK_END(b->leftlink);
     MARK_END(b->rightlink);
-    Py_SET_SIZE(deque, 0);
+    deque_set_size(deque, 0);
     deque->leftblock = b;
     deque->rightblock = b;
     deque->leftindex = CENTER + 1;
@@ -858,7 +875,7 @@ deque_inplace_repeat_impl(dequeobject *deque, Py_ssize_t n)
             if (deque->rightindex == BLOCKLEN - 1) {
                 block *b = newblock(deque);
                 if (b == NULL) {
-                    Py_SET_SIZE(deque, Py_SIZE(deque) + i);
+                    deque_set_size(deque, Py_SIZE(deque) + i);
                     return NULL;
                 }
                 b->leftlink = deque->rightblock;
@@ -877,7 +894,7 @@ deque_inplace_repeat_impl(dequeobject *deque, Py_ssize_t n)
                 deque->rightblock->data[deque->rightindex] = Py_NewRef(item);
             }
         }
-        Py_SET_SIZE(deque, Py_SIZE(deque) + i);
+        deque_set_size(deque, Py_SIZE(deque) + i);
         return Py_NewRef(deque);
     }
 
@@ -1236,7 +1253,7 @@ static Py_ssize_t
 deque_len(PyObject *self)
 {
     PyVarObject *deque = _PyVarObject_CAST(self);
-    return FT_ATOMIC_LOAD_SSIZE(deque->ob_size);
+    return FT_ATOMIC_LOAD_SSIZE_ACQUIRE(deque->ob_size);
 }
 
 /*[clinic input]
@@ -1612,13 +1629,12 @@ deque___reduce___impl(dequeobject *deque)
         return NULL;
     }
 
-    // It's safe to access deque->maxlen here without holding the per object
-    // lock for deque; deque->maxlen is only assigned during construction.
-    if (deque->maxlen < 0) {
+    Py_ssize_t maxlen = deque_load_maxlen(deque);
+    if (maxlen < 0) {
         return Py_BuildValue("O()NN", Py_TYPE(deque), state, it);
     }
     else {
-        return Py_BuildValue("O(()n)NN", Py_TYPE(deque), deque->maxlen, state, it);
+        return Py_BuildValue("O(()n)NN", Py_TYPE(deque), maxlen, state, it);
     }
 }
 
@@ -1642,7 +1658,7 @@ deque_repr(PyObject *deque)
         Py_ReprLeave(deque);
         return NULL;
     }
-    Py_ssize_t maxlen = dequeobject_CAST(deque)->maxlen;
+    Py_ssize_t maxlen = deque_load_maxlen(dequeobject_CAST(deque));
     if (maxlen >= 0)
         result = PyUnicode_FromFormat("%s(%R, maxlen=%zd)",
                                       _PyType_Name(Py_TYPE(deque)), aslist,
@@ -1760,7 +1776,7 @@ deque_init_impl(dequeobject *deque, PyObject *iterable, PyObject *maxlenobj)
             return -1;
         }
     }
-    deque->maxlen = maxlen;
+    FT_ATOMIC_STORE_SSIZE_RELEASE(deque->maxlen, maxlen);
     if (Py_SIZE(deque) > 0)
         (void)deque_clear((PyObject *)deque);
     if (iterable != NULL) {
@@ -1798,9 +1814,10 @@ static PyObject *
 deque_get_maxlen(PyObject *self, void *Py_UNUSED(closure))
 {
     dequeobject *deque = dequeobject_CAST(self);
-    if (deque->maxlen < 0)
+    Py_ssize_t maxlen = deque_load_maxlen(deque);
+    if (maxlen < 0)
         Py_RETURN_NONE;
-    return PyLong_FromSsize_t(deque->maxlen);
+    return PyLong_FromSsize_t(maxlen);
 }
 
 static PyObject *deque_reviter(dequeobject *deque);
