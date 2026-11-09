@@ -325,7 +325,10 @@ can_modify_dict(PyDictObject *mp)
 #define _PyAnyDict_CAST(op) \
     (assert(PyAnyDict_Check(op)), _Py_CAST(PyDictObject*, op))
 
-#define GET_USED(ep) FT_ATOMIC_LOAD_SSIZE_RELAXED((ep)->ma_used)
+// ma_used is published with a release store after the entry stores it
+// accounts for, and read with an acquire load, so a reader that observes a
+// new size also observes those entries.
+#define GET_USED(ep) FT_ATOMIC_LOAD_SSIZE_ACQUIRE((ep)->ma_used)
 
 #define STORE_KEY(ep, key) FT_ATOMIC_STORE_PTR_RELEASE((ep)->me_key, key)
 #define STORE_VALUE(ep, value) FT_ATOMIC_STORE_PTR_RELEASE((ep)->me_value, value)
@@ -333,7 +336,7 @@ can_modify_dict(PyDictObject *mp)
 #define STORE_HASH(ep, hash) FT_ATOMIC_STORE_SSIZE_RELAXED((ep)->me_hash, hash)
 #define STORE_KEYS_USABLE(keys, usable) FT_ATOMIC_STORE_SSIZE_RELAXED(keys->dk_usable, usable)
 #define STORE_KEYS_NENTRIES(keys, nentries) FT_ATOMIC_STORE_SSIZE_RELAXED(keys->dk_nentries, nentries)
-#define STORE_USED(mp, used) FT_ATOMIC_STORE_SSIZE_RELAXED(mp->ma_used, used)
+#define STORE_USED(mp, used) FT_ATOMIC_STORE_SSIZE_RELEASE(mp->ma_used, used)
 
 #define PERTURB_SHIFT 5
 
@@ -2133,7 +2136,6 @@ insert_to_emptydict(PyDictObject *mp,
         ep->me_hash = hash;
         STORE_VALUE(ep, value);
     }
-    STORE_USED(mp, mp->ma_used + 1);
     newkeys->dk_usable--;
     newkeys->dk_nentries++;
     // We store the keys last so no one can see them in a partially inconsistent
@@ -2142,6 +2144,7 @@ insert_to_emptydict(PyDictObject *mp,
     // set_keys here because the transition from empty to non-empty is safe
     // as the empty keys will never be freed.
     FT_ATOMIC_STORE_PTR_RELEASE(mp->ma_keys, newkeys);
+    STORE_USED(mp, mp->ma_used + 1);
     return 0;
 }
 
@@ -3013,13 +3016,15 @@ delitem_common(PyDictObject *mp, Py_hash_t hash, Py_ssize_t ix,
 
     PyObject *old_key;
 
-    STORE_USED(mp, mp->ma_used - 1);
+    // Publish the new size after the entry is removed, but before any
+    // DECREF can run arbitrary code.
     if (_PyDict_HasSplitTable(mp)) {
         assert(old_value == mp->ma_values->values[ix]);
         STORE_SPLIT_VALUE(mp, ix, NULL);
         assert(ix < SHARED_KEYS_MAX_SIZE);
         /* Update order */
         delete_index_from_values(mp->ma_values, ix);
+        STORE_USED(mp, mp->ma_used - 1);
         ASSERT_CONSISTENT(mp);
     }
     else {
@@ -3041,6 +3046,7 @@ delitem_common(PyDictObject *mp, Py_hash_t hash, Py_ssize_t ix,
             STORE_VALUE(ep, NULL);
             STORE_HASH(ep, 0);
         }
+        STORE_USED(mp, mp->ma_used - 1);
         Py_DECREF(old_key);
     }
     Py_DECREF(old_value);
@@ -6170,7 +6176,7 @@ dictiter_iternext_threadsafe(PyDictObject *d, PyObject *self,
 
     assert (PyAnyDict_Check(d));
 
-    if (di->di_used != _Py_atomic_load_ssize_relaxed(&d->ma_used)) {
+    if (di->di_used != GET_USED(d)) {
         PyErr_SetString(PyExc_RuntimeError,
                         "dictionary changed size during iteration");
         di->di_used = -1; /* Make this state sticky */

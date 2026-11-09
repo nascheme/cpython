@@ -55,7 +55,8 @@ static inline Py_ssize_t PyDict_GET_SIZE(PyObject *op) {
     assert(PyAnyDict_Check(op));
     mp = _Py_CAST(PyDictObject*, op);
 #ifdef Py_GIL_DISABLED
-    return _Py_atomic_load_ssize_relaxed(&mp->ma_used);
+    // Acquire pairs with the release store that publishes a new size.
+    return _Py_atomic_load_ssize_acquire(&mp->ma_used);
 #else
     return mp->ma_used;
 #endif
