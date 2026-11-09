@@ -311,16 +311,16 @@ set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
     if (freeslot->hash != -1) {
         goto restart;
     }
-    FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used + 1);
     FT_ATOMIC_STORE_SSIZE_RELAXED(freeslot->hash, hash);
     FT_ATOMIC_STORE_PTR_RELEASE(freeslot->key, key);
+    FT_ATOMIC_STORE_SSIZE_RELEASE(so->used, so->used + 1);
     return 0;
 
   found_unused:
     so->fill++;
-    FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used + 1);
     FT_ATOMIC_STORE_SSIZE_RELAXED(entry->hash, hash);
     FT_ATOMIC_STORE_PTR_RELEASE(entry->key, key);
+    FT_ATOMIC_STORE_SSIZE_RELEASE(so->used, so->used + 1);
     if ((size_t)so->fill*5 < mask*3)
         return 0;
     return set_table_resize(so, so->used>50000 ? so->used*2 : so->used*4);
@@ -591,8 +591,8 @@ set_discard_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
     assert(status == SET_LOOKKEY_FOUND);
     old_key = entry->key;
     FT_ATOMIC_STORE_SSIZE_RELAXED(entry->hash, -1);
-    FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used - 1);
     FT_ATOMIC_STORE_PTR_RELEASE(entry->key, dummy);
+    FT_ATOMIC_STORE_SSIZE_RELEASE(so->used, so->used - 1);
     Py_DECREF(old_key);
     return DISCARD_FOUND;
 }
@@ -636,7 +636,7 @@ set_empty_to_minsize(PySetObject *so)
     FT_ATOMIC_STORE_PTR_RELEASE(so->table, NULL);
     set_zero_table(so->smalltable, PySet_MINSIZE);
     so->fill = 0;
-    FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, 0);
+    FT_ATOMIC_STORE_SSIZE_RELEASE(so->used, 0);
     FT_ATOMIC_STORE_SSIZE_RELEASE(so->mask, PySet_MINSIZE - 1);
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->hash, -1);
     FT_ATOMIC_STORE_PTR_RELEASE(so->table, so->smalltable);
@@ -818,8 +818,7 @@ done:
 static Py_ssize_t
 set_len(PyObject *self)
 {
-    PySetObject *so = _PySet_CAST(self);
-    return FT_ATOMIC_LOAD_SSIZE_RELAXED(so->used);
+    return PySet_GET_SIZE(self);
 }
 
 static int
@@ -862,7 +861,7 @@ set_merge_lock_held(PySetObject *so, PyObject *otherset)
             }
         }
         so->fill = other->fill;
-        FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, other->used);
+        FT_ATOMIC_STORE_SSIZE_RELEASE(so->used, other->used);
         return 0;
     }
 
@@ -871,7 +870,6 @@ set_merge_lock_held(PySetObject *so, PyObject *otherset)
         setentry *newtable = so->table;
         size_t newmask = (size_t)so->mask;
         so->fill = other->used;
-        FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, other->used);
         for (i = other->mask + 1; i > 0 ; i--, other_entry++) {
             key = other_entry->key;
             if (key != NULL && key != dummy) {
@@ -879,6 +877,7 @@ set_merge_lock_held(PySetObject *so, PyObject *otherset)
                                  other_entry->hash);
             }
         }
+        FT_ATOMIC_STORE_SSIZE_RELEASE(so->used, other->used);
         return 0;
     }
 
@@ -923,9 +922,9 @@ set_pop_impl(PySetObject *so)
             entry = so->table;
     }
     FT_ATOMIC_STORE_SSIZE_RELAXED(entry->hash, -1);
-    FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used - 1);
     key = entry->key;
     FT_ATOMIC_STORE_PTR_RELEASE(entry->key, dummy);
+    FT_ATOMIC_STORE_SSIZE_RELEASE(so->used, so->used - 1);
     so->finger = entry - so->table + 1;   /* next place to start */
     return key;
 }
@@ -1056,7 +1055,7 @@ setiter_len(PyObject *op, PyObject *Py_UNUSED(ignored))
 {
     setiterobject *si = (setiterobject*)op;
     Py_ssize_t len = 0;
-    if (si->si_set != NULL && si->si_used == si->si_set->used)
+    if (si->si_set != NULL && si->si_used == PySet_GET_SIZE(si->si_set))
         len = si->len;
     return PyLong_FromSsize_t(len);
 }
@@ -1101,6 +1100,8 @@ static PyObject *setiter_iternext(PyObject *self)
         return NULL;
     assert (PyAnySet_Check(so));
 
+    // Relaxed is enough: this is only a mutation check and the table is
+    // read below with the set locked.
     Py_ssize_t so_used = FT_ATOMIC_LOAD_SSIZE_RELAXED(so->used);
     Py_ssize_t si_used = FT_ATOMIC_LOAD_SSIZE_RELAXED(si->si_used);
     if (si_used != so_used) {
@@ -1521,8 +1522,8 @@ set_swap_bodies(PySetObject *a, PySetObject *b)
 
     t = a->fill;     a->fill   = b->fill;        b->fill  = t;
     t = a->used;
-    FT_ATOMIC_STORE_SSIZE_RELAXED(a->used, b->used);
-    FT_ATOMIC_STORE_SSIZE_RELAXED(b->used, t);
+    FT_ATOMIC_STORE_SSIZE_RELEASE(a->used, b->used);
+    FT_ATOMIC_STORE_SSIZE_RELEASE(b->used, t);
     t = a->mask;
     FT_ATOMIC_STORE_SSIZE_RELEASE(a->mask, b->mask);
     FT_ATOMIC_STORE_SSIZE_RELEASE(b->mask, t);

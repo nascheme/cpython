@@ -63,7 +63,7 @@ typedef struct {
 
 static inline Py_ssize_t PySet_GET_SIZE(PyObject *so) {
 #ifdef Py_GIL_DISABLED
-    return _Py_atomic_load_ssize_relaxed(&(_PySet_CAST(so)->used));
+    return _Py_atomic_load_ssize_acquire(&(_PySet_CAST(so)->used));
 #else
     return _PySet_CAST(so)->used;
 #endif
