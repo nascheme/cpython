@@ -29,6 +29,20 @@ PyAPI_FUNC(int) _PyList_GetItemRefNoLock(PyListObject *, Py_ssize_t, _PyStackRef
 
 #define _PyList_ITEMS(op) _Py_RVALUE(_PyList_CAST(op)->ob_item)
 
+// Set the size of a list that may be visible to other threads.  In the
+// free-threaded build this is a release store: item stores made before it
+// are visible to any reader that observes the new size via PyList_GET_SIZE().
+// Items must be stored before the size that exposes them is published.
+static inline void
+_PyList_SetSize(PyListObject *self, Py_ssize_t size)
+{
+#ifdef Py_GIL_DISABLED
+    _Py_atomic_store_ssize_release(&_PyVarObject_CAST(self)->ob_size, size);
+#else
+    Py_SET_SIZE(self, size);
+#endif
+}
+
 PyAPI_FUNC(int)
 _PyList_AppendTakeRefListResize(PyListObject *self, PyObject *newitem);
 
@@ -47,7 +61,7 @@ _PyList_AppendTakeRef(PyListObject *self, PyObject *newitem)
 #else
         PyList_SET_ITEM(self, len, newitem);
 #endif
-        Py_SET_SIZE(self, len + 1);
+        _PyList_SetSize(self, len + 1);
         return 0;
     }
     return _PyList_AppendTakeRefListResize(self, newitem);

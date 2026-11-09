@@ -30,7 +30,9 @@ typedef struct {
 static inline Py_ssize_t PyList_GET_SIZE(PyObject *op) {
     PyListObject *list = _PyList_CAST(op);
 #ifdef Py_GIL_DISABLED
-    return _Py_atomic_load_ssize_relaxed(&(_PyVarObject_CAST(list)->ob_size));
+    // Acquire pairs with the release store that publishes a new size, so a
+    // reader that observes the size also observes the preceding item stores.
+    return _Py_atomic_load_ssize_acquire(&(_PyVarObject_CAST(list)->ob_size));
 #else
     return Py_SIZE(list);
 #endif
