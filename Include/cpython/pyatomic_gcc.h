@@ -581,6 +581,18 @@ _Py_atomic_store_uint8_release(uint8_t *obj, uint8_t value)
 { __atomic_store_n(obj, value, __ATOMIC_RELEASE); }
 
 static inline void
+_Py_atomic_store_uint16_release(uint16_t *obj, uint16_t value)
+{ __atomic_store_n(obj, value, __ATOMIC_RELEASE); }
+
+static inline uint8_t
+_Py_atomic_load_uint8_acquire(const uint8_t *obj)
+{ return __atomic_load_n(obj, __ATOMIC_ACQUIRE); }
+
+static inline uint16_t
+_Py_atomic_load_uint16_acquire(const uint16_t *obj)
+{ return __atomic_load_n(obj, __ATOMIC_ACQUIRE); }
+
+static inline void
 _Py_atomic_store_ssize_release(Py_ssize_t *obj, Py_ssize_t value)
 { __atomic_store_n(obj, value, __ATOMIC_RELEASE); }
 

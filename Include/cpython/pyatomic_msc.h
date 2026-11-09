@@ -1087,6 +1087,45 @@ _Py_atomic_store_uint8_release(uint8_t *obj, uint8_t value)
 }
 
 static inline void
+_Py_atomic_store_uint16_release(uint16_t *obj, uint16_t value)
+{
+#if defined(_M_X64) || defined(_M_IX86)
+    *(uint16_t volatile *)obj = value;
+#elif defined(_M_ARM64)
+    _Py_atomic_ASSERT_ARG_TYPE(unsigned __int16);
+    __stlr16((unsigned __int16 volatile *)obj, (unsigned __int16)value);
+#else
+#  error "no implementation of _Py_atomic_store_uint16_release"
+#endif
+}
+
+static inline uint8_t
+_Py_atomic_load_uint8_acquire(const uint8_t *obj)
+{
+#if defined(_M_X64) || defined(_M_IX86)
+    return *(uint8_t volatile *)obj;
+#elif defined(_M_ARM64)
+    _Py_atomic_ASSERT_ARG_TYPE(unsigned __int8);
+    return (uint8_t)__ldar8((unsigned __int8 volatile *)obj);
+#else
+#  error "no implementation of _Py_atomic_load_uint8_acquire"
+#endif
+}
+
+static inline uint16_t
+_Py_atomic_load_uint16_acquire(const uint16_t *obj)
+{
+#if defined(_M_X64) || defined(_M_IX86)
+    return *(uint16_t volatile *)obj;
+#elif defined(_M_ARM64)
+    _Py_atomic_ASSERT_ARG_TYPE(unsigned __int16);
+    return (uint16_t)__ldar16((unsigned __int16 volatile *)obj);
+#else
+#  error "no implementation of _Py_atomic_load_uint16_acquire"
+#endif
+}
+
+static inline void
 _Py_atomic_store_uint_release(unsigned int *obj, unsigned int value)
 {
 #if defined(_M_X64) || defined(_M_IX86)

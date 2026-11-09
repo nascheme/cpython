@@ -530,6 +530,15 @@ static inline void
 _Py_atomic_store_uint8_release(uint8_t *obj, uint8_t value);
 
 static inline void
+_Py_atomic_store_uint16_release(uint16_t *obj, uint16_t value);
+
+static inline uint8_t
+_Py_atomic_load_uint8_acquire(const uint8_t *obj);
+
+static inline uint16_t
+_Py_atomic_load_uint16_acquire(const uint16_t *obj);
+
+static inline void
 _Py_atomic_store_int_release(int *obj, int value);
 
 static inline int
