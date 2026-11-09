@@ -81,6 +81,13 @@ types like :class:`dict`, :class:`list`, and :class:`set` use internal locks
 to protect against concurrent modifications in ways that behave similarly to
 the GIL.  See :ref:`threadsafety` for the guarantees provided by built-in types.
 
+CPython also provides release-acquire memory ordering: when a thread reads a
+shared object reference written by another thread, it sees the writes that
+preceded publication of that reference. This does not make multi-step
+operations atomic or impose a global order on accesses to independent objects.
+See :ref:`threadsafety-memory-ordering` for the scope and limits of these
+guarantees.
+
 .. note::
 
    It's recommended to use the :class:`threading.Lock` or other synchronization

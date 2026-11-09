@@ -743,6 +743,17 @@ Glossary
       :term:`race conditions <race condition>` and
       :term:`data races <data race>`.
 
+   happens-before
+      An ordering relationship between operations that determines which
+      writes are visible to a thread. Operations in one thread are ordered
+      by program order; synchronization can establish ordering between
+      threads. If a write happens-before a read of the same state, that
+      read sees the write or a later write, rather than an older value.
+      The relationship is transitive: if A happens-before B and B
+      happens-before C, then A happens-before C. Merely running earlier
+      in time does not establish this relationship between threads.
+      See :ref:`threadsafety-memory-ordering`.
+
    hash-based pyc
       A bytecode cache file that uses the hash rather than the last-modified
       time of the corresponding source file to determine its validity. See

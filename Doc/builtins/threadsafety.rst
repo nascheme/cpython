@@ -13,6 +13,128 @@ For general guidance on writing thread-safe code in free-threaded Python, see
 :ref:`freethreading-python-howto`.
 
 
+.. _threadsafety-memory-ordering:
+
+Memory ordering
+===============
+
+.. impl-detail::
+
+   The guarantees in this section apply to CPython's free-threaded build.
+   They are not a language-level memory model for all Python implementations,
+   nor do they apply automatically to third-party extension types.
+
+Memory ordering describes when changes made by one thread become visible to
+another. It is distinct from atomicity: an operation can make earlier writes
+visible without making a sequence of operations atomic.
+
+CPython provides *release-acquire* (RA) ordering for the shared state described
+below. A write acts as a *release*, and a read that observes that write acts as
+an *acquire*. The write :term:`happens-before` that read: changes made before
+the write are visible to code that runs after the read. These relationships
+are transitive, so a thread can pass on changes it has observed to another
+thread.
+
+Publishing objects
+------------------
+
+Storing an object reference in a built-in container, an instance attribute
+(including an attribute in :attr:`~object.__slots__`), a module global, or a
+closure cell publishes the object. A read that observes that store also
+observes the writes that preceded it, including initialization of the object
+and of other objects reachable from it.
+
+For example, suppose ``shared`` is a dictionary shared by two threads:
+
+.. code-block:: python
+
+   # Producer thread
+   data = {"answer": 42}
+   shared["result"] = data
+
+   # Consumer thread
+   result = shared.get("result")
+   if result is not None:
+       assert result["answer"] == 42
+
+If the consumer reads the reference stored by the producer, it sees the
+initialized dictionary, not a partially initialized object. This example
+assumes that no thread subsequently modifies ``data`` or replaces
+``shared["result"]``. Publication does not protect against later changes,
+create a snapshot, or guarantee how soon another thread will observe the
+store.
+
+Reading scalar state
+--------------------
+
+The same ordering applies to Python-visible scalar state, including the
+length and truth value of built-in containers and scalar attributes exposed
+through C member descriptors. A read that observes a write to such state
+also observes the writes that preceded it.
+
+For example, if one thread appends an item to a list, another thread that
+observes the resulting length also observes the item store that preceded
+the length update. This does not make a length check followed by indexing
+atomic: another thread can still remove the item between those operations.
+
+Explicit synchronization
+------------------------
+
+Synchronization primitives also establish happens-before relationships:
+
+* Releasing a lock happens-before a subsequent successful acquisition of
+  that lock. Writes made while holding the lock are visible to the thread
+  that next acquires it.
+* Actions before calling :meth:`threading.Thread.start` happen-before the
+  new thread's first action. A thread's actions happen-before another
+  thread returns from :meth:`~threading.Thread.join` after its termination.
+  A join that times out does not provide this guarantee.
+* :meth:`threading.Event.set` publishes preceding writes to a thread whose
+  :meth:`~threading.Event.wait` observes the set event, not one whose wait
+  merely times out.
+* With a :class:`threading.Condition`, the notifying thread's writes before
+  releasing the associated lock are visible after a waiting thread
+  reacquires that lock. Notification does not itself release the lock;
+  waiters must still check their condition as described in
+  :ref:`condition-objects`.
+* Putting an item into a :class:`queue.Queue` publishes preceding writes to
+  the thread that retrieves that item with :meth:`~queue.Queue.get`.
+
+Atomicity and limits
+--------------------
+
+The per-operation atomicity guarantees in the following sections still
+apply. For example, if two threads call ``d.pop(key)`` on a dictionary with
+one entry for that key, and no thread reinserts it, only one can remove the
+entry successfully. This does not make a separate lookup followed by a
+deletion atomic. Operations that invoke arbitrary Python code retain the
+qualifications documented below.
+
+RA ordering does not promise *sequential consistency*: there need not be a
+single global order of reads and writes across independent objects. For
+example, initially let ``left = [0]`` and ``right = [0]``:
+
+.. code-block:: python
+
+   # Thread 1
+   left[0] = 1
+   seen_right = right[0]
+
+   # Thread 2
+   right[0] = 1
+   seen_left = left[0]
+
+Both reads are allowed to return ``0``. Neither read then observes the other
+thread's write, so neither establishes a happens-before relationship with
+it. This outcome is called *store buffering*. Use a common lock to protect
+each write-and-read sequence if this outcome must be excluded.
+
+Memory ordering also does not make multi-step operations atomic or prevent
+lock-free readers from seeing intermediate states of multi-element
+mutations. Use explicit synchronization when an algorithm requires a
+consistent view of several pieces of shared state.
+
+
 .. _threadsafety-levels:
 
 Thread safety levels
