@@ -356,7 +356,7 @@ pairwise_traverse(PyObject *op, visitproc visit, void *arg)
 }
 
 static PyObject *
-pairwise_next(PyObject *op)
+pairwise_next_lock_held(PyObject *op)
 {
     pairwiseobject *po = pairwiseobject_CAST(op);
     PyObject *it = po->it;
@@ -407,6 +407,18 @@ pairwise_next(PyObject *op)
 
     Py_XSETREF(po->old, new);
     Py_DECREF(old);
+    return result;
+}
+
+/* Lock so that concurrent calls cannot free po->it, po->old or reuse
+   po->result while another thread uses them. */
+static PyObject *
+pairwise_next(PyObject *op)
+{
+    PyObject *result;
+    Py_BEGIN_CRITICAL_SECTION(op);
+    result = pairwise_next_lock_held(op);
+    Py_END_CRITICAL_SECTION();
     return result;
 }
 
@@ -541,7 +553,7 @@ groupby_step(groupbyobject *gbo)
 }
 
 static PyObject *
-groupby_next(PyObject *op)
+groupby_next_lock_held(PyObject *op)
 {
     PyObject *grouper;
     groupbyobject *gbo = groupbyobject_CAST(op);
@@ -584,6 +596,18 @@ groupby_next(PyObject *op)
         return NULL;
 
     return _PyTuple_FromPairSteal(Py_NewRef(gbo->currkey), grouper);
+}
+
+/* groupby and its _grouper objects share state; both lock the groupby
+   object. */
+static PyObject *
+groupby_next(PyObject *op)
+{
+    PyObject *result;
+    Py_BEGIN_CRITICAL_SECTION(op);
+    result = groupby_next_lock_held(op);
+    Py_END_CRITICAL_SECTION();
+    return result;
 }
 
 static PyType_Slot groupby_slots[] = {
@@ -671,7 +695,7 @@ _grouper_traverse(PyObject *op, visitproc visit, void *arg)
 }
 
 static PyObject *
-_grouper_next(PyObject *op)
+_grouper_next_lock_held(PyObject *op)
 {
     _grouperobject *igo = _grouperobject_CAST(op);
     groupbyobject *gbo = groupbyobject_CAST(igo->parent);
@@ -705,6 +729,17 @@ _grouper_next(PyObject *op)
     Py_CLEAR(gbo->currkey);
 
     return r;
+}
+
+/* Lock the parent groupby object, see groupby_next(). */
+static PyObject *
+_grouper_next(PyObject *op)
+{
+    PyObject *result;
+    Py_BEGIN_CRITICAL_SECTION(_grouperobject_CAST(op)->parent);
+    result = _grouper_next_lock_held(op);
+    Py_END_CRITICAL_SECTION();
+    return result;
 }
 
 static PyType_Slot _grouper_slots[] = {
@@ -1706,7 +1741,7 @@ islice_traverse(PyObject *op, visitproc visit, void *arg)
 }
 
 static PyObject *
-islice_next(PyObject *op)
+islice_next_lock_held(PyObject *op)
 {
     isliceobject *lz = isliceobject_CAST(op);
     PyObject *item;
@@ -1743,6 +1778,18 @@ islice_next(PyObject *op)
 empty:
     Py_CLEAR(lz->it);
     return NULL;
+}
+
+/* Lock so that clearing lz->it cannot free it while another thread
+   uses it. */
+static PyObject *
+islice_next(PyObject *op)
+{
+    PyObject *result;
+    Py_BEGIN_CRITICAL_SECTION(op);
+    result = islice_next_lock_held(op);
+    Py_END_CRITICAL_SECTION();
+    return result;
 }
 
 PyDoc_STRVAR(islice_doc,
@@ -3660,7 +3707,7 @@ count_next(PyObject *op)
 }
 
 static PyObject *
-count_repr(PyObject *op)
+count_repr_lock_held(PyObject *op)
 {
     countobject *lz = countobject_CAST(op);
     if (lz->long_cnt == NULL) {
@@ -3684,6 +3731,18 @@ count_repr(PyObject *op)
     return PyUnicode_FromFormat("%s(%R, %R)",
                                 _PyType_Name(Py_TYPE(lz)),
                                 lz->long_cnt, lz->long_step);
+}
+
+/* Lock so that long_cnt cannot be replaced by count_nextlong() while it
+   is formatted. */
+static PyObject *
+count_repr(PyObject *op)
+{
+    PyObject *result;
+    Py_BEGIN_CRITICAL_SECTION(op);
+    result = count_repr_lock_held(op);
+    Py_END_CRITICAL_SECTION();
+    return result;
 }
 
 static PyType_Slot count_slots[] = {
