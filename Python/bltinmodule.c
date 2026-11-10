@@ -2173,10 +2173,14 @@ builtin_ord(PyObject *module, PyObject *c)
         }
     }
     else if (PyByteArray_Check(c)) {
-        /* XXX Hopefully this is temporary */
+        /* Lock to prevent a concurrent resize from freeing the buffer. */
+        Py_BEGIN_CRITICAL_SECTION(c);
         size = PyByteArray_GET_SIZE(c);
         if (size == 1) {
             ord = (long)((unsigned char)*PyByteArray_AS_STRING(c));
+        }
+        Py_END_CRITICAL_SECTION();
+        if (size == 1) {
             return PyLong_FromLong(ord);
         }
     }

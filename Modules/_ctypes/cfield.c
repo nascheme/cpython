@@ -1057,14 +1057,21 @@ c_set(void *ptr, PyObject *value, Py_ssize_t size)
         _RET(value);
     }
     if (PyByteArray_Check(value)) {
-        if (PyByteArray_GET_SIZE(value) != 1) {
+        Py_ssize_t size;
+        /* Lock to prevent a concurrent resize from freeing the buffer. */
+        Py_BEGIN_CRITICAL_SECTION(value);
+        size = PyByteArray_GET_SIZE(value);
+        if (size == 1) {
+            *(char *)ptr = PyByteArray_AS_STRING(value)[0];
+        }
+        Py_END_CRITICAL_SECTION();
+        if (size != 1) {
             PyErr_Format(PyExc_TypeError,
                         "one character bytes, bytearray, or an integer "
                         "in range(256) expected, not bytearray of length %zd",
-                        PyByteArray_GET_SIZE(value));
+                        size);
             return NULL;
         }
-        *(char *)ptr = PyByteArray_AS_STRING(value)[0];
         _RET(value);
     }
     if (PyLong_Check(value)) {

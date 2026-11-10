@@ -3912,8 +3912,12 @@ PyUnicode_AsEncodedString(PyObject *unicode,
             return NULL;
         }
 
+        /* The codec may still share v; lock it so a concurrent resize
+           cannot free the data while it is copied. */
+        Py_BEGIN_CRITICAL_SECTION(v);
         b = PyBytes_FromStringAndSize(PyByteArray_AS_STRING(v),
                                       PyByteArray_GET_SIZE(v));
+        Py_END_CRITICAL_SECTION();
         Py_DECREF(v);
         return b;
     }

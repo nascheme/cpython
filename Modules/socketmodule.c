@@ -1816,8 +1816,19 @@ idna_converter(PyObject *obj, void *arg)
         len = PyBytes_Size(obj);
     }
     else if (PyByteArray_Check(obj)) {
-        data->buf = PyByteArray_AsString(obj);
-        len = PyByteArray_Size(obj);
+        /* Copy: the name is used after the GIL is released, while
+           another thread could resize the bytearray. */
+        PyObject *obj2;
+        Py_BEGIN_CRITICAL_SECTION(obj);
+        obj2 = PyBytes_FromStringAndSize(PyByteArray_AS_STRING(obj),
+                                         PyByteArray_GET_SIZE(obj));
+        Py_END_CRITICAL_SECTION();
+        if (obj2 == NULL) {
+            return 0;
+        }
+        data->obj = obj2;
+        data->buf = PyBytes_AS_STRING(obj2);
+        len = PyBytes_GET_SIZE(obj2);
     }
     else if (PyUnicode_Check(obj)) {
         if (PyUnicode_IS_COMPACT_ASCII(obj)) {

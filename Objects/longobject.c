@@ -6011,13 +6011,18 @@ long_new_impl(PyTypeObject *type, PyObject *x, PyObject *obase)
 
     if (PyUnicode_Check(x))
         return PyLong_FromUnicodeObject(x, (int)base);
-    else if (PyByteArray_Check(x) || PyBytes_Check(x)) {
-        const char *string;
-        if (PyByteArray_Check(x))
-            string = PyByteArray_AS_STRING(x);
-        else
-            string = PyBytes_AS_STRING(x);
-        return _PyLong_FromBytes(string, Py_SIZE(x), (int)base);
+    else if (PyBytes_Check(x)) {
+        return _PyLong_FromBytes(PyBytes_AS_STRING(x), PyBytes_GET_SIZE(x),
+                                 (int)base);
+    }
+    else if (PyByteArray_Check(x)) {
+        /* Lock to prevent a concurrent resize from freeing the buffer. */
+        PyObject *result;
+        Py_BEGIN_CRITICAL_SECTION(x);
+        result = _PyLong_FromBytes(PyByteArray_AS_STRING(x),
+                                   PyByteArray_GET_SIZE(x), (int)base);
+        Py_END_CRITICAL_SECTION();
+        return result;
     }
     else {
         PyErr_SetString(PyExc_TypeError,

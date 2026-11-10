@@ -988,10 +988,20 @@ readinst(char *buf, int buf_size, PyObject *meth)
     if (str == NULL)
         goto error;
 
+    if (PyByteArray_Check(str)) {
+        /* Convert to bytes under the lock so a concurrent resize cannot
+           free the data while it is copied. */
+        PyObject *copy;
+        Py_BEGIN_CRITICAL_SECTION(str);
+        copy = PyBytes_FromStringAndSize(PyByteArray_AS_STRING(str),
+                                         PyByteArray_GET_SIZE(str));
+        Py_END_CRITICAL_SECTION();
+        Py_SETREF(str, copy);
+        if (str == NULL)
+            goto error;
+    }
     if (PyBytes_Check(str))
         ptr = PyBytes_AS_STRING(str);
-    else if (PyByteArray_Check(str))
-        ptr = PyByteArray_AS_STRING(str);
     else {
         PyErr_Format(PyExc_TypeError,
                      "read() did not return a bytes object (type=%.400s)",

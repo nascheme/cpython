@@ -584,14 +584,21 @@ byte_converter(PyObject *arg, Py_ssize_t argidx, PyObject *key, char *p)
         return 1;
     }
     else if (PyByteArray_Check(arg)) {
-        if (PyByteArray_GET_SIZE(arg) != 1) {
+        Py_ssize_t size;
+        /* Lock to prevent a concurrent resize from freeing the buffer. */
+        Py_BEGIN_CRITICAL_SECTION(arg);
+        size = PyByteArray_GET_SIZE(arg);
+        if (size == 1) {
+            *p = PyByteArray_AS_STRING(arg)[0];
+        }
+        Py_END_CRITICAL_SECTION();
+        if (size != 1) {
             FORMAT_ERROR(PyExc_TypeError,
                          "%%c requires an integer in range(256) or "
                          "a single byte, not a bytearray object of length %zd",
-                         PyByteArray_GET_SIZE(arg));
+                         size);
             return 0;
         }
-        *p = PyByteArray_AS_STRING(arg)[0];
         return 1;
     }
     else if (PyIndex_Check(arg)) {
@@ -630,9 +637,19 @@ format_obj(PyObject *v, Py_ssize_t argidx, PyObject *key,
         return Py_NewRef(v);
     }
     if (PyByteArray_Check(v)) {
-        *pbuf = PyByteArray_AS_STRING(v);
-        *plen = PyByteArray_GET_SIZE(v);
-        return Py_NewRef(v);
+        /* Copy: the data is used after formatting other arguments, which
+           can run arbitrary code that resizes the bytearray.  Lock rather
+           than export the buffer so a concurrent resize does not fail. */
+        Py_BEGIN_CRITICAL_SECTION(v);
+        result = PyBytes_FromStringAndSize(PyByteArray_AS_STRING(v),
+                                           PyByteArray_GET_SIZE(v));
+        Py_END_CRITICAL_SECTION();
+        if (result == NULL) {
+            return NULL;
+        }
+        *pbuf = PyBytes_AS_STRING(result);
+        *plen = PyBytes_GET_SIZE(result);
+        return result;
     }
     /* does it support __bytes__? */
     func = _PyObject_LookupSpecial(v, &_Py_ID(__bytes__));

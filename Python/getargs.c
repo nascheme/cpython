@@ -949,12 +949,19 @@ convertsimple(PyObject *arg, const char **p_format, va_list *p_va, int flags,
             *p = PyBytes_AS_STRING(arg)[0];
         }
         else if (PyByteArray_Check(arg)) {
-            if (PyByteArray_GET_SIZE(arg) != 1) {
+            Py_ssize_t size;
+            /* Lock to prevent a concurrent resize from freeing the buffer. */
+            Py_BEGIN_CRITICAL_SECTION(arg);
+            size = PyByteArray_GET_SIZE(arg);
+            if (size == 1) {
+                *p = PyByteArray_AS_STRING(arg)[0];
+            }
+            Py_END_CRITICAL_SECTION();
+            if (size != 1) {
                 return convertcharerr("a byte string of length 1",
-                                      "a bytearray object", PyByteArray_GET_SIZE(arg),
+                                      "a bytearray object", size,
                                       msgbuf, bufsize);
             }
-            *p = PyByteArray_AS_STRING(arg)[0];
         }
         else
             return converterr("a byte string of length 1", arg, msgbuf, bufsize);
@@ -1142,15 +1149,22 @@ convertsimple(PyObject *arg, const char **p_format, va_list *p_va, int flags,
         /* Encode object */
         if (!recode_strings &&
             (PyBytes_Check(arg) || PyByteArray_Check(arg))) {
-            s = Py_NewRef(arg);
             if (PyBytes_Check(arg)) {
-                size = PyBytes_GET_SIZE(s);
-                ptr = PyBytes_AS_STRING(s);
+                s = Py_NewRef(arg);
             }
             else {
-                size = PyByteArray_GET_SIZE(s);
-                ptr = PyByteArray_AS_STRING(s);
+                /* Copy under the lock, so a concurrent resize of the
+                   bytearray cannot free the data while it is used below. */
+                Py_BEGIN_CRITICAL_SECTION(arg);
+                s = PyBytes_FromStringAndSize(PyByteArray_AS_STRING(arg),
+                                              PyByteArray_GET_SIZE(arg));
+                Py_END_CRITICAL_SECTION();
+                if (s == NULL) {
+                    RETURN_ERR_OCCURRED;
+                }
             }
+            size = PyBytes_GET_SIZE(s);
+            ptr = PyBytes_AS_STRING(s);
         }
         else if (PyUnicode_Check(arg)) {
             /* Encode object; use default error handling */

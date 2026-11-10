@@ -200,8 +200,13 @@ PyFloat_FromString(PyObject *v)
         len = PyBytes_GET_SIZE(v);
     }
     else if (PyByteArray_Check(v)) {
-        s = PyByteArray_AS_STRING(v);
-        len = PyByteArray_GET_SIZE(v);
+        /* Lock to prevent a concurrent resize from freeing the buffer. */
+        Py_BEGIN_CRITICAL_SECTION(v);
+        result = _Py_string_to_number_with_underscores(
+            PyByteArray_AS_STRING(v), PyByteArray_GET_SIZE(v),
+            "float", v, v, float_from_string_inner);
+        Py_END_CRITICAL_SECTION();
+        return result;
     }
     else if (PyObject_GetBuffer(v, &view, PyBUF_SIMPLE) == 0) {
         s = (const char *)view.buf;

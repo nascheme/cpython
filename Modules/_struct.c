@@ -2398,6 +2398,9 @@ s_pack_internal(PyStructObject *soself, PyObject *const *args,
                                     "argument for 's' must be a bytes object");
                     return -1;
                 }
+                /* Lock a bytearray to prevent a concurrent resize from
+                   freeing the buffer during the copy. */
+                Py_BEGIN_CRITICAL_SECTION(v);
                 if (isstring) {
                     n = PyBytes_GET_SIZE(v);
                     p = PyBytes_AS_STRING(v);
@@ -2410,6 +2413,7 @@ s_pack_internal(PyStructObject *soself, PyObject *const *args,
                     n = code->size;
                 if (n > 0)
                     memmove(res, p, n);
+                Py_END_CRITICAL_SECTION();
             } else if (strcmp(e->format, "p") == 0) {
                 Py_ssize_t n;
                 int isstring;
@@ -2420,6 +2424,9 @@ s_pack_internal(PyStructObject *soself, PyObject *const *args,
                                     "argument for 'p' must be a bytes object");
                     return -1;
                 }
+                /* Lock a bytearray to prevent a concurrent resize from
+                   freeing the buffer during the copy. */
+                Py_BEGIN_CRITICAL_SECTION(v);
                 if (isstring) {
                     n = PyBytes_GET_SIZE(v);
                     p = PyBytes_AS_STRING(v);
@@ -2436,6 +2443,7 @@ s_pack_internal(PyStructObject *soself, PyObject *const *args,
                 }
                 if (n > 0)
                     memmove(res + 1, p, n);
+                Py_END_CRITICAL_SECTION();
                 if (n > 255)
                     n = 255;
                 if (n > 0) {

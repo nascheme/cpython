@@ -4730,6 +4730,7 @@ _pwinfo_set(_PySSLPasswordInfo *pw_info, PyObject* password,
        The password field will be dynamically allocated and must be freed
        by the caller */
     PyObject *password_bytes = NULL;
+    Py_buffer view = {NULL, NULL};
     const char *data = NULL;
     Py_ssize_t size;
 
@@ -4744,8 +4745,12 @@ _pwinfo_set(_PySSLPasswordInfo *pw_info, PyObject* password,
         data = PyBytes_AS_STRING(password);
         size = PyBytes_GET_SIZE(password);
     } else if (PyByteArray_Check(password)) {
-        data = PyByteArray_AS_STRING(password);
-        size = PyByteArray_GET_SIZE(password);
+        /* Export the buffer so a concurrent resize cannot free it. */
+        if (PyObject_GetBuffer(password, &view, PyBUF_SIMPLE) < 0) {
+            goto error;
+        }
+        data = view.buf;
+        size = view.len;
     } else {
         PyErr_SetString(PyExc_TypeError, bad_type_error);
         goto error;
@@ -4767,10 +4772,12 @@ _pwinfo_set(_PySSLPasswordInfo *pw_info, PyObject* password,
     memcpy(pw_info->password, data, size);
     pw_info->size = (int)size;
 
+    PyBuffer_Release(&view);
     Py_XDECREF(password_bytes);
     return 1;
 
 error:
+    PyBuffer_Release(&view);
     Py_XDECREF(password_bytes);
     return 0;
 }
