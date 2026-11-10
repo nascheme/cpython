@@ -1826,7 +1826,17 @@ odictiter_iternext_impl(PyObject *self)
         return key;
     }
 
-    if (PyDict_GetItemRef((PyObject *)di->di_odict, key, &value) != 1) {
+    /* The lookup can run arbitrary code, which can suspend this critical
+       section and let another thread clear di_odict, so hold a strong
+       reference. */
+    PyObject *od = Py_XNewRef(di->di_odict);
+    if (od == NULL) {
+        Py_DECREF(key);
+        return NULL;
+    }
+    int rc = PyDict_GetItemRef(od, key, &value);
+    Py_DECREF(od);
+    if (rc != 1) {
         if (!PyErr_Occurred())
             PyErr_SetObject(PyExc_KeyError, key);
         Py_DECREF(key);
@@ -1878,16 +1888,36 @@ static PyObject *
 odictiter_reduce(PyObject *op, PyObject *Py_UNUSED(ignored))
 {
     odictiterobject *di = (odictiterobject*)op;
+    PyObject *result = NULL;
 
-    /* copy the iterator state */
-    odictiterobject tmp = *di;
-    Py_XINCREF(tmp.di_odict);
-    Py_XINCREF(tmp.di_current);
+    /* Copy the iterator state into a new iterator, which gets its own
+       result tuple.  Hold the iterator's lock while copying so that a
+       concurrent __next__ cannot free the referenced objects. */
+    if ((di->kind & _odict_ITER_ITEMS) == _odict_ITER_ITEMS) {
+        result = _PyTuple_FromPairSteal(Py_None, Py_None);
+        if (result == NULL) {
+            return NULL;
+        }
+    }
+    odictiterobject *tmp = PyObject_GC_New(odictiterobject,
+                                           &PyODictIter_Type);
+    if (tmp == NULL) {
+        Py_XDECREF(result);
+        return NULL;
+    }
+    tmp->di_result = result;
+    tmp->kind = di->kind;
+    Py_BEGIN_CRITICAL_SECTION(di);
+    tmp->di_odict = (PyODictObject *)Py_XNewRef(di->di_odict);
+    tmp->di_current = Py_XNewRef(di->di_current);
+    tmp->di_size = di->di_size;
+    tmp->di_state = di->di_state;
+    Py_END_CRITICAL_SECTION();
+    _PyObject_GC_TRACK(tmp);
 
-    /* iterate the temporary into a list */
-    PyObject *list = PySequence_List((PyObject*)&tmp);
-    Py_XDECREF(tmp.di_odict);
-    Py_XDECREF(tmp.di_current);
+    /* iterate the copy into a list */
+    PyObject *list = PySequence_List((PyObject *)tmp);
+    Py_DECREF(tmp);
     if (list == NULL) {
         return NULL;
     }
