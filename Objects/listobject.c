@@ -3620,15 +3620,14 @@ static int
 list___init___impl(PyListObject *self, PyObject *iterable)
 /*[clinic end generated code: output=0f3c21379d01de48 input=b3f3fe7206af8f6b]*/
 {
-    /* Verify list invariants */
-    assert(0 <= Py_SIZE(self));
-    assert(Py_SIZE(self) <= self->allocated || self->allocated == -1);
-    assert(self->ob_item != NULL ||
-           self->allocated == 0 || self->allocated == -1);
-
-    /* Empty previous contents */
-    if (self->ob_item != NULL) {
+    /* Empty previous contents.  __init__ can be called again on a list
+       shared with other threads; list_clear() handles a list that another
+       thread has already emptied. */
+    if (FT_ATOMIC_LOAD_PTR_RELAXED(self->ob_item) != NULL) {
         Py_BEGIN_CRITICAL_SECTION(self);
+        /* Verify list invariants */
+        assert(0 <= Py_SIZE(self));
+        assert(Py_SIZE(self) <= self->allocated || self->allocated == -1);
         list_clear(self);
         Py_END_CRITICAL_SECTION();
     }
