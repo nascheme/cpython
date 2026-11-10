@@ -166,7 +166,9 @@ bytearray___init___helper(PyObject *self, PyObject *const *args,
         goto exit;
     }
 skip_optional_pos:
+    Py_BEGIN_CRITICAL_SECTION(self);
     return_value = bytearray___init___impl((PyByteArrayObject *)self, arg, encoding, errors);
+    Py_END_CRITICAL_SECTION();
 
 exit:
     return return_value;
@@ -244,7 +246,9 @@ skip_optional:
     if (self == NULL) {
         goto exit;
     }
+    Py_BEGIN_CRITICAL_SECTION(self);
     _result = bytearray___init___impl((PyByteArrayObject *)self, arg, encoding, errors);
+    Py_END_CRITICAL_SECTION();
     if (_result != 0) {
         Py_DECREF(self);
         goto exit;
@@ -2037,4 +2041,4 @@ bytearray_sizeof(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
     return bytearray_sizeof_impl((PyByteArrayObject *)self);
 }
-/*[clinic end generated code: output=b8e659fe4b2f770e input=a9049054013a1b77]*/
+/*[clinic end generated code: output=63d80b7db2725896 input=a9049054013a1b77]*/

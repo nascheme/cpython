@@ -985,6 +985,7 @@ bytearray_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 }
 
 /*[clinic input]
+@critical_section
 @vectorcall
 bytearray.__init__
 
@@ -997,7 +998,7 @@ bytearray.__init__
 static int
 bytearray___init___impl(PyByteArrayObject *self, PyObject *arg,
                         const char *encoding, const char *errors)
-/*[clinic end generated code: output=4ce1304649c2f8b3 input=24ddb84055f432dd]*/
+/*[clinic end generated code: output=4ce1304649c2f8b3 input=64807496c8a5c846]*/
 {
     Py_ssize_t count;
     PyObject *it;
