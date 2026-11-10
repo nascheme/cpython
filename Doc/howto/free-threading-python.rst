@@ -128,7 +128,8 @@ Iterators
 
 It is generally not thread-safe to access the same iterator object from
 multiple threads concurrently, and threads may see duplicate or missing
-elements.
+elements.  An iterator shared this way may also produce more elements
+after it has raised :exc:`StopIteration` in another thread.
 
 
 Single-threaded performance
