@@ -5735,7 +5735,7 @@ dictiter_new(PyDictObject *dict, PyTypeObject *itertype)
     if (itertype == &PyDictRevIterKey_Type ||
          itertype == &PyDictRevIterItem_Type ||
          itertype == &PyDictRevIterValue_Type) {
-        if (_PyDict_HasSplitTable(dict)) {
+        if (FT_ATOMIC_LOAD_PTR_ACQUIRE(dict->ma_values) != NULL) {
             di->di_pos = used - 1;
         }
         else {
@@ -6188,8 +6188,8 @@ dictiter_iternext_threadsafe(PyDictObject *d, PyObject *self,
     i = _Py_atomic_load_ssize_relaxed(&di->di_pos);
     k = _Py_atomic_load_ptr_acquire(&d->ma_keys);
     assert(i >= 0);
-    if (_PyDict_HasSplitTable(d)) {
-        PyDictValues *values = _Py_atomic_load_ptr_consume(&d->ma_values);
+    if (_Py_atomic_load_ptr_relaxed(&d->ma_values) != NULL) {
+        PyDictValues *values = _Py_atomic_load_ptr_acquire(&d->ma_values);
         if (values == NULL) {
             goto concurrent_modification;
         }
@@ -8153,7 +8153,7 @@ PyObject_ClearManagedDict(PyObject *obj)
                 Py_BEGIN_CRITICAL_SECTION(dict);
                 PyDictKeysObject *oldkeys = dict->ma_keys;
                 set_keys(dict, Py_EMPTY_KEYS);
-                dict->ma_values = NULL;
+                set_values(dict, NULL);
                 dictkeys_decref(oldkeys, IS_DICT_SHARED(dict));
                 STORE_USED(dict, 0);
                 clear_inline_values(_PyObject_InlineValues(obj));
