@@ -832,7 +832,8 @@ gen_repr(PyObject *self)
 {
     PyGenObject *gen = _PyGen_CAST(self);
     return PyUnicode_FromFormat("<generator object %S at %p>",
-                                gen->gi_qualname, gen);
+                                FT_ATOMIC_LOAD_PTR_ACQUIRE(gen->gi_qualname),
+                                gen);
 }
 
 static PyObject *
@@ -920,7 +921,7 @@ static PyObject *
 gen_getrunning(PyObject *self, void *Py_UNUSED(ignored))
 {
     PyGenObject *gen = _PyGen_CAST(self);
-    int8_t frame_state = FT_ATOMIC_LOAD_INT8_RELAXED(gen->gi_frame_state);
+    int8_t frame_state = FT_ATOMIC_LOAD_INT8(gen->gi_frame_state);
     return frame_state == FRAME_EXECUTING ? Py_True : Py_False;
 }
 
@@ -928,7 +929,7 @@ static PyObject *
 gen_getsuspended(PyObject *self, void *Py_UNUSED(ignored))
 {
     PyGenObject *gen = _PyGen_CAST(self);
-    int8_t frame_state = FT_ATOMIC_LOAD_INT8_RELAXED(gen->gi_frame_state);
+    int8_t frame_state = FT_ATOMIC_LOAD_INT8(gen->gi_frame_state);
     return FRAME_STATE_SUSPENDED(frame_state) ? Py_True : Py_False;
 }
 
@@ -936,7 +937,7 @@ static PyObject *
 gen_getstate(PyObject *self, void *Py_UNUSED(ignored))
 {
     PyGenObject *gen = _PyGen_CAST(self);
-    int8_t frame_state = FT_ATOMIC_LOAD_INT8_RELAXED(gen->gi_frame_state);
+    int8_t frame_state = FT_ATOMIC_LOAD_INT8(gen->gi_frame_state);
 
     static PyObject *const state_strings[] = {
         [FRAME_CREATED] = &_Py_ID(GEN_CREATED),
@@ -1301,7 +1302,8 @@ coro_repr(PyObject *self)
 {
     PyCoroObject *coro = _PyCoroObject_CAST(self);
     return PyUnicode_FromFormat("<coroutine object %S at %p>",
-                                coro->cr_qualname, coro);
+                                FT_ATOMIC_LOAD_PTR_ACQUIRE(coro->cr_qualname),
+                                coro);
 }
 
 static PyObject *
@@ -1332,7 +1334,7 @@ static PyObject *
 cr_getstate(PyObject *self, void *Py_UNUSED(ignored))
 {
     PyGenObject *gen = _PyGen_CAST(self);
-    int8_t frame_state = FT_ATOMIC_LOAD_INT8_RELAXED(gen->gi_frame_state);
+    int8_t frame_state = FT_ATOMIC_LOAD_INT8(gen->gi_frame_state);
 
     static PyObject *const state_strings[] = {
         [FRAME_CREATED] = &_Py_ID(CORO_CREATED),
@@ -1825,7 +1827,7 @@ static PyObject *
 ag_getstate(PyObject *self, void *Py_UNUSED(ignored))
 {
     PyGenObject *gen = _PyGen_CAST(self);
-    int8_t frame_state = FT_ATOMIC_LOAD_INT8_RELAXED(gen->gi_frame_state);
+    int8_t frame_state = FT_ATOMIC_LOAD_INT8(gen->gi_frame_state);
 
     static PyObject *const state_strings[] = {
         [FRAME_CREATED] = &_Py_ID(AGEN_CREATED),
