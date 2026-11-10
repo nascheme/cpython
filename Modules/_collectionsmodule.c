@@ -1983,7 +1983,7 @@ dequeiter_next_lock_held(dequeiterobject *it, dequeobject *deque)
     PyObject *item;
 
     if (it->deque->state != it->state) {
-        it->counter = 0;
+        FT_ATOMIC_STORE_SSIZE_RELAXED(it->counter, 0);
         PyErr_SetString(PyExc_RuntimeError,
                         "deque mutated during iteration");
         return NULL;
@@ -1995,7 +1995,7 @@ dequeiter_next_lock_held(dequeiterobject *it, dequeobject *deque)
 
     item = it->b->data[it->index];
     it->index++;
-    it->counter--;
+    FT_ATOMIC_STORE_SSIZE_RELAXED(it->counter, it->counter - 1);
     if (it->index == BLOCKLEN && it->counter > 0) {
         CHECK_NOT_END(it->b->rightlink);
         it->b = it->b->rightlink;
@@ -2058,7 +2058,7 @@ static PyObject *
 dequeiter_len(PyObject *op, PyObject *Py_UNUSED(dummy))
 {
     dequeiterobject *it = dequeiterobject_CAST(op);
-    Py_ssize_t len = FT_ATOMIC_LOAD_SSIZE(it->counter);
+    Py_ssize_t len = FT_ATOMIC_LOAD_SSIZE_RELAXED(it->counter);
     return PyLong_FromSsize_t(len);
 }
 
@@ -2136,7 +2136,7 @@ dequereviter_next_lock_held(dequeiterobject *it, dequeobject *deque)
         return NULL;
 
     if (it->deque->state != it->state) {
-        it->counter = 0;
+        FT_ATOMIC_STORE_SSIZE_RELAXED(it->counter, 0);
         PyErr_SetString(PyExc_RuntimeError,
                         "deque mutated during iteration");
         return NULL;
@@ -2146,7 +2146,7 @@ dequereviter_next_lock_held(dequeiterobject *it, dequeobject *deque)
 
     item = it->b->data[it->index];
     it->index--;
-    it->counter--;
+    FT_ATOMIC_STORE_SSIZE_RELAXED(it->counter, it->counter - 1);
     if (it->index < 0 && it->counter > 0) {
         CHECK_NOT_END(it->b->leftlink);
         it->b = it->b->leftlink;

@@ -3842,24 +3842,26 @@ static PyObject *
 repeat_repr(PyObject *op)
 {
     repeatobject *ro = repeatobject_CAST(op);
-    if (ro->cnt == -1)
+    Py_ssize_t cnt = FT_ATOMIC_LOAD_SSIZE_RELAXED(ro->cnt);
+    if (cnt == -1)
         return PyUnicode_FromFormat("%s(%R)",
                                     _PyType_Name(Py_TYPE(ro)), ro->element);
     else
         return PyUnicode_FromFormat("%s(%R, %zd)",
                                     _PyType_Name(Py_TYPE(ro)), ro->element,
-                                    ro->cnt);
+                                    cnt);
 }
 
 static PyObject *
 repeat_len(PyObject *op, PyObject *Py_UNUSED(args))
 {
     repeatobject *ro = repeatobject_CAST(op);
-    if (ro->cnt == -1) {
+    Py_ssize_t cnt = FT_ATOMIC_LOAD_SSIZE_RELAXED(ro->cnt);
+    if (cnt == -1) {
         PyErr_SetString(PyExc_TypeError, "len() of unsized object");
         return NULL;
     }
-    return PyLong_FromSize_t(ro->cnt);
+    return PyLong_FromSize_t(cnt);
 }
 
 PyDoc_STRVAR(length_hint_doc, "Private method returning an estimate of len(list(it)).");
